@@ -15,6 +15,8 @@ interface TranslatedTextViewerProps {
   fontSize?: number;
 }
 
+// HACK: Global loading flag to prevent multiple simultaneous TTS requests
+let loading = false;
 
 const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ yJsKey, fontSize }) => {
   const [translatedText] = useAsPlainText(yJsKey);
@@ -64,6 +66,11 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ yJsKey, fon
       audioRef.current = null;
     }
 
+    if (loading) {
+      return; // Prevent multiple simultaneous requests
+    }
+    loading = true;
+
     // Find the block element and add loading class immediately
     const blockElement = document.querySelector(`[data-block-text="${CSS.escape(text)}"]`);
     if (blockElement) {
@@ -71,6 +78,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ yJsKey, fon
     }
 
     const audioUrl = await fetchAudio(text);
+    loading = false;
     if (!audioUrl) {
       // Remove loading class on error
       if (blockElement) {
