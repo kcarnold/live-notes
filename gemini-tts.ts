@@ -73,7 +73,7 @@ export async function generateTTS(
       role: 'user',
       parts: [
         {
-          text: `Read the following complete sentence aloud at a moderate pace: "${text}"`,
+          text: `Read the following complete sentence in ${language} aloud at a moderate pace: "${text}"`,
         },
       ],
     },
