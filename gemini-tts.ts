@@ -1,10 +1,16 @@
-import { GoogleGenAI } from '@google/genai';
-import { spawn } from 'child_process';
+import { type GoogleGenAI } from '@google/genai';
+import { spawn } from 'node:child_process';
 
 // Voice configuration per language
-const VOICE_CONFIG: Record<string, string> = {
-  French: 'Kore',
-  Spanish: 'Kore',
+const VOICE_CONFIG: Record<string, { voice: string; model: string }> = {
+  French: {
+    voice: 'Zephyr',
+    model: 'gemini-2.5-flash-preview-tts',
+  },
+  Spanish: {
+    voice: 'Zephyr',
+    model: 'gemini-2.5-flash-preview-tts',
+  },
 };
 
 interface AudioFormat {
@@ -25,9 +31,9 @@ function parseAudioFormat(mimeType: string): AudioFormat {
   };
 
   // Parse bit depth from format (e.g., "L16" -> 16 bits)
-  if (format && format.startsWith('L')) {
+  if (format?.startsWith('L')) {
     const bits = parseInt(format.slice(1), 10);
-    if (!isNaN(bits)) {
+    if (!Number.isNaN(bits)) {
       audioFormat.bitsPerSample = bits;
     }
   }
@@ -56,30 +62,18 @@ export async function generateTTS(
   text: string,
   language: string
 ): Promise<Buffer> {
-  const voiceName = VOICE_CONFIG[language];
-  if (!voiceName) {
+  const voiceConfig = VOICE_CONFIG[language];
+  if (!voiceConfig) {
     throw new Error(`No voice configured for language: ${language}`);
   }
 
-  const config = {
-    temperature: 1,
-    responseModalities: ['audio'] as const,
-    speechConfig: {
-      voiceConfig: {
-        prebuiltVoiceConfig: {
-          voiceName,
-        },
-      },
-    },
-  };
-
-  const model = 'gemini-2.5-pro-preview-tts';
+  const model = voiceConfig.model;
   const contents = [
     {
-      role: 'user' as const,
+      role: 'user',
       parts: [
         {
-          text,
+          text: `Read the following complete sentence aloud at a moderate pace: "${text}"`,
         },
       ],
     },
@@ -87,7 +81,16 @@ export async function generateTTS(
 
   const response = await geminiClient.models.generateContentStream({
     model,
-    config,
+    config: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: voiceConfig.voice,
+          },
+        },
+      },
+    },
     contents,
   });
 
@@ -104,12 +107,18 @@ export async function generateTTS(
       const inlineData = chunk.candidates[0].content.parts[0].inlineData;
       const audioData = Buffer.from(inlineData.data || '', 'base64');
 
+      // DEBUG: Dump raw data to file
+      //fs.writeFileSync('debug_raw_audio.pcm', audioData, { flag: 'w' });
+
+
       // Initialize ffmpeg on first audio chunk
       if (!ffmpegProcess) {
         audioFormat = parseAudioFormat(inlineData.mimeType || '');
 
         // Spawn ffmpeg to convert PCM to MP3
         ffmpegProcess = spawn('ffmpeg', [
+          '-hide_banner',
+          '-loglevel', 'error',
           '-f', 's16le',                          // Input format: signed 16-bit little-endian PCM
           '-ar', audioFormat.sampleRate.toString(), // Sample rate from mime type
           '-ac', audioFormat.numChannels.toString(), // Number of channels
