@@ -130,7 +130,7 @@ function TranslatedOutlineComponent({ language, onLanguageChange }: { language: 
         </select>
       </div>
       <TranslatedTextViewer
-        yJsKey={translatedTextKeyForLanguage(language)}
+        language={language}
         fontSize={fontSize}
       />
     </div>

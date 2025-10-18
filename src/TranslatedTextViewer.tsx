@@ -8,25 +8,25 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeReact from 'rehype-react';
+import { translatedTextKeyForLanguage } from './translationUtils';
 
 const prefetchEnabled = false; // Disable prefetching for now, as it causes too many TTS requests
 
 interface TranslatedTextViewerProps {
-  yJsKey: string;
+  language: string;
   fontSize?: number;
 }
 
 // HACK: Global loading flag to prevent multiple simultaneous TTS requests
 let loading = false;
 
-const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ yJsKey, fontSize }) => {
+const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, fontSize }) => {
+  const yJsKey = translatedTextKeyForLanguage(language);
   const [translatedText] = useAsPlainText(yJsKey);
   // Use a ref to avoid infinite update loop
   const prevTextHashesRef = useRef<Set<string>>(new Set());
   const translatedTextEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Extract language from yJsKey (format: "translatedText-{Language}")
-  const language = yJsKey.replace('translatedText-', '');
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
   // TTS state
