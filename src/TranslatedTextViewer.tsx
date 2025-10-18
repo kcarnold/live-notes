@@ -9,6 +9,7 @@ import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeReact from 'rehype-react';
 
+const prefetchEnabled = false; // Disable prefetching for now, as it causes too many TTS requests
 
 interface TranslatedTextViewerProps {
   yJsKey: string;
@@ -159,21 +160,19 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ yJsKey, fon
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderedTree]);
 
-  // Prefetch audio for last 3 blocks
+  // Prefetch audio for last block
   useEffect(() => {
-    if (!isTTSEnabled || allBlockTexts.length === 0) return;
+    if (!isTTSEnabled || !prefetchEnabled || allBlockTexts.length === 0) return;
 
-    const last3Blocks = allBlockTexts.slice(-3);
+    const text = allBlockTexts[allBlockTexts.length - 1];
 
-    for (const text of last3Blocks) {
-      if (!prefetchedAudioRef.current.has(text)) {
-        prefetchedAudioRef.current.add(text);
-        // Prefetch in background (don't await)
-        fetchAudio(text).catch(err => {
-          console.error('Prefetch error:', err);
-          prefetchedAudioRef.current.delete(text);
-        });
-      }
+    if (!prefetchedAudioRef.current.has(text)) {
+      prefetchedAudioRef.current.add(text);
+      // Prefetch in background (don't await)
+      fetchAudio(text).catch(err => {
+        console.error('Prefetch error:', err);
+        prefetchedAudioRef.current.delete(text);
+      });
     }
   }, [allBlockTexts, isTTSEnabled, fetchAudio]);
 
