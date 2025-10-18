@@ -6,10 +6,10 @@ import { createHash } from 'crypto';
 import fs from 'fs/promises';
 
 import { DocumentManager } from '@y-sweet/sdk'
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { translateBlock, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
-import { generateTTS } from './gemini-tts.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -27,6 +27,10 @@ const geminiProvider = new GeminiProvider({
 });
 
 const documentManager = new DocumentManager(getEnvOrCrash("YSWEET_CONNECTION_STRING"));
+
+const elevenLabsClient = new ElevenLabsClient({
+  apiKey: getEnvOrCrash('ELEVENLABS_API_KEY'),
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,8 +105,17 @@ app.post('/api/requestTranslatedBlocks', async (req, res) => {
 // TTS request deduplication: Map of cache key -> Promise
 const ttsInFlightRequests = new Map<string, Promise<string>>();
 
-// Supported languages for TTS (voice names configured in gemini-tts.ts)
-const SUPPORTED_TTS_LANGUAGES = ['French', 'Spanish'];
+// Voice configuration per language
+const VOICE_CONFIG: Record<string, { voiceId: string; model: string }> = {
+  French: {
+    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
+    model: 'eleven_multilingual_v2',
+  },
+  Spanish: {
+    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
+    model: 'eleven_multilingual_v2',
+  },
+};
 
 app.post('/api/tts', async (req, res) => {
   const { text, language } = req.body;
@@ -112,7 +125,7 @@ app.post('/api/tts', async (req, res) => {
   }
 
   // Only support configured languages
-  if (!SUPPORTED_TTS_LANGUAGES.includes(language)) {
+  if (!VOICE_CONFIG[language]) {
     return res.status(400).json({ error: `Language ${language} not supported for TTS` });
   }
 
@@ -142,10 +155,21 @@ app.post('/api/tts', async (req, res) => {
     }
 
     // Start new TTS request
+    const voiceConfig = VOICE_CONFIG[language];
     const ttsPromise = (async () => {
       console.log(`Generating TTS for "${text.substring(0, 50)}..." in ${language}`);
 
-      const audioBuffer = await generateTTS(geminiProvider.apiClient, text, language);
+      const audio = await elevenLabsClient.textToSpeech.convert(voiceConfig.voiceId, {
+        text,
+        modelId: voiceConfig.model,
+      });
+
+      // Convert stream to buffer
+      const chunks: Buffer[] = [];
+      for await (const chunk of audio) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const audioBuffer = Buffer.concat(chunks);
 
       // Write audio file
       await fs.writeFile(audioPath, audioBuffer);
