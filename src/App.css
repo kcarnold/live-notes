@@ -48,11 +48,8 @@
     @apply bg-yellow-200 dark:bg-yellow-800;
   }
 
-  [data-playing="true"] {
-    @apply bg-blue-200 dark:bg-blue-800;
-  }
 
-  [data-clickable-block].loading {
+  .tts-loading {
     @apply bg-blue-100 dark:bg-blue-900;
     animation: pulse 0.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }

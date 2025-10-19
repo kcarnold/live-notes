@@ -1,187 +1,105 @@
 import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
-import * as production from 'react/jsx-runtime'; // Required by rehype-react
 import { useScrollToBottom } from './reactUtils';
 import { useAsPlainText } from './yjsUtils';
-import { remarkEmphasizeNewNodes } from './remarkEmphasizeNewNodes';
-import { rehypeAddClickableBlocks } from './rehypeAddClickableBlocks';
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkRehype from 'remark-rehype';
-import rehypeReact from 'rehype-react';
+import { Remark } from 'react-remark';
+import { translatedTextKeyForLanguage } from './translationUtils';
 
 const prefetchEnabled = false; // Disable prefetching for now, as it causes too many TTS requests
 
 interface TranslatedTextViewerProps {
-  yJsKey: string;
+  language: string;
   fontSize?: number;
 }
 
-// HACK: Global loading flag to prevent multiple simultaneous TTS requests
-let loading = false;
+interface TTSStatus {
+  state: 'idle' | 'loading' | 'error' | 'playing';
+  errorMessage?: string;
+  playingText?: string;
+  loadingText?: string;
+};
 
-const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ yJsKey, fontSize }) => {
+async function fetchAudio(text: string, language: string): Promise<string> {
+  const response = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, language }),
+  });
+
+  if (!response.ok) {
+    console.error('TTS request failed:', response.statusText);
+    throw new Error(`TTS request failed: ${response.statusText}`);
+  }
+
+  const data = await response.json() as { audioUrl: string };
+  return data.audioUrl;
+}
+
+
+const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, fontSize }) => {
+  const yJsKey = translatedTextKeyForLanguage(language);
   const [translatedText] = useAsPlainText(yJsKey);
-  // Use a ref to avoid infinite update loop
-  const prevTextHashesRef = useRef<Set<string>>(new Set());
   const translatedTextEndRef = useRef<HTMLDivElement | null>(null);
+  useScrollToBottom(translatedTextEndRef, [translatedText], true);
+  
+  const lines = useMemo(() => {
+    return translatedText ? translatedText.split('\n') : [];
+  }, [translatedText]);
 
-  // Extract language from yJsKey (format: "translatedText-{Language}")
-  const language = yJsKey.replace('translatedText-', '');
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
-  // TTS state
-  const [playingBlockKey, setPlayingBlockKey] = useState<string | null>(null);
-  const [allBlockTexts, setAllBlockTexts] = useState<string[]>([]);
+  const [ttsStatus, setTtsStatus] = useState<TTSStatus>({ state: 'idle' });
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const prefetchedAudioRef = useRef<Set<string>>(new Set());
 
-  useScrollToBottom(translatedTextEndRef, [translatedText], true);
-
-  // TTS: Fetch audio for a given text
-  const fetchAudio = useCallback(async (text: string): Promise<string | null> => {
-    try {
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, language }),
-      });
-
-      if (!response.ok) {
-        console.error('TTS request failed:', response.statusText);
-        return null;
-      }
-
-      const data = await response.json();
-      return data.audioUrl;
-    } catch (error) {
-      console.error('TTS fetch error:', error);
-      return null;
-    }
-  }, [language]);
-
-  // TTS: Play audio for a block
-  const playBlock = useCallback(async (text: string) => {
-    // Stop any currently playing audio
-    if (audioRef.current) {
-      audioRef.current.pause();
+  const handleBlockClick = useCallback(async (text: string) => {
+    if (!isTTSEnabled || !text.trim()) return;
+    if (ttsStatus.state === 'loading') return; // Prevent multiple requests
+    if (ttsStatus.state === 'playing') {
+      audioRef.current?.pause();
       audioRef.current = null;
-    }
-
-    if (loading) {
-      return; // Prevent multiple simultaneous requests
-    }
-    loading = true;
-
-    // Find the block element and add loading class immediately
-    const blockElement = document.querySelector(`[data-block-text="${CSS.escape(text)}"]`);
-    if (blockElement) {
-      blockElement.classList.add('loading');
-    }
-
-    const audioUrl = await fetchAudio(text);
-    loading = false;
-    if (!audioUrl) {
-      // Remove loading class on error
-      if (blockElement) {
-        blockElement.classList.remove('loading');
+      // If the same block, don't restart
+      if (ttsStatus.playingText === text) {
+        setTtsStatus({ state: 'idle' });
+        return;
       }
+      // Fall through to start new audio
+    }
+    setTtsStatus({ state: 'loading', loadingText: text });
+    let audioUrl: string;
+    try {
+      audioUrl = await fetchAudio(text, language);
+    } catch (error: unknown) {
+      console.error('Error fetching TTS audio:', error);
+      setTtsStatus({ state: 'error', errorMessage: error instanceof Error ? error.message : 'Unknown error' });
       return;
     }
 
     const audio = new Audio(audioUrl);
     audioRef.current = audio;
-
+    audio.onerror = (err: string | Event) => {
+      console.error('Audio playback error:', err);
+      const errStr = err instanceof Event ? 'Audio playback error' : err.toString();
+      setTtsStatus({ state: 'error', errorMessage: errStr });
+    };
     audio.onended = () => {
-      setPlayingBlockKey(null);
-      audioRef.current = null;
-      // Remove loading class when done
-      if (blockElement) {
-        blockElement.classList.remove('loading');
-      }
+      setTtsStatus({ state: 'idle' });
     };
-
-    audio.onerror = () => {
-      console.error('Audio playback error');
-      setPlayingBlockKey(null);
-      audioRef.current = null;
-      // Remove loading class on error
-      if (blockElement) {
-        blockElement.classList.remove('loading');
-      }
-    };
-
-    // Remove loading class and set playing state when audio starts
-    if (blockElement) {
-      blockElement.classList.remove('loading');
-    }
-    setPlayingBlockKey(text);
-
+    setTtsStatus({ state: 'playing', playingText: text });
     await audio.play();
-  }, [fetchAudio]);
-
-  // TTS: Handle block click
-  const handleBlockClick = useCallback((text: string, _element: HTMLElement) => {
-    playBlock(text);
-  }, [playBlock]);
-
-  // Only process once: update prevTextHashes after renderedTree is created
-  const renderedTree = useMemo(() => {
-    const currentTextHashes = new Set<string>();
-    const blockTexts: string[] = [];
-
-    if (translatedText.length === 0) {
-      return { tree: <div className="text-gray-500 italic">No translated text available</div>, currentTextHashes, blockTexts };
-    }
-
-    const processor = unified()
-      .use(remarkParse)
-      .use(remarkEmphasizeNewNodes, { prevTextHashes: prevTextHashesRef.current, currentTextHashes })
-      .use(remarkRehype);
-
-    // Add clickable blocks plugin only if TTS is enabled
-    if (isTTSEnabled) {
-      processor.use(rehypeAddClickableBlocks, {
-        onBlockClick: handleBlockClick,
-        playingBlockKey,
-        blockTexts, // Collect block texts during processing
-      });
-    }
-
-    const tree = processor
-      .use(rehypeReact, production)
-      .processSync(translatedText).result as React.ReactNode;
-
-    return { tree, currentTextHashes, blockTexts };
-  }, [translatedText, isTTSEnabled, handleBlockClick, playingBlockKey]);
-
-  useEffect(() => {
-    prevTextHashesRef.current = renderedTree.currentTextHashes;
-    setAllBlockTexts(renderedTree.blockTexts);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderedTree]);
-
-  // Prefetch audio for last block
-  useEffect(() => {
-    if (!isTTSEnabled || !prefetchEnabled || allBlockTexts.length === 0) return;
-
-    const text = allBlockTexts[allBlockTexts.length - 1];
-
-    if (!prefetchedAudioRef.current.has(text)) {
-      prefetchedAudioRef.current.add(text);
-      // Prefetch in background (don't await)
-      fetchAudio(text).catch(err => {
-        console.error('Prefetch error:', err);
-        prefetchedAudioRef.current.delete(text);
-      });
-    }
-  }, [allBlockTexts, isTTSEnabled, fetchAudio]);
+  }, [isTTSEnabled, ttsStatus, language]);
 
   return (
     <div
       className={`overflow-auto pb-16 max-w-2xl w-full mx-auto`}
       style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
     >
-      {renderedTree.tree}
+      {lines.map((line, index) => (
+        <p key={index} onClick={() => {void handleBlockClick(line)}} className={
+          (ttsStatus.state === 'playing' && ttsStatus.playingText === line) ? 'bg-blue-200 dark:bg-blue-800' : 
+          (ttsStatus.state === 'loading' && ttsStatus.loadingText === line) ? 'tts-loading' : ''
+        }>
+          <Remark>{line}</Remark>
+        </p>
+      ))}
       <div ref={translatedTextEndRef} />
     </div>
   );
