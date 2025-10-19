@@ -1,10 +1,8 @@
-import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useRef, useMemo, useState, useCallback } from 'react';
 import { useScrollToBottom } from './reactUtils';
 import { useAsPlainText } from './yjsUtils';
 import { Remark } from 'react-remark';
 import { translatedTextKeyForLanguage } from './translationUtils';
-
-const prefetchEnabled = false; // Disable prefetching for now, as it causes too many TTS requests
 
 interface TranslatedTextViewerProps {
   language: string;
@@ -42,7 +40,8 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
   useScrollToBottom(translatedTextEndRef, [translatedText], true);
   
   const lines = useMemo(() => {
-    return translatedText ? translatedText.split('\n') : [];
+    const lines = translatedText ? translatedText.split('\n') : [];
+    return lines.filter(line => line.trim() !== '');
   }, [translatedText]);
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
