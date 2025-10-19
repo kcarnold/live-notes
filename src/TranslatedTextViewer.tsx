@@ -1,5 +1,4 @@
 import React, { useRef, useMemo, useState, useCallback } from 'react';
-import { TransitionGroup, CSSTransition } from 'react-transition-group';
 import { useScrollToBottom } from './reactUtils';
 import { useAsPlainText } from './yjsUtils';
 import { Remark } from 'react-remark';
@@ -92,22 +91,14 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
       className={`overflow-auto pb-16 max-w-2xl w-full mx-auto`}
       style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
     >
-      <TransitionGroup component={null}>
-        {lines.map((line, index) => (
-          <CSSTransition
-            key={`${index}-${line.slice(0, 20)}`}
-            timeout={600}
-            classNames="line"
-          >
-            <p onClick={() => {void handleBlockClick(line)}} className={
-              (ttsStatus.state === 'playing' && ttsStatus.playingText === line) ? 'bg-blue-200 dark:bg-blue-800' :
-              (ttsStatus.state === 'loading' && ttsStatus.loadingText === line) ? 'tts-loading' : ''
-            }>
-              <Remark>{line}</Remark>
-            </p>
-          </CSSTransition>
-        ))}
-      </TransitionGroup>
+      {lines.map((line, index) => (
+        <p key={index} onClick={() => {void handleBlockClick(line)}} className={
+          (ttsStatus.state === 'playing' && ttsStatus.playingText === line) ? 'bg-blue-200 dark:bg-blue-800' : 
+          (ttsStatus.state === 'loading' && ttsStatus.loadingText === line) ? 'tts-loading' : ''
+        }>
+          <Remark>{line}</Remark>
+        </p>
+      ))}
       <div ref={translatedTextEndRef} />
     </div>
   );
