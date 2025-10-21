@@ -21,6 +21,12 @@ function insertOrUpdateTurn(
       // Update existing turn
       const textNode = element.get(0);
       if (textNode instanceof Y.XmlText) {
+        const currentText = textNode.toString() as string;
+        // Ignore updates that are a prefix of current text (backing up) or identical
+        if (currentText.startsWith(transcript)) {
+          console.log(`Ignoring prefix/duplicate update: "${transcript}" (current: "${currentText}")`);
+          return;
+        }
         setYTextFromString(textNode, transcript);
       } else {
         console.warn(`Expected XmlText but found ${textNode.constructor.name}`);
