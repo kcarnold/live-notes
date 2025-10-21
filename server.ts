@@ -76,29 +76,6 @@ app.use(express.json());
 app.use('/audio-cache', express.static(AUDIO_CACHE_DIR));
 
 
-// AssemblyAI v3 token endpoint
-app.get("/api/aai_token", async (_req, res) => {
-  const expiresInSeconds = 2 * 60;
-  const apiKey = getEnvOrCrash("ASSEMBLYAI_API_KEY");
-  const url = `https://streaming.assemblyai.com/v3/token?expires_in_seconds=${expiresInSeconds}`;
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: apiKey,
-      },
-    });
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`AssemblyAI token fetch failed: ${response.status} ${errText}`);
-    }
-    const data = await response.json();
-    res.json({ token: data.token });
-  } catch (error: any) {
-    console.error("Error generating temp token:", error?.message || error);
-    res.status(500).json({ error: "Failed to generate token" });
-  }
-});
 
 
 // Y-Sweet

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a **live translation application** for presentations/talks. It provides real-time speech transcription and AI-powered translation into multiple languages, displayed in configurable layouts. The system uses:
 
 - **Real-time collaboration**: Y-Sweet/Yjs for shared state across viewers
-- **Speech transcription**: AssemblyAI for live speech-to-text
+- **Speech transcription**: Web Speech API (browser-native) for live speech-to-text
 - **Translation**: Google Gemini for AI-powered translation
 - **Rich text editing**: ProseMirror for collaborative markdown editing
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
@@ -27,7 +27,7 @@ npm install
 Required environment variables (`.env`):
 - `YSWEET_CONNECTION_STRING` - Y-Sweet connection string from jamsocket.com
 - `GEMINI_API_KEY` - Google Gemini API key
-- `ASSEMBLYAI_API_KEY` - AssemblyAI API key
+- `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
 
 ### Development
 ```bash
@@ -131,7 +131,7 @@ The app has two modes determined by URL hash (`#editor`):
 - [translationUtils.ts](src/translationUtils.ts) - Translation pipeline logic (chunking, caching, reconstruction)
 - [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
 - [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer for translated output
-- [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - AssemblyAI integration for live transcription
+- [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - Web Speech API integration for live transcription
 
 ## Important Patterns
 

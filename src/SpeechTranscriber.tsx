@@ -1,6 +1,5 @@
 import './App.css';
 import { useRef, useState } from 'react';
-import RecordRTC from 'recordrtc';
 import * as Y from 'yjs';
 import { useYDoc } from '@y-sweet/react';
 import { setYTextFromString } from './yjsUtils';
@@ -40,141 +39,168 @@ function insertOrUpdateTurn(
   transcriptXml.insert(transcriptXml.length, [paragraphNode]);
 }
 
+// Web Speech API types
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+
+interface SpeechRecognitionResultList {
+  length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  length: number;
+  item(index: number): SpeechRecognitionAlternative;
+  [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: (event: SpeechRecognitionEvent) => void;
+  onerror: (event: Event & { error: string }) => void;
+  onend: () => void;
+  onstart: () => void;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: new () => SpeechRecognition;
+    webkitSpeechRecognition: new () => SpeechRecognition;
+  }
+}
+
 function SpeechTranscriber() {
   const yDoc = useYDoc();
   const transcriptXml = yDoc.getXmlFragment("transcriptDoc");
-  const ws = useRef<WebSocket | null>(null);
-  const recorder = useRef<RecordRTC | null>(null);
+  const recognition = useRef<SpeechRecognition | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
+  const turnOrderRef = useRef<number>(0);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
-
-  type TokenResponse = { token: string; error?: string };
-  const getToken = async (): Promise<string> => {
-    const response = await fetch('/api/aai_token', { cache: 'no-store' });
-    const data = (await response.json()) as TokenResponse;
-    if (typeof data !== 'object' || !('token' in data) || !data.token) {
-      alert((data && 'error' in data && data.error) ? data.error : 'Failed to get temp token');
-      throw new Error((data && 'error' in data && data.error) ? data.error : 'Failed to get temp token');
-    }
-    return data.token;
-  };
+  const shouldRestartRef = useRef<boolean>(false);
 
   const startTranscription = async () => {
+    // Check if Web Speech API is supported
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognitionAPI) {
+      alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const token: string = await getToken();
-      const endpoint = `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true&min_end_of_turn_silence_when_confident=500&token=${token}`;
-      ws.current = new WebSocket(endpoint);
+      // Request microphone permission explicitly
+      await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      ws.current.onopen = () => {
-        console.log('WebSocket connected!');
-        recorder.current = new RecordRTC(stream, {
-          type: 'audio',
-          mimeType: 'audio/webm;codecs=pcm',
-          recorderType: RecordRTC.StereoAudioRecorder,
-          timeSlice: 100,
-          desiredSampRate: 16000,
-          numberOfAudioChannels: 1,
-          bufferSize: 1024,
-          audioBitsPerSecond: 128000,
-          ondataavailable: (blob) => {
-            if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
-            const sampleRate = recorder.current?.sampleRate || 16000; // Hz
-            // Compute chunk sizes using actual sample rate and bit depth
-            const channels = 1;
-            const bytesPerSample = 2; // 16-bit PCM
-            const frameSize = channels * bytesPerSample; // bytes per sample frame
-            const bytesPerMs = (sampleRate * frameSize) / 1000;
-            const maxChunkBytes = bytesPerMs * 500; // 500ms
+      // Initialize speech recognition
+      recognition.current = new SpeechRecognitionAPI();
+      recognition.current.continuous = true; // Keep listening
+      recognition.current.interimResults = true; // Get partial results
+      recognition.current.lang = 'en-US'; // Default language
+      recognition.current.maxAlternatives = 1;
 
-            // Convert blob to ArrayBuffer and send
-            void blob.arrayBuffer().then((buffer) => {
-              if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+      sessionIdRef.current = "" + Date.now();
+      turnOrderRef.current = 0;
+      shouldRestartRef.current = true;
 
-              // If the buffer is longer than 500ms, split it into chunks.
-              // Do this by splitting any buffer longer than 500ms in half.
-              let buffers = [buffer];
-              let newBuffers = [];
-              while (true) {
-                let didAnySplits = false;
-                for (const curBuffer of buffers) {
-                  if (curBuffer.byteLength > maxChunkBytes) {
-                    // Split the buffer in half
-                    const mid = Math.floor(curBuffer.byteLength / 2);
-                    newBuffers.push(curBuffer.slice(0, mid));
-                    newBuffers.push(curBuffer.slice(mid));
-                    didAnySplits = true;
-                  } else {
-                    newBuffers.push(curBuffer);
-                  }
-                }
-                if (!didAnySplits) break;
-                buffers = newBuffers;
-                newBuffers = [];
-              }
-              // Send all chunks
-              if (buffers.length > 1) {
-                console.log(`Sending ${buffers.length} chunks`);
-              }
-              for (const chunk of buffers) {
-                ws.current.send(chunk);
-              }
-            });
-          },
-        });
-        recorder.current.startRecording();
+      recognition.current.onstart = () => {
+        console.log('Speech recognition started');
         setIsRecording(true);
-        sessionIdRef.current = "" + Date.now();
-        if (wakeLockRef.current) {
-          wakeLockRef.current.release().catch((err) => {
-            console.error('Failed to release wake lock:', err);
-          });
-          wakeLockRef.current = null;
+      };
+
+      recognition.current.onresult = (event: SpeechRecognitionEvent) => {
+        // Process the latest result
+        const result = event.results[event.resultIndex];
+        const transcript = result[0].transcript;
+
+        console.log(`${result.isFinal ? 'Final' : 'Interim'}: ${transcript}`);
+
+        if (result.isFinal) {
+          // Create a new turn for final results
+          insertOrUpdateTurn(
+            transcriptXml,
+            sessionIdRef.current!,
+            turnOrderRef.current,
+            transcript
+          );
+          turnOrderRef.current++;
+        } else {
+          // Update the current turn with interim results
+          insertOrUpdateTurn(
+            transcriptXml,
+            sessionIdRef.current!,
+            turnOrderRef.current,
+            transcript
+          );
         }
-        navigator.wakeLock.request('screen').then((wakeLock) => {
-          wakeLockRef.current = wakeLock;
-        }).catch((err) => {
-          console.error('Failed to acquire wake lock:', err);
+      };
+
+      recognition.current.onerror = (event: Event & { error: string }) => {
+        console.error('Speech recognition error:', event.error);
+
+        // Handle specific errors
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          alert('Microphone access denied. Please enable microphone permissions.');
+          stopEverything();
+        } else if (event.error === 'no-speech') {
+          console.log('No speech detected, continuing...');
+        } else if (event.error === 'network') {
+          alert('Network error. Speech recognition requires internet connection.');
+        }
+      };
+
+      recognition.current.onend = () => {
+        console.log('Speech recognition ended');
+
+        // Auto-restart if we're still supposed to be recording
+        if (shouldRestartRef.current && recognition.current) {
+          console.log('Restarting speech recognition...');
+          try {
+            recognition.current.start();
+          } catch (error) {
+            console.error('Failed to restart recognition:', error);
+            stopEverything();
+          }
+        } else {
+          setIsRecording(false);
+        }
+      };
+
+      // Start recognition
+      recognition.current.start();
+
+      // Acquire wake lock to prevent screen from sleeping
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch((err) => {
+          console.error('Failed to release wake lock:', err);
         });
-      };
-
-      ws.current.onmessage = (event: MessageEvent) => {
-        let msg: unknown;
-        try {
-          msg = JSON.parse(event.data as string);
-        } catch (e) {
-          console.error('Failed to parse message', e);
-          return;
-        }
-        console.log(msg);
-        if (
-          typeof msg === 'object' && msg !== null &&
-          'type' in msg && (msg as { type?: string }).type === 'Turn' &&
-          'turn_order' in msg && 'transcript' in msg
-        ) {
-          const { turn_order, transcript } = msg as { turn_order: number; transcript: string };
-          insertOrUpdateTurn(transcriptXml, sessionIdRef.current!, turn_order, transcript);
-        }
-      };
-
-      ws.current.onerror = (err) => {
-        console.error('WebSocket error:', err);
-        alert('WebSocket error, check the console.');
-        stopEverything();
-      };
-
-      ws.current.onclose = (event) => {
-        console.log('WebSocket closed', event);
-        ws.current = null;
-        stopEverything();
-      };
-    } catch (error) {
-      console.error(error);
-      if (ws.current) {
-        ws.current.close();
-        ws.current = null;
+        wakeLockRef.current = null;
       }
+      navigator.wakeLock.request('screen').then((wakeLock) => {
+        wakeLockRef.current = wakeLock;
+      }).catch((err) => {
+        console.error('Failed to acquire wake lock:', err);
+      });
+
+    } catch (error) {
+      console.error('Error starting transcription:', error);
+      alert('Failed to start transcription. Please check microphone permissions.');
+      stopEverything();
     }
   };
 
@@ -184,20 +210,18 @@ function SpeechTranscriber() {
   };
 
   const stopEverything = (): void => {
+    shouldRestartRef.current = false;
     setIsRecording(false);
-    if (ws.current) {
+
+    if (recognition.current) {
       try {
-        ws.current.send(JSON.stringify({ type: 'Terminate' }));
-      } catch {
-        // ignore
+        recognition.current.stop();
+      } catch (error) {
+        console.error('Error stopping recognition:', error);
       }
-      ws.current.close();
-      ws.current = null;
+      recognition.current = null;
     }
-    if (recorder.current) {
-      recorder.current.pauseRecording();
-      recorder.current = null;
-    }
+
     if (wakeLockRef.current) {
       wakeLockRef.current.release().catch((err) => {
         console.error('Failed to release wake lock:', err);
