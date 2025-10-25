@@ -1,0 +1,308 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+This is a **live translation application** for presentations/talks. It provides real-time speech transcription and AI-powered translation into multiple languages, displayed in configurable layouts. The system uses:
+
+- **Real-time collaboration**: Y-Sweet/Yjs for shared state across viewers
+- **Speech transcription**: AssemblyAI for live speech-to-text
+- **Translation**: Google Gemini for AI-powered translation
+- **Text-to-Speech**: ElevenLabs for audio playback of translations
+- **Rich text editing**: ProseMirror for collaborative markdown editing
+- **Frontend**: React + TypeScript + Vite + Tailwind CSS
+- **Backend**: Express server
+
+## Development Commands
+
+### Setup
+```bash
+# Copy environment template and fill in API keys
+cp template-.env .env
+
+# Install dependencies
+npm install
+```
+
+Required environment variables (`.env`):
+- `YSWEET_CONNECTION_STRING` - Y-Sweet connection string from jamsocket.com
+- `GEMINI_API_KEY` - Google Gemini API key
+- `ASSEMBLYAI_API_KEY` - AssemblyAI API key
+- `ELEVENLABS_API_KEY` - ElevenLabs API key for TTS
+- `TTS_MAX_CONCURRENT` - (Optional) Max concurrent TTS requests (default: 2)
+
+### Development
+```bash
+# Run backend server (port 8000 by default)
+npm run dev:server
+
+# Run frontend dev server (in separate terminal)
+npm run dev
+```
+
+### Testing & Building
+```bash
+# Run tests
+npm test
+
+# Run specific test file
+npm test -- path/to/test.ts --run
+
+# Lint code
+npm run lint
+
+# Build for production
+npm run build
+
+# Start production server (serves built files)
+npm start
+```
+
+### Deployment
+```bash
+docker-compose build
+docker-compose up -d
+```
+
+## Architecture
+
+### Core Collaboration Flow
+
+The app uses **Yjs** for real-time collaborative state management:
+
+1. **Y-Sweet authentication** ([server.ts:62-73](server.ts#L62-L73)): Backend issues read-only or full access tokens based on editor status
+2. **Shared Y.Doc** per session: Each session (identified by `?doc=doc-YYYY-MM-DD`) has a shared Yjs document
+3. **Key shared data structures**:
+   - `transcriptDoc` (XmlFragment): Live transcription from speech
+   - `prosemirror` (XmlFragment): User-edited source text for translation
+   - `translatedText-{language}` (Y.Text): Translated output for each language
+   - `meta` (Y.Map): Metadata like video visibility settings
+   - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
+
+### Translation Pipeline
+
+The translation system is sophisticated with caching and incremental updates:
+
+1. **Chunking** ([translationUtils.ts:53-90](translationUtils.ts#L53-L90)): Source text is split into chunks (lines), with whitespace handling
+2. **Decomposition** ([translationUtils.ts:30-42](translationUtils.ts#L30-L42)): Each chunk is decomposed into `format` (markdown syntax), `content`, and `trailingWhitespace`
+3. **Cache lookup** ([translationUtils.ts:112-164](translationUtils.ts#L112-L164)): Check which chunks need translation using `translationCache`
+4. **Context provision**: Untranslated chunks get 3 lines of context from already-translated chunks
+5. **Batch translation** ([server.ts:76-90](server.ts#L76-L90)): Server endpoint processes batches via Gemini
+6. **Cache update** ([translationUtils.ts:166-185](translationUtils.ts#L166-L185)): New translations are cached in the shared Y.Map
+7. **Reconstruction** ([translationUtils.ts:187-204](translationUtils.ts#L187-L204)): Final text is reassembled from cached translations with original formatting
+
+### Auto-TTS System
+
+The auto-TTS system provides automatic text-to-speech playback with intelligent catchup logic:
+
+#### Architecture
+- **Reducer-based state machine** ([autoTTSReducer.ts](src/autoTTSReducer.ts)): Pure state logic, easily testable
+- **React hook wrapper** ([useAutoTTS.ts](src/useAutoTTS.ts)): Integrates reducer with audio playback side effects
+- **ElevenLabs API** ([server.ts](server.ts)): Backend TTS endpoint with caching and retry logic
+
+#### State Machine
+```
+States: idle | loading | playing | error
+
+Tracks:
+- lastSpokenLineIndex: Last line that finished playing
+- currentlyPlayingIndex: Currently playing line (or null)
+- currentlyPlayingText: Text being played (for handling insertions/deletions)
+- playbackStatus: Current state
+- enabled: Whether auto-TTS mode is active
+```
+
+#### Catchup Logic ([autoTTSReducer.ts:calculateNextLine](src/autoTTSReducer.ts))
+When new translated text arrives faster than speech:
+1. If we haven't started: always start at line 0
+2. Calculate backlog: `totalLines - (lastSpokenIndex + 1)`
+3. If backlog > threshold (default: 3): skip ahead to stay current
+4. Otherwise: play next line sequentially
+
+Example: If at line 2 with 10 total lines and threshold 3:
+- Backlog = 7 lines (exceeds threshold)
+- Skip to line 7 (plays last 3 lines: 7, 8, 9)
+
+#### Handling Stale Indices
+**Problem**: When lines are inserted/deleted during playback, array indices become stale.
+
+**Solution**: Hybrid approach tracking both text and index ([useAutoTTS.ts](src/useAutoTTS.ts)):
+```typescript
+audio.onended = () => {
+  // Search for the text we just played
+  const currentIndex = lines.indexOf(playedText);
+
+  // If found at different index, use new position (handles insertions)
+  // If not found, use stored index with bounds check (handles edits)
+  const reconciledIndex = currentIndex !== -1
+    ? currentIndex
+    : Math.min(storedIndex, lines.length - 1);
+};
+```
+
+This handles the common case (insertions before cursor) correctly while degrading gracefully for edge cases.
+
+**Note**: This is a temporary solution. Future versions will use proper Yjs document structure with stable identifiers instead of array indices.
+
+#### Dual Modes
+- **Auto mode ON**: Automatic playback with catchup
+- **Auto mode OFF**: Click-to-play any line (existing behavior preserved)
+
+#### TTS Backend
+- **Voice**: "Alice" (ID: `Xb7hH8MSUJpSbSDYk0k2`) for French and Spanish
+- **Model**: `eleven_multilingual_v2`
+- **Caching**: Audio files cached in `/audio-cache` (MD5 hash keys)
+- **Concurrency**: Limited to 2 concurrent requests (configurable)
+- **Retry**: Exponential backoff on rate limit errors (429)
+- **Deduplication**: In-flight request caching prevents duplicate fetches
+
+### ProseMirror Integration
+
+The app uses ProseMirror for collaborative rich text editing:
+
+- **Yjs binding**: [y-prosemirror](https://github.com/yjs/y-prosemirror) synchronizes ProseMirror state with Y.XmlFragment
+- **Markdown serialization** ([ProseMirrorEditor.tsx:74-83](ProseMirrorEditor.tsx#L74-L83)): Content is converted to markdown on every change
+- **Custom keybindings** ([ProseMirrorEditor.tsx:54-68](ProseMirrorEditor.tsx#L54-L68)):
+  - `Mod-z/y`: Undo/redo (Yjs-aware)
+  - `Tab/Shift-Tab`: List item indent/outdent
+  - `Mod-Enter`: Trigger translation
+
+### Layout System
+
+The UI uses a **URL-based layout system** ([App.tsx:262-384](App.tsx#L262-L384)):
+
+- Layouts are encoded in the URL path: `/transcript,sourceText|translatedOutline-French,video`
+- Format: rows separated by `|`, columns separated by `,`
+- Components: `transcript`, `sourceText`, `translatedOutline-{language}`, `video`
+- Language selection in translated views updates the URL dynamically
+- Editor mode is triggered by `#editor` hash in URL
+
+### Editor vs Viewer Mode
+
+The app has two modes determined by URL hash (`#editor`):
+
+- **Editor mode** (`#editor`):
+  - Can transcribe speech
+  - Can edit source text
+  - Can trigger translations
+  - Has full Y-Sweet write access
+
+- **Viewer mode** (default):
+  - Read-only access to all content
+  - Receives real-time updates from editors
+  - Read-only Y-Sweet token
+  - Can use TTS (auto or manual mode)
+
+## Key Files
+
+### Backend
+- [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
+- [nlp.ts](nlp.ts) - Gemini API integration for translation
+
+### Frontend Core
+- [App.tsx](src/App.tsx) - Main React app with routing and layout system
+- [ProseMirrorEditor.tsx](src/ProseMirrorEditor.tsx) - Collaborative rich text editor
+- [translationUtils.ts](src/translationUtils.ts) - Translation pipeline logic (chunking, caching, reconstruction)
+- [yjsUtils.ts](src/yjsUtils.ts) - Yjs utility functions and React hooks
+
+### Components
+- [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
+- [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer for translated output with TTS controls
+- [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - AssemblyAI integration for live transcription
+
+### Auto-TTS System
+- [autoTTSReducer.ts](src/autoTTSReducer.ts) - Pure state machine logic for auto-TTS (highly testable)
+- [autoTTSReducer.test.ts](src/autoTTSReducer.test.ts) - Comprehensive unit tests (23 tests covering all scenarios)
+- [useAutoTTS.ts](src/useAutoTTS.ts) - React hook integrating reducer with audio playback
+
+## Important Patterns
+
+### Yjs State Updates
+
+Always use Yjs methods to update shared state:
+
+```typescript
+// Y.Text
+const yText = ydoc.getText('key');
+yText.delete(0, yText.length);  // Clear
+yText.insert(0, 'new content');  // Insert
+
+// Y.Map
+const yMap = ydoc.getMap('key');
+yMap.set('field', 'value');
+yMap.get('field');
+
+// Y.XmlFragment (for ProseMirror)
+const fragment = ydoc.getXmlFragment('prosemirror');
+// Modified via y-prosemirror plugin
+```
+
+### Translation Cache Keys
+
+Translation cache keys combine language and content ([translationUtils.ts:106-110](translationUtils.ts#L106-L110)):
+```typescript
+translationCacheKey(language, chunkText) // Returns "{language}:{chunkText}"
+```
+
+### Reducer-Based State Management
+
+For complex state machines, use the reducer pattern to separate pure logic from side effects:
+
+**Benefits**:
+- Pure functions are easily testable without React
+- State transitions are explicit and traceable
+- Impossible states are prevented by TypeScript
+- Logic can be understood in isolation
+
+**Structure**:
+```typescript
+// 1. Define state and actions
+interface State { /* ... */ }
+type Action = { type: 'ACTION_NAME'; payload?: any } | /* ... */
+
+// 2. Pure reducer function (testable without React)
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'ACTION_NAME': return { ...state, /* updates */ };
+    // ...
+  }
+}
+
+// 3. React hook wrapping reducer + side effects
+function useMyFeature() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+
+  useEffect(() => {
+    // Side effects based on state
+  }, [state.someField]);
+
+  return { state, actions };
+}
+```
+
+**Example**: Auto-TTS ([autoTTSReducer.ts](src/autoTTSReducer.ts) + [useAutoTTS.ts](src/useAutoTTS.ts))
+
+### Handling Array Indices with Live Updates
+
+**Problem**: Array indices become stale when items are inserted/deleted during async operations.
+
+**Pattern**: Track both the item content and its index:
+1. Store both `itemIndex` and `itemText` when starting async operation
+2. On completion, search for `itemText` in the current array
+3. If found at different index: use new index (handles insertions/moves)
+4. If not found: use clamped stored index (handles deletions/edits)
+
+**When to use**: Any time you have async operations on arrays that can be modified during the operation.
+
+**Future**: Replace with Yjs data structures that have stable identifiers instead of indices.
+
+### Testing Philosophy
+
+- **Unit tests for pure logic**: Test reducers and utility functions in isolation
+- **Integration tests for hooks**: Test React hooks with mock dependencies
+- **Keep tests simple**: Each test should verify one clear behavior
+- **Test edge cases**: Empty arrays, null values, boundary conditions
+- **Use descriptive test names**: "handles line insertion during playback" not "test case 5"
+
+**Example**: [autoTTSReducer.test.ts](src/autoTTSReducer.test.ts) - 23 tests covering state transitions, catchup logic, and edge cases
