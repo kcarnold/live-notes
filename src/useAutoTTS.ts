@@ -120,8 +120,8 @@ export function useAutoTTS(
         }
 
         // Text at stored index changed - try to find where it moved
-        // Use indexOf, but only reconcile to a LATER index to avoid duplicate line issues
-        const foundIndex = currentLines.indexOf(text);
+        // Use lastIndexOf, but only reconcile to a LATER index to avoid duplicate line issues
+        const foundIndex = currentLines.lastIndexOf(text);
         const reconciledIndex = (foundIndex !== -1 && foundIndex > lineIndex)
           ? foundIndex  // Text moved to later position (insertion before cursor)
           : Math.min(lineIndex, currentLines.length - 1); // Use clamped stored index
