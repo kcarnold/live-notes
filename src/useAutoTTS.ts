@@ -137,7 +137,8 @@ export function useAutoTTS(
   );
 
   /**
-   * Manually play a specific line by text (for manual mode).
+   * Manually play a specific line by text.
+   * Auto mode will continue from this line if enabled.
    */
   const playLine = useCallback(
     async (text: string) => {
@@ -146,7 +147,6 @@ export function useAutoTTS(
         const currentText = lines[state.currentlyPlayingIndex];
         if (currentText === text) {
           stopPlayback();
-          dispatch({ type: 'SET_ENABLED', enabled: false }); // Ensure auto mode is off
           return;
         }
         // Different text - stop current and start new
@@ -160,18 +160,8 @@ export function useAutoTTS(
       const lineIndex = lines.indexOf(text);
       if (lineIndex === -1) return;
 
-      // Temporarily disable auto mode for manual playback
-      const wasEnabled = state.enabled;
-      if (wasEnabled) {
-        dispatch({ type: 'SET_ENABLED', enabled: false });
-      }
-
+      // Play the line - auto mode will naturally continue from here if enabled
       await playLineByIndex(lineIndex);
-
-      // Re-enable auto mode if it was enabled
-      if (wasEnabled) {
-        dispatch({ type: 'SET_ENABLED', enabled: true });
-      }
     },
     [state, lines, playLineByIndex, stopPlayback]
   );
