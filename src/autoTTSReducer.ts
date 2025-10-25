@@ -16,6 +16,9 @@ export interface AutoTTSState {
   /** Index of the line currently playing (null if idle) */
   currentlyPlayingIndex: number | null;
 
+  /** Text of the line currently playing (used to handle line insertions/deletions) */
+  currentlyPlayingText?: string;
+
   /** Current playback status */
   playbackStatus: 'idle' | 'loading' | 'playing' | 'error';
 
@@ -30,8 +33,8 @@ export type AutoTTSAction =
   | { type: 'TOGGLE_ENABLED' }
   | { type: 'SET_ENABLED'; enabled: boolean }
   | { type: 'TEXT_UPDATED'; totalLines: number }
-  | { type: 'START_LOADING'; lineIndex: number }
-  | { type: 'START_PLAYING'; lineIndex: number }
+  | { type: 'START_LOADING'; lineIndex: number; text: string }
+  | { type: 'START_PLAYING'; lineIndex: number; text: string }
   | { type: 'PLAYBACK_ENDED'; lineIndex: number }
   | { type: 'PLAYBACK_ERROR'; error: string; lineIndex: number }
   | { type: 'SET_CATCHUP_THRESHOLD'; threshold: number }
@@ -122,6 +125,7 @@ export function autoTTSReducer(
         ...state,
         playbackStatus: 'loading',
         currentlyPlayingIndex: action.lineIndex,
+        currentlyPlayingText: action.text,
         errorMessage: undefined,
       };
 
@@ -130,6 +134,7 @@ export function autoTTSReducer(
         ...state,
         playbackStatus: 'playing',
         currentlyPlayingIndex: action.lineIndex,
+        currentlyPlayingText: action.text,
         errorMessage: undefined,
       };
 
@@ -139,6 +144,7 @@ export function autoTTSReducer(
         playbackStatus: 'idle',
         lastSpokenLineIndex: action.lineIndex,
         currentlyPlayingIndex: null,
+        currentlyPlayingText: undefined,
         errorMessage: undefined,
       };
 
@@ -148,6 +154,7 @@ export function autoTTSReducer(
         playbackStatus: 'error',
         errorMessage: action.error,
         currentlyPlayingIndex: null,
+        currentlyPlayingText: undefined,
       };
 
     case 'SET_CATCHUP_THRESHOLD':

@@ -79,7 +79,7 @@ export function useAutoTTS(
       if (!text?.trim()) return;
 
       // Start loading
-      dispatch({ type: 'START_LOADING', lineIndex });
+      dispatch({ type: 'START_LOADING', lineIndex, text });
 
       let audioUrl: string;
       try {
@@ -109,11 +109,21 @@ export function useAutoTTS(
       };
 
       audio.onended = () => {
-        dispatch({ type: 'PLAYBACK_ENDED', lineIndex });
+        // Reconcile the index: the text might have moved to a different position
+        // due to insertions/deletions while audio was playing
+        const currentLines = lines; // Capture current lines at playback end
+        const currentIndex = currentLines.indexOf(text);
+
+        // If text found at different index, use that; otherwise use stored index (clamped)
+        const reconciledIndex = currentIndex !== -1
+          ? currentIndex
+          : Math.min(lineIndex, currentLines.length - 1);
+
+        dispatch({ type: 'PLAYBACK_ENDED', lineIndex: reconciledIndex });
       };
 
       // Start playing
-      dispatch({ type: 'START_PLAYING', lineIndex });
+      dispatch({ type: 'START_PLAYING', lineIndex, text });
       await audio.play();
     },
     [lines, language, isTTSEnabled]

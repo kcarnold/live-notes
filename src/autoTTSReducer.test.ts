@@ -111,10 +111,12 @@ describe('autoTTSReducer', () => {
     const state = autoTTSReducer(initialAutoTTSState, {
       type: 'START_LOADING',
       lineIndex: 5,
+      text: 'Test line',
     });
 
     expect(state.playbackStatus).toBe('loading');
     expect(state.currentlyPlayingIndex).toBe(5);
+    expect(state.currentlyPlayingText).toBe('Test line');
     expect(state.errorMessage).toBeUndefined();
   });
 
@@ -122,10 +124,12 @@ describe('autoTTSReducer', () => {
     const state = autoTTSReducer(initialAutoTTSState, {
       type: 'START_PLAYING',
       lineIndex: 3,
+      text: 'Another test line',
     });
 
     expect(state.playbackStatus).toBe('playing');
     expect(state.currentlyPlayingIndex).toBe(3);
+    expect(state.currentlyPlayingText).toBe('Another test line');
   });
 
   test('PLAYBACK_ENDED updates lastSpokenLineIndex and resets to idle', () => {
@@ -134,6 +138,7 @@ describe('autoTTSReducer', () => {
         ...initialAutoTTSState,
         playbackStatus: 'playing',
         currentlyPlayingIndex: 5,
+        currentlyPlayingText: 'Test text',
       },
       { type: 'PLAYBACK_ENDED', lineIndex: 5 }
     );
@@ -141,6 +146,7 @@ describe('autoTTSReducer', () => {
     expect(state.playbackStatus).toBe('idle');
     expect(state.lastSpokenLineIndex).toBe(5);
     expect(state.currentlyPlayingIndex).toBe(null);
+    expect(state.currentlyPlayingText).toBeUndefined();
   });
 
   test('PLAYBACK_ERROR sets error state', () => {
@@ -149,6 +155,7 @@ describe('autoTTSReducer', () => {
         ...initialAutoTTSState,
         playbackStatus: 'playing',
         currentlyPlayingIndex: 3,
+        currentlyPlayingText: 'Error text',
       },
       { type: 'PLAYBACK_ERROR', error: 'Network error', lineIndex: 3 }
     );
@@ -156,6 +163,7 @@ describe('autoTTSReducer', () => {
     expect(state.playbackStatus).toBe('error');
     expect(state.errorMessage).toBe('Network error');
     expect(state.currentlyPlayingIndex).toBe(null);
+    expect(state.currentlyPlayingText).toBeUndefined();
   });
 
   test('SET_CATCHUP_THRESHOLD updates threshold', () => {
@@ -211,18 +219,20 @@ describe('Integration scenarios', () => {
     expect(state.enabled).toBe(true);
 
     // Start loading first line
-    state = autoTTSReducer(state, { type: 'START_LOADING', lineIndex: 0 });
+    state = autoTTSReducer(state, { type: 'START_LOADING', lineIndex: 0, text: 'First line' });
     expect(state.playbackStatus).toBe('loading');
 
     // Start playing
-    state = autoTTSReducer(state, { type: 'START_PLAYING', lineIndex: 0 });
+    state = autoTTSReducer(state, { type: 'START_PLAYING', lineIndex: 0, text: 'First line' });
     expect(state.playbackStatus).toBe('playing');
     expect(state.currentlyPlayingIndex).toBe(0);
+    expect(state.currentlyPlayingText).toBe('First line');
 
     // Playback ends
     state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 0 });
     expect(state.playbackStatus).toBe('idle');
     expect(state.lastSpokenLineIndex).toBe(0);
+    expect(state.currentlyPlayingText).toBeUndefined();
 
     // With only 3 lines, next should be sequential (backlog of 2 < threshold of 3)
     const nextLine = calculateNextLine(state.lastSpokenLineIndex, 3, state.catchupThreshold);
@@ -249,7 +259,7 @@ describe('Integration scenarios', () => {
     let state = initialAutoTTSState;
 
     state = autoTTSReducer(state, { type: 'SET_ENABLED', enabled: true });
-    state = autoTTSReducer(state, { type: 'START_PLAYING', lineIndex: 3 });
+    state = autoTTSReducer(state, { type: 'START_PLAYING', lineIndex: 3, text: 'Error line' });
 
     // Error occurs
     state = autoTTSReducer(state, {
@@ -260,10 +270,46 @@ describe('Integration scenarios', () => {
 
     expect(state.playbackStatus).toBe('error');
     expect(state.errorMessage).toBe('Network timeout');
+    expect(state.currentlyPlayingText).toBeUndefined();
 
     // Can retry by loading again
-    state = autoTTSReducer(state, { type: 'START_LOADING', lineIndex: 3 });
+    state = autoTTSReducer(state, { type: 'START_LOADING', lineIndex: 3, text: 'Error line' });
     expect(state.playbackStatus).toBe('loading');
     expect(state.errorMessage).toBeUndefined();
+  });
+
+  test('tracks text to handle line insertions/deletions', () => {
+    let state = initialAutoTTSState;
+
+    // Start playing line at index 5
+    state = autoTTSReducer(state, {
+      type: 'START_PLAYING',
+      lineIndex: 5,
+      text: 'Hello world',
+    });
+
+    expect(state.currentlyPlayingIndex).toBe(5);
+    expect(state.currentlyPlayingText).toBe('Hello world');
+
+    // Simulate playback ending (hook would reconcile the index)
+    // If text moved to index 7 due to insertions, the hook would pass lineIndex: 7
+    state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 7 });
+
+    expect(state.lastSpokenLineIndex).toBe(7); // Reconciled index
+    expect(state.currentlyPlayingText).toBeUndefined(); // Cleared after playback
+  });
+
+  test('clears playing text on playback end', () => {
+    const state = autoTTSReducer(
+      {
+        ...initialAutoTTSState,
+        playbackStatus: 'playing',
+        currentlyPlayingIndex: 2,
+        currentlyPlayingText: 'Some text',
+      },
+      { type: 'PLAYBACK_ENDED', lineIndex: 2 }
+    );
+
+    expect(state.currentlyPlayingText).toBeUndefined();
   });
 });
