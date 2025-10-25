@@ -37,7 +37,6 @@
     "react-dom": "^19.1.0",
     "react-reconciler": "0.32.0",
     "react-remark": "^2.1.0",
-    "react-router-dom": "^7.6.1",
     "tailwindcss": "^4.0.12",
     "unified": "11",
     "vitest-browser-react": "^0.1.1",
