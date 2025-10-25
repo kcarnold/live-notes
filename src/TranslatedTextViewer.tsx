@@ -79,12 +79,10 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
             <p
               key={index}
               onClick={() => {
-                if (!autoTTSState.enabled) {
-                  void playLine(line);
-                }
+                void playLine(line);
               }}
               className={`
-                ${!autoTTSState.enabled ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800' : ''}
+                cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800
                 ${isPlaying ? 'bg-blue-200 dark:bg-blue-800' : ''}
                 ${isLoading ? 'tts-loading' : ''}
                 ${isLastSpoken && autoTTSState.enabled ? 'border-l-4 border-blue-500 pl-2' : ''}
