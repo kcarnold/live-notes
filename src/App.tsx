@@ -15,7 +15,6 @@ import { LayoutDiagram } from "./LayoutDiagram";
 import { useScrollToBottom } from "./reactUtils";
 import SpeechTranscriber from "./SpeechTranscriber";
 import TranslatedTextViewer from "./TranslatedTextViewer";
-import { translatedTextKeyForLanguage } from "./translationUtils";
 import { ClientToken } from "@y-sweet/sdk";
 import SlidesPlayer from "./SlidesPlayer";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
@@ -129,7 +128,7 @@ function TranslatedOutlineComponent({ language, onLanguageChange }: { language: 
         </select>
       </div>
       <TranslatedTextViewer
-        yJsKey={translatedTextKeyForLanguage(language)}
+        language={language}
         fontSize={fontSize}
       />
     </div>

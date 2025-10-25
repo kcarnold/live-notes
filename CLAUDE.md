@@ -21,7 +21,7 @@ This is a **live translation application** for presentations/talks. It provides 
 cp template-.env .env
 
 # Install dependencies
-yarn
+npm install
 ```
 
 Required environment variables (`.env`):
@@ -32,25 +32,25 @@ Required environment variables (`.env`):
 ### Development
 ```bash
 # Run backend server (port 8000 by default)
-yarn run dev:server
+npm run dev:server
 
 # Run frontend dev server (in separate terminal)
-yarn run dev
+npm run dev
 ```
 
 ### Testing & Building
 ```bash
 # Run tests
-yarn test
+npm test
 
 # Lint code
-yarn lint
+npm run lint
 
 # Build for production
-yarn build
+npm run build
 
 # Start production server (serves built files)
-yarn start
+npm start
 ```
 
 ### Deployment

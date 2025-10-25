@@ -2,8 +2,12 @@ import 'dotenv/config'
 import express from "express";
 import path from "path";
 import { fileURLToPath } from 'url';
+import { createHash } from 'crypto';
+import fs from 'fs/promises';
+import pLimit from 'p-limit';
 
 import { DocumentManager } from '@y-sweet/sdk'
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { translateBlock, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
@@ -25,12 +29,51 @@ const geminiProvider = new GeminiProvider({
 
 const documentManager = new DocumentManager(getEnvOrCrash("YSWEET_CONNECTION_STRING"));
 
+const elevenLabsClient = new ElevenLabsClient({
+  apiKey: getEnvOrCrash('ELEVENLABS_API_KEY'),
+});
+
+// TTS Configuration: Limit concurrent requests to prevent API spam
+const TTS_MAX_CONCURRENT = parseInt(process.env.TTS_MAX_CONCURRENT || '2', 10);
+const ttsLimiter = pLimit(TTS_MAX_CONCURRENT);
+
+/**
+ * Call ElevenLabs TTS with retry on 429 errors
+ */
+async function callTTSWithRetry(voiceId: string, options: { text: string; modelId: string }): Promise<AsyncIterable<Uint8Array>> {
+  const maxRetries = 3;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await elevenLabsClient.textToSpeech.convert(voiceId, options);
+    } catch (error: any) {
+      const is429 = error?.statusCode === 429 || error?.status === 429;
+
+      if (is429 && attempt < maxRetries) {
+        // Exponential backoff with jitter: 1s, 2s, 4s (+ random 0-1s)
+        const delay = (1000 * Math.pow(2, attempt)) + (Math.random() * 1000);
+        console.log(`TTS rate limited, retrying in ${delay.toFixed(0)}ms (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw new Error('TTS failed after retries');
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const AUDIO_CACHE_DIR = 'audio-cache';
+
+// Ensure audio cache directory exists
+await fs.mkdir(AUDIO_CACHE_DIR, { recursive: true });
 
 const app = express();
 app.use(express.static("dist"));
 app.use(express.json());
+app.use('/audio-cache', express.static(AUDIO_CACHE_DIR));
 
 
 // AssemblyAI v3 token endpoint
@@ -87,6 +130,103 @@ app.post('/api/requestTranslatedBlocks', async (req, res) => {
     ok: true,
     results
   });
+});
+
+// TTS request deduplication: Map of cache key -> Promise
+const ttsInFlightRequests = new Map<string, Promise<string>>();
+
+// Voice configuration per language
+const VOICE_CONFIG: Record<string, { voiceId: string; languageCode: string; model: string }> = {
+  French: {
+    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
+    languageCode: 'fr',
+    model: 'eleven_multilingual_v2',
+  },
+  Spanish: {
+    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
+    languageCode: 'es',
+    model: 'eleven_multilingual_v2',
+  },
+};
+
+app.post('/api/tts', async (req, res) => {
+  const { text, language } = req.body;
+
+  if (!text || !language) {
+    return res.status(400).json({ error: 'Missing text or language' });
+  }
+
+  // Only support configured languages
+  if (!VOICE_CONFIG[language]) {
+    return res.status(400).json({ error: `Language ${language} not supported for TTS` });
+  }
+
+  try {
+    // Generate cache key
+    const cacheKey = `${language}:${text}`;
+    const hash = createHash('md5').update(cacheKey).digest('hex');
+    const languageCode = language.toLowerCase().substring(0, 2);
+    const filename = `${languageCode}-${hash}`;
+    const audioPath = path.join(AUDIO_CACHE_DIR, `${filename}.mp3`);
+    const textPath = path.join(AUDIO_CACHE_DIR, `${filename}.txt`);
+
+    // Check if already cached
+    try {
+      await fs.access(audioPath);
+      // File exists, return URL
+      return res.json({ audioUrl: `/audio-cache/${filename}.mp3` });
+    } catch {
+      // File doesn't exist, need to generate
+    }
+
+    // Check if request is already in flight
+    if (ttsInFlightRequests.has(cacheKey)) {
+      console.log(`TTS request for "${text.substring(0, 50)}..." already in flight, awaiting...`);
+      await ttsInFlightRequests.get(cacheKey);
+      return res.json({ audioUrl: `/audio-cache/${filename}.mp3` });
+    }
+
+    // Start new TTS request with concurrency limit
+    const voiceConfig = VOICE_CONFIG[language];
+    const ttsPromise = ttsLimiter(async () => {
+      console.log(`Generating TTS for "${text.substring(0, 50)}..." in ${language}`);
+
+      // Call with retry on 429 errors
+      const audio = await callTTSWithRetry(voiceConfig.voiceId, {
+        text,
+        modelId: voiceConfig.model,
+        languageCode: voiceConfig.languageCode,
+      });
+
+      // Convert stream to buffer
+      const chunks: Buffer[] = [];
+      for await (const chunk of audio) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const audioBuffer = Buffer.concat(chunks);
+
+      // Write audio file
+      await fs.writeFile(audioPath, audioBuffer);
+
+      // Write text file for debugging
+      await fs.writeFile(textPath, text, 'utf-8');
+
+      console.log(`TTS cached: ${filename}.mp3`);
+      return `/audio-cache/${filename}.mp3`;
+    });
+
+    ttsInFlightRequests.set(cacheKey, ttsPromise);
+
+    try {
+      const audioUrl = await ttsPromise;
+      return res.json({ audioUrl });
+    } finally {
+      ttsInFlightRequests.delete(cacheKey);
+    }
+  } catch (error: any) {
+    console.error('TTS error:', error?.message || error);
+    return res.status(500).json({ error: 'Failed to generate speech' });
+  }
 });
 
 

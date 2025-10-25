@@ -3,20 +3,20 @@
 - Copy `template.env` to `.env`
 - Get a [y-sweet account](https://jamsocket.com/) (free is fine). Put the API key it gives you in `.env`.
 - Get a Gemini API key. Likewise, it goes in `.env`.
-- Run `yarn` to install packages.
+- Run `npm install` to install packages.
 
 ## To run
 
 Backend:
 
 ```
-yarn run dev:server
+npm run dev:server
 ```
 
 Frontend:
 
 ```
-yarn run dev
+npm run dev
 ```
 
 ## Deployment

@@ -1,17 +1,26 @@
 # https://docs.docker.com/guides/nodejs/containerize/
 FROM node:24-slim
 EXPOSE 5008
-ENV NODE_ENV=production
 ENV PORT=5008
 WORKDIR /usr/src/app
 
-COPY yarn.lock package.json ./
-# Need to install dev dependencies to build the app.
-RUN yarn install --production=false
+# Install ffmpeg
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+RUN npm ci
 
 # Copy the rest of the source files into the image.
 COPY . .
-RUN yarn run build
+
+ENV NODE_ENV=production
+RUN npm run build
+
+# Create the audio cache directory and set permissions.
+RUN mkdir -p audio-cache && chown -R node:node audio-cache
 
 # Run the application as a non-root user.
 USER node

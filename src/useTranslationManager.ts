@@ -18,11 +18,19 @@ export function useTranslationManager({
   const [translationError, setTranslationError] = useState("");
 
   const doTranslations = useCallback(async () => {
+    const sourceText = sourceTextRef.current;
+    if (!sourceText) {
+      console.warn("No source text available for translation.");
+      return;
+    }
+    // Replace any manual line breaks (lines ending in \) with Markdown paragraph breaks
+    const sanitizedText = sourceText.replace(/\\\n\\\n/g, '\n\n');
+    // Continue with translation using sanitizedText
     async function doTranslation(language: string) {
       const updatedText = await getUpdatedTranslation(
         language,
         translationCache as GenericMap as TranslationCache,
-        sourceTextRef.current
+        sanitizedText
       );
       const key = translatedTextKeyForLanguage(language);
       setYTextFromString(ydoc.getText(key), updatedText);
