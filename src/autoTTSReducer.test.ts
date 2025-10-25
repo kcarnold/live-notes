@@ -140,11 +140,12 @@ describe('autoTTSReducer', () => {
         currentlyPlayingIndex: 5,
         currentlyPlayingText: 'Test text',
       },
-      { type: 'PLAYBACK_ENDED', lineIndex: 5 }
+      { type: 'PLAYBACK_ENDED', lineIndex: 5, text: 'Test text' }
     );
 
     expect(state.playbackStatus).toBe('idle');
     expect(state.lastSpokenLineIndex).toBe(5);
+    expect(state.lastSpokenText).toBe('Test text');
     expect(state.currentlyPlayingIndex).toBe(null);
     expect(state.currentlyPlayingText).toBeUndefined();
   });
@@ -229,9 +230,10 @@ describe('Integration scenarios', () => {
     expect(state.currentlyPlayingText).toBe('First line');
 
     // Playback ends
-    state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 0 });
+    state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 0, text: 'First line' });
     expect(state.playbackStatus).toBe('idle');
     expect(state.lastSpokenLineIndex).toBe(0);
+    expect(state.lastSpokenText).toBe('First line');
     expect(state.currentlyPlayingText).toBeUndefined();
 
     // With only 3 lines, next should be sequential (backlog of 2 < threshold of 3)
@@ -244,9 +246,10 @@ describe('Integration scenarios', () => {
 
     // Enable and play first few lines
     state = autoTTSReducer(state, { type: 'SET_ENABLED', enabled: true });
-    state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 2 });
+    state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 2, text: 'Line 3' });
 
     expect(state.lastSpokenLineIndex).toBe(2);
+    expect(state.lastSpokenText).toBe('Line 3');
 
     // Now we have 10 total lines, we're at line 2
     // backlog = 10 - 3 = 7 (exceeds threshold of 3)
@@ -293,9 +296,10 @@ describe('Integration scenarios', () => {
 
     // Simulate playback ending (hook would reconcile the index)
     // If text moved to index 7 due to insertions, the hook would pass lineIndex: 7
-    state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 7 });
+    state = autoTTSReducer(state, { type: 'PLAYBACK_ENDED', lineIndex: 7, text: 'Hello world' });
 
     expect(state.lastSpokenLineIndex).toBe(7); // Reconciled index
+    expect(state.lastSpokenText).toBe('Hello world'); // Saved for duplicate detection
     expect(state.currentlyPlayingText).toBeUndefined(); // Cleared after playback
   });
 
@@ -307,9 +311,26 @@ describe('Integration scenarios', () => {
         currentlyPlayingIndex: 2,
         currentlyPlayingText: 'Some text',
       },
-      { type: 'PLAYBACK_ENDED', lineIndex: 2 }
+      { type: 'PLAYBACK_ENDED', lineIndex: 2, text: 'Some text' }
     );
 
     expect(state.currentlyPlayingText).toBeUndefined();
+    expect(state.lastSpokenText).toBe('Some text');
+  });
+
+  test('prevents replaying same text when lines inserted above cursor', () => {
+    // Scenario: Finished playing "Line C" at index 2
+    // Then "NEW" inserted at top, "Line C" moves to index 3
+    // Should NOT replay "Line C"
+    const state = autoTTSReducer(
+      initialAutoTTSState,
+      { type: 'PLAYBACK_ENDED', lineIndex: 2, text: 'Line C' }
+    );
+
+    expect(state.lastSpokenLineIndex).toBe(2);
+    expect(state.lastSpokenText).toBe('Line C');
+
+    // The hook will check: lines[3] === 'Line C' === lastSpokenText
+    // and skip playing it
   });
 });

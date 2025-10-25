@@ -13,6 +13,9 @@ export interface AutoTTSState {
   /** Index of the last line that finished playing (-1 if none) */
   lastSpokenLineIndex: number;
 
+  /** Text of the last line that finished playing (prevents replaying same content) */
+  lastSpokenText?: string;
+
   /** Index of the line currently playing (null if idle) */
   currentlyPlayingIndex: number | null;
 
@@ -35,7 +38,7 @@ export type AutoTTSAction =
   | { type: 'TEXT_UPDATED'; totalLines: number }
   | { type: 'START_LOADING'; lineIndex: number; text: string }
   | { type: 'START_PLAYING'; lineIndex: number; text: string }
-  | { type: 'PLAYBACK_ENDED'; lineIndex: number }
+  | { type: 'PLAYBACK_ENDED'; lineIndex: number; text: string }
   | { type: 'PLAYBACK_ERROR'; error: string; lineIndex: number }
   | { type: 'SET_CATCHUP_THRESHOLD'; threshold: number }
   | { type: 'RESET' };
@@ -143,6 +146,7 @@ export function autoTTSReducer(
         ...state,
         playbackStatus: 'idle',
         lastSpokenLineIndex: action.lineIndex,
+        lastSpokenText: action.text,
         currentlyPlayingIndex: null,
         currentlyPlayingText: undefined,
         errorMessage: undefined,

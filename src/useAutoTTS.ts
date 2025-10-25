@@ -112,14 +112,21 @@ export function useAutoTTS(
         // Reconcile the index: the text might have moved to a different position
         // due to insertions/deletions while audio was playing
         const currentLines = lines; // Capture current lines at playback end
-        const currentIndex = currentLines.indexOf(text);
 
-        // If text found at different index, use that; otherwise use stored index (clamped)
-        const reconciledIndex = currentIndex !== -1
-          ? currentIndex
-          : Math.min(lineIndex, currentLines.length - 1);
+        // If text at stored index is still the same, the index is valid (common case)
+        if (currentLines[lineIndex] === text) {
+          dispatch({ type: 'PLAYBACK_ENDED', lineIndex, text });
+          return;
+        }
 
-        dispatch({ type: 'PLAYBACK_ENDED', lineIndex: reconciledIndex });
+        // Text at stored index changed - try to find where it moved
+        // Use indexOf, but only reconcile to a LATER index to avoid duplicate line issues
+        const foundIndex = currentLines.indexOf(text);
+        const reconciledIndex = (foundIndex !== -1 && foundIndex > lineIndex)
+          ? foundIndex  // Text moved to later position (insertion before cursor)
+          : Math.min(lineIndex, currentLines.length - 1); // Use clamped stored index
+
+        dispatch({ type: 'PLAYBACK_ENDED', lineIndex: reconciledIndex, text });
       };
 
       // Start playing
@@ -208,16 +215,23 @@ export function useAutoTTS(
       state.catchupThreshold
     );
 
-    // If there's a line to play, start playback
+    // If there's a line to play, check if it's actually new content
     if (nextLineIndex !== null) {
-      void playLineByIndex(nextLineIndex);
+      const nextLineText = lines[nextLineIndex];
+
+      // Don't play if it's the same text we just finished speaking
+      // (This prevents re-playing when lines are inserted above the cursor)
+      if (nextLineText !== state.lastSpokenText) {
+        void playLineByIndex(nextLineIndex);
+      }
     }
   }, [
     state.enabled,
     state.playbackStatus,
     state.lastSpokenLineIndex,
+    state.lastSpokenText,
     state.catchupThreshold,
-    lines.length,
+    lines,
     isTTSEnabled,
     playLineByIndex,
   ]);
