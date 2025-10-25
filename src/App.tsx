@@ -414,20 +414,14 @@ const App = () => {
 
   // Parse URL path to determine which page to render
   let pageComponent: React.ReactElement;
-  try {
-    const pathname = window.location.pathname;
-    if (pathname === "/" || pathname === "") {
-      pageComponent = <HomePage />;
-    } else {
-      // Remove leading slash and use as layout string
-      const layout = pathname.substring(1);
-      pageComponent = <LayoutPage layout={layout} />;
-    }
-  } catch (error) {
-    // If anything fails during parsing, redirect to root
-    console.error("Failed to parse URL:", error);
-    window.location.href = "/";
+  const pathname = window.location.pathname;
+  if (pathname === "/" || pathname === "") {
     pageComponent = <HomePage />;
+  } else {
+    // Remove leading slash and use as layout string
+    // Note: this will be validated inside LayoutPage
+    const layout = pathname.substring(1);
+    pageComponent = <LayoutPage layout={layout} />;
   }
 
   return (
