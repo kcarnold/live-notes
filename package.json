@@ -34,7 +34,6 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-reconciler": "0.32.0",
-    "react-router-dom": "^7.6.1",
     "recordrtc": "^5.6.2",
     "rehype-react": "^8.0.0",
     "remark-parse": "^11.0.0",

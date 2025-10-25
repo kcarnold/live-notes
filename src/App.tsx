@@ -10,7 +10,6 @@ import "./App.css";
 
 
 import { useAtom, useAtomValue } from "jotai";
-import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { LayoutDiagram } from "./LayoutDiagram";
 import { useScrollToBottom } from "./reactUtils";
@@ -242,12 +241,12 @@ function HomePage() {
             >
               <div className="flex flex-col md:flex-row items-center gap-3 mb-2">
                 <LayoutDiagram layout={layout.layout} />
-                <Link
-                  to={`/${layoutStr}`}
+                <a
+                  href={`/${layoutStr}`}
                   className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition text-sm"
                 >
                   {layout.label}
-                </Link>
+                </a>
               </div>
             </div>
           );
@@ -259,14 +258,12 @@ function HomePage() {
 }
 
 // Layout page: render the selected layout from URL
-function LayoutPage() {
-  const { layout } = useParams();
+function LayoutPage({ layout }: { layout: string }) {
   const connectionStatus = useConnectionStatus();
   const ydoc = useYDoc();
   // @ts-expect-error ts doesn't like patching stuff onto window
   window.ydoc = ydoc; // For debugging purposes
   const isEditor = useAtomValue(isEditorAtom);
-  const navigate = useNavigate();
 
   // Parse layout from URL: e.g. "transcript,translatedOutline-French|video" => [["transcript", "translatedOutline-French"], ["video"]]
   function parseLayoutString(layoutStr: string | undefined): string[][] {
@@ -286,7 +283,9 @@ function LayoutPage() {
       })
     );
     const newLayoutStr = newLayout.map(row => row.join(",")).join("|");
-    void navigate(`/${newLayoutStr}`, { replace: true });
+    const currentSearch = window.location.search;
+    const currentHash = window.location.hash;
+    window.history.replaceState(null, '', `/${newLayoutStr}${currentSearch}${currentHash}`);
   }
 
   // Function to render a component based on its string identifier
@@ -337,13 +336,13 @@ function LayoutPage() {
     return false;
   };
 
-  const isValidLayout = parsedLayout.every(
+  const isValidLayout = parsedLayout.length > 0 && parsedLayout.every(
     (row) => row.every((key) => isValidComponent(key))
   );
 
   // If anything is wrong with the layout, redirect to home
   if (!isValidLayout) {
-    void navigate("/", { replace: true });
+    window.location.href = "/";
     return null;
   }
 
@@ -371,14 +370,14 @@ function LayoutPage() {
       <div className="absolute top-2 right-2 z-10 flex items-center space-x-2">
         <ConnectionStatusWidget connectionStatus={connectionStatus} />
       </div>
-      <Link
-        to="/"
+      <a
+        href="/"
         className="fixed bottom-4 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 text-white shadow-md hover:bg-gray-700/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300"
         title="Home"
         style={{ fontSize: '1.3rem', boxShadow: '0 2px 8px rgba(0,0,0,0.10)' }}
       >
         <span style={{ fontSize: '1.3rem', lineHeight: 1 }}>🏠</span>
-      </Link>
+      </a>
       {columns}
     </div>
   );
@@ -392,7 +391,7 @@ const getTodayLocal = () => {
 const App = () => {
   // We're an editor only if location hash includes #editor
   const isEditor = window.location.hash.includes("editor");
-  
+
   const searchParams = new URLSearchParams(window.location.search);
   // Default doc id is `doc-${date}`, where date is today's date
   // but allow override from the URL search params ?doc=${docId}
@@ -413,12 +412,21 @@ const App = () => {
     return (await response.json()) as ClientToken;
   };
 
+  // Parse URL path to determine which page to render
+  let pageComponent: React.ReactElement;
+  const pathname = window.location.pathname;
+  if (pathname === "/" || pathname === "") {
+    pageComponent = <HomePage />;
+  } else {
+    // Remove leading slash and use as layout string
+    // Note: this will be validated inside LayoutPage
+    const layout = pathname.substring(1);
+    pageComponent = <LayoutPage layout={layout} />;
+  }
+
   return (
     <YDocProvider docId={docId} authEndpoint={authEndpoint}>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/:layout" element={<LayoutPage />} />
-      </Routes>
+      {pageComponent}
     </YDocProvider>
   );
 };
