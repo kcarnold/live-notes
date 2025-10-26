@@ -55,6 +55,7 @@ export function useAutoTTS(
   language: string,
   isTTSEnabled: boolean
 ): UseAutoTTSResult {
+  // TODO: overall, watch for race conditions with stale state in async functions!
   const [state, dispatch] = useReducer(autoTTSReducer, initialAutoTTSState);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -94,6 +95,9 @@ export function useAutoTTS(
         return;
       }
 
+      // TODO: make sure that this is still the desired line to play (in case fetch took too long)
+      // Maybe use an effectEvent to trigger playback, and that can check latest state.
+
       // Create and configure audio element
       const audio = new Audio(audioUrl);
       audioRef.current?.pause(); // Stop any existing audio
@@ -114,6 +118,7 @@ export function useAutoTTS(
         // due to insertions/deletions while audio was playing
         const currentLines = lines; // Capture current lines at playback end
 
+        // TODO: consider moving this reconciliation logic into the reducer?
         // If text at stored index is still the same, the index is valid (common case)
         if (currentLines[lineIndex] === text) {
           dispatch({ type: 'PLAYBACK_ENDED', lineIndex, text });

@@ -23,7 +23,6 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
-  // Use the auto-TTS hook
   const { state: autoTTSState, toggleEnabled, playLine } = useAutoTTS(
     lines,
     language,
@@ -41,6 +40,9 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
       {isTTSEnabled && (
         <div className="flex items-center gap-2 p-2 border-b border-gray-200 dark:border-gray-700">
           <button
+            type='button'
+            aria-label={autoTTSState.enabled ? "Disable auto text-to-speech" : "Enable auto text-to-speech"}
+            aria-pressed={autoTTSState.enabled}
             onClick={toggleEnabled}
             className={`
               px-3 py-1 rounded text-sm font-medium transition-colors
