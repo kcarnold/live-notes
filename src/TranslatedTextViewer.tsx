@@ -57,13 +57,8 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
                   }
                 `}
               >
-                {autoTTSState.enabled ? '⏸️ Auto-TTS ON' : '▶️ Auto-TTS OFF'}
+                {autoTTSState.enabled ? '⏸️ Auto-Speak' : '▶️ Tap to Speak'}
               </button>
-              {autoTTSState.enabled && autoTTSState.playbackStatus === 'playing' && (
-                <span className="text-sm text-gray-600 dark:text-gray-400">
-                  Speaking line {(autoTTSState.currentlyPlayingIndex ?? 0) + 1} of {lines.length}
-                </span>
-              )}
               {autoTTSState.playbackStatus === 'error' && (
                 <span className="text-sm text-red-600 dark:text-red-400">
                   Error: {autoTTSState.errorMessage}
