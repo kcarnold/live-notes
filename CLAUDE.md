@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a **live translation application** for presentations/talks. It provides real-time speech transcription and AI-powered translation into multiple languages, displayed in configurable layouts. The system uses:
 
 - **Real-time collaboration**: Y-Sweet/Yjs for shared state across viewers
-- **Speech transcription**: AssemblyAI for live speech-to-text
+- **Speech transcription**: Web Speech API (browser-native) for live speech-to-text
 - **Translation**: Google Gemini for AI-powered translation
 - **Text-to-Speech**: ElevenLabs for audio playback of translations
 - **Rich text editing**: ProseMirror for collaborative markdown editing
@@ -28,8 +28,7 @@ npm install
 Required environment variables (`.env`):
 - `YSWEET_CONNECTION_STRING` - Y-Sweet connection string from jamsocket.com
 - `GEMINI_API_KEY` - Google Gemini API key
-- `ASSEMBLYAI_API_KEY` - AssemblyAI API key
-- `ELEVENLABS_API_KEY` - ElevenLabs API key for TTS
+- `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
 - `TTS_MAX_CONCURRENT` - (Optional) Max concurrent TTS requests (default: 2)
 
 ### Development
@@ -206,13 +205,13 @@ The app has two modes determined by URL hash (`#editor`):
 
 ### Components
 - [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
+- [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - Web Speech API integration for live transcription
 - [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer for translated output with TTS controls
-- [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - AssemblyAI integration for live transcription
 
 ### Auto-TTS System
-- [autoTTSReducer.ts](src/autoTTSReducer.ts) - Pure state machine logic for auto-TTS (highly testable)
-- [autoTTSReducer.test.ts](src/autoTTSReducer.test.ts) - Comprehensive unit tests (23 tests covering all scenarios)
 - [useAutoTTS.ts](src/useAutoTTS.ts) - React hook integrating reducer with audio playback
+- [autoTTSReducer.ts](src/autoTTSReducer.ts) - Pure state machine logic for auto-TTS (attempts to be testable, but async functions and extra logic in useAutoTTS add untested edge cases)
+- [autoTTSReducer.test.ts](src/autoTTSReducer.test.ts) - Some unit tests, doesn't address effects in the reducer.
 
 ## Important Patterns
 
@@ -290,3 +289,5 @@ function useMyFeature() {
 - **Use descriptive test names**: "handles line insertion during playback" not "test case 5"
 
 **Example**: [autoTTSReducer.test.ts](src/autoTTSReducer.test.ts) - tests covering state transitions, catchup logic, and edge cases
+
+Challenge: logic bleeds into effects, async functions add hidden states.
