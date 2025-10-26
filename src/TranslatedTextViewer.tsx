@@ -8,9 +8,10 @@ import { useAutoTTS } from './useAutoTTS';
 interface TranslatedTextViewerProps {
   language: string;
   fontSize?: number;
+  headerControls?: React.ReactNode;
 }
 
-const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, fontSize }) => {
+const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, fontSize, headerControls }) => {
   const yJsKey = translatedTextKeyForLanguage(language);
   const [translatedText] = useAsPlainText(yJsKey);
   const translatedTextEndRef = useRef<HTMLDivElement | null>(null);
@@ -36,33 +37,39 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
 
   return (
     <div className="relative h-full flex flex-col">
-      {/* Auto-TTS Toggle Button */}
-      {isTTSEnabled && (
+      {/* Header with controls */}
+      {(headerControls || isTTSEnabled) && (
         <div className="flex items-center gap-2 p-2 border-b border-gray-200 dark:border-gray-700">
-          <button
-            type='button'
-            aria-label={autoTTSState.enabled ? "Disable auto text-to-speech" : "Enable auto text-to-speech"}
-            aria-pressed={autoTTSState.enabled}
-            onClick={toggleEnabled}
-            className={`
-              px-3 py-1 rounded text-sm font-medium transition-colors
-              ${autoTTSState.enabled
-                ? 'bg-blue-500 text-white hover:bg-blue-600'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
-              }
-            `}
-          >
-            {autoTTSState.enabled ? '⏸️ Auto-TTS ON' : '▶️ Auto-TTS OFF'}
-          </button>
-          {autoTTSState.enabled && autoTTSState.playbackStatus === 'playing' && (
-            <span className="text-sm text-gray-600 dark:text-gray-400">
-              Speaking line {(autoTTSState.currentlyPlayingIndex ?? 0) + 1} of {lines.length}
-            </span>
-          )}
-          {autoTTSState.playbackStatus === 'error' && (
-            <span className="text-sm text-red-600 dark:text-red-400">
-              Error: {autoTTSState.errorMessage}
-            </span>
+          {headerControls}
+
+          {isTTSEnabled && (
+            <>
+              <button
+                type='button'
+                aria-label={autoTTSState.enabled ? "Disable auto text-to-speech" : "Enable auto text-to-speech"}
+                aria-pressed={autoTTSState.enabled}
+                onClick={toggleEnabled}
+                className={`
+                  px-3 py-1 rounded text-sm font-medium transition-colors
+                  ${autoTTSState.enabled
+                    ? 'bg-blue-500 text-white hover:bg-blue-600'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                  }
+                `}
+              >
+                {autoTTSState.enabled ? '⏸️ Auto-TTS ON' : '▶️ Auto-TTS OFF'}
+              </button>
+              {autoTTSState.enabled && autoTTSState.playbackStatus === 'playing' && (
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Speaking line {(autoTTSState.currentlyPlayingIndex ?? 0) + 1} of {lines.length}
+                </span>
+              )}
+              {autoTTSState.playbackStatus === 'error' && (
+                <span className="text-sm text-red-600 dark:text-red-400">
+                  Error: {autoTTSState.errorMessage}
+                </span>
+              )}
+            </>
           )}
         </div>
       )}

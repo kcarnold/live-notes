@@ -111,25 +111,27 @@ function TranslatedOutlineComponent({ language, onLanguageChange }: { language: 
         " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"
       }
     >
-      <div className="flex items-center gap-2 mb-1">
-        <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">
-          Translation
-        </h2>
-        <select
-          className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
-          value={language}
-          onChange={(e) => onLanguageChange(e.target.value)}
-        >
-          {languages.map((lang) => (
-            <option key={lang} value={lang}>
-              {lang}
-            </option>
-          ))}
-        </select>
-      </div>
       <TranslatedTextViewer
         language={language}
         fontSize={fontSize}
+        headerControls={
+          <>
+            <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">
+              Translation
+            </h2>
+            <select
+              className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
+              value={language}
+              onChange={(e) => onLanguageChange(e.target.value)}
+            >
+              {languages.map((lang) => (
+                <option key={lang} value={lang}>
+                  {lang}
+                </option>
+              ))}
+            </select>
+          </>
+        }
       />
     </div>
   );
