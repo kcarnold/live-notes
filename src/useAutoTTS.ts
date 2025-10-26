@@ -12,7 +12,13 @@ import {
 async function fetchAudio(text: string, language: string): Promise<string> {
   // Strip markdown, except for a simple emphasis
   // TODO: this doesn't strip all markdown - consider using a proper markdown parser
-  const strippedText = text.replace(/^#+ /gm, '').replace(/\*+/g, '*').trim();
+  let strippedText = text.replace(/^#+ /gm, '').replace(/\*+/g, '*').trim();
+
+  // If text doesn't end with punctuation, add a period to improve TTS intonation
+  if (!/[.!?]$/.test(strippedText)) {
+    strippedText += '.';
+  }
+  
   const response = await fetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
