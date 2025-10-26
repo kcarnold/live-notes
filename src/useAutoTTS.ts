@@ -10,10 +10,13 @@ import {
  * Fetches audio for a given text and language from the TTS API.
  */
 async function fetchAudio(text: string, language: string): Promise<string> {
+  // Strip markdown, except for a simple emphasis
+  // TODO: this doesn't strip all markdown - consider using a proper markdown parser
+  const strippedText = text.replace(/^#+ /gm, '').replace(/\*+/g, '*').trim();
   const response = await fetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, language }),
+    body: JSON.stringify({ text: strippedText, language }),
   });
 
   if (!response.ok) {
