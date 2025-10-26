@@ -259,12 +259,15 @@ function HomePage() {
 }
 
 // Layout page: render the selected layout from URL
-function LayoutPage({ layout }: { layout: string }) {
+function LayoutPage({ layout: initialLayout }: { layout: string }) {
   const connectionStatus = useConnectionStatus();
   const ydoc = useYDoc();
   // @ts-expect-error ts doesn't like patching stuff onto window
   window.ydoc = ydoc; // For debugging purposes
   const isEditor = useAtomValue(isEditorAtom);
+
+  // Track current layout in state so we can update it when URL changes
+  const [layout, setLayout] = useState(initialLayout);
 
   // Parse layout from URL: e.g. "transcript,translatedOutline-French|video" => [["transcript", "translatedOutline-French"], ["video"]]
   function parseLayoutString(layoutStr: string | undefined): string[][] {
@@ -287,6 +290,8 @@ function LayoutPage({ layout }: { layout: string }) {
     const currentSearch = window.location.search;
     const currentHash = window.location.hash;
     window.history.replaceState(null, '', `/${newLayoutStr}${currentSearch}${currentHash}`);
+    // Trigger rerender by updating state
+    setLayout(newLayoutStr);
   }
 
   // Function to render a component based on its string identifier
