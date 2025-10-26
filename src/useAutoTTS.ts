@@ -160,6 +160,9 @@ export function useAutoTTS(
       const lineIndex = lines.indexOf(text);
       if (lineIndex === -1) return;
 
+      // Mark as manual playback to enable sequential mode (ignore catchup)
+      dispatch({ type: 'START_MANUAL_PLAYBACK' });
+
       // Play the line - auto mode will naturally continue from here if enabled
       await playLineByIndex(lineIndex);
     },
@@ -202,18 +205,25 @@ export function useAutoTTS(
     const nextLineIndex = calculateNextLine(
       state.lastSpokenLineIndex,
       lines.length,
-      state.catchupThreshold
+      state.catchupThreshold,
+      state.manualOverrideMode
     );
 
-    // If there's a line to play, check if it's actually new content
-    if (nextLineIndex !== null) {
-      const nextLineText = lines[nextLineIndex];
-
-      // Don't play if it's the same text we just finished speaking
-      // (This prevents re-playing when lines are inserted above the cursor)
-      if (nextLineText !== state.lastSpokenText) {
-        void playLineByIndex(nextLineIndex);
+    // If no more lines to play, we're caught up - clear manual override mode
+    if (nextLineIndex === null) {
+      if (state.manualOverrideMode) {
+        dispatch({ type: 'CLEAR_MANUAL_OVERRIDE' });
       }
+      return;
+    }
+
+    // If there's a line to play, check if it's actually new content
+    const nextLineText = lines[nextLineIndex];
+
+    // Don't play if it's the same text we just finished speaking
+    // (This prevents re-playing when lines are inserted above the cursor)
+    if (nextLineText !== state.lastSpokenText) {
+      void playLineByIndex(nextLineIndex);
     }
   }, [
     state.enabled,
@@ -221,6 +231,7 @@ export function useAutoTTS(
     state.lastSpokenLineIndex,
     state.lastSpokenText,
     state.catchupThreshold,
+    state.manualOverrideMode,
     lines,
     isTTSEnabled,
     playLineByIndex,

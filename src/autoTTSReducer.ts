@@ -30,12 +30,17 @@ export interface AutoTTSState {
 
   /** How many lines behind before we skip ahead (default: 3) */
   catchupThreshold: number;
+
+  /** When true, ignore catchup threshold and play sequentially (set by manual clicks) */
+  manualOverrideMode: boolean;
 }
 
 export type AutoTTSAction =
   | { type: 'TOGGLE_ENABLED' }
   | { type: 'SET_ENABLED'; enabled: boolean }
   | { type: 'TEXT_UPDATED'; totalLines: number }
+  | { type: 'START_MANUAL_PLAYBACK' }
+  | { type: 'CLEAR_MANUAL_OVERRIDE' }
   | { type: 'START_LOADING'; lineIndex: number; text: string }
   | { type: 'START_PLAYING'; lineIndex: number; text: string }
   | { type: 'PLAYBACK_ENDED'; lineIndex: number; text: string }
@@ -49,6 +54,7 @@ export const initialAutoTTSState: AutoTTSState = {
   currentlyPlayingIndex: null,
   playbackStatus: 'idle',
   catchupThreshold: 3,
+  manualOverrideMode: false,
 };
 
 /**
@@ -56,6 +62,7 @@ export const initialAutoTTSState: AutoTTSState = {
  *
  * Catchup logic:
  * - If we haven't started yet (lastSpokenLineIndex === -1): always start at 0
+ * - If manualOverrideMode is true: always play sequentially (ignore catchup)
  * - If backlog > threshold: skip ahead to stay current
  * - Otherwise: play next line sequentially
  *
@@ -64,7 +71,8 @@ export const initialAutoTTSState: AutoTTSState = {
 export function calculateNextLine(
   lastSpokenLineIndex: number,
   totalLines: number,
-  catchupThreshold: number
+  catchupThreshold: number,
+  manualOverrideMode: boolean = false
 ): number | null {
   // No lines available
   if (totalLines === 0) return null;
@@ -76,6 +84,9 @@ export function calculateNextLine(
 
   // If we haven't started yet, always start from the beginning
   if (lastSpokenLineIndex === -1) return 0;
+
+  // If manual override is active, always play sequentially
+  if (manualOverrideMode) return nextSequentialIndex;
 
   // Calculate how many lines we're behind
   const backlog = totalLines - nextSequentialIndex;
@@ -106,6 +117,7 @@ export function autoTTSReducer(
         playbackStatus: 'idle',
         currentlyPlayingIndex: null,
         errorMessage: undefined,
+        manualOverrideMode: false,
       };
 
     case 'SET_ENABLED':
@@ -116,12 +128,25 @@ export function autoTTSReducer(
         playbackStatus: action.enabled ? state.playbackStatus : 'idle',
         currentlyPlayingIndex: action.enabled ? state.currentlyPlayingIndex : null,
         errorMessage: action.enabled ? state.errorMessage : undefined,
+        manualOverrideMode: false,
       };
 
     case 'TEXT_UPDATED':
       // Text updates don't change state directly - the hook will use
       // calculateNextLine() to determine if we should start playback
       return state;
+
+    case 'START_MANUAL_PLAYBACK':
+      return {
+        ...state,
+        manualOverrideMode: true,
+      };
+
+    case 'CLEAR_MANUAL_OVERRIDE':
+      return {
+        ...state,
+        manualOverrideMode: false,
+      };
 
     case 'START_LOADING':
       return {
