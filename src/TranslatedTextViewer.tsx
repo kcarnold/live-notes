@@ -76,7 +76,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
           const isLastSpoken = autoTTSState.lastSpokenLineIndex === index;
 
           return (
-            <p
+            <div
               key={index}
               onClick={() => {
                 void playLine(line);
@@ -89,7 +89,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
               `}
             >
               <Remark>{line}</Remark>
-            </p>
+            </div>
           );
         })}
         <div ref={translatedTextEndRef} />
