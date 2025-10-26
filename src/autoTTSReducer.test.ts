@@ -192,6 +192,7 @@ describe('autoTTSReducer', () => {
       currentlyPlayingIndex: 3,
       playbackStatus: 'playing',
       catchupThreshold: 5,
+      manualOverrideMode: false
     };
 
     const resetState = autoTTSReducer(state, { type: 'RESET' });
