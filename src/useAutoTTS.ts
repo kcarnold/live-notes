@@ -96,6 +96,7 @@ export function useAutoTTS(
 
       // Create and configure audio element
       const audio = new Audio(audioUrl);
+      audioRef.current?.pause(); // Stop any existing audio
       audioRef.current = audio;
 
       audio.onerror = (err: string | Event) => {
