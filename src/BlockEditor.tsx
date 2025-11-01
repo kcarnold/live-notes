@@ -26,6 +26,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   const [version, setVersion] = useState(0);
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const textareaRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
+  const bindingsRef = useRef<Map<string, TextAreaBinding>>(new Map());
   const onTextChangedRef = useRef(onTextChanged);
 
   // Keep ref updated
@@ -37,7 +38,8 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   useEffect(() => {
     // Ensure minimum blocks on mount
     ensureMinimumBlocks(yArray);
-    window.yArray = yArray; // for debugging
+    // @ts-expect-error - for debugging
+    window.yArray = yArray;
 
     // Trigger initial render
     setVersion(v => v + 1);
@@ -154,12 +156,22 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
       if (currentIndex === -1) return;
 
-      const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-      if (newIndex < 0 || newIndex >= sortedBlocks.length) return;
+      // Calculate new position between neighbors (excluding current block)
+      let prevPos: string | null;
+      let nextPos: string | null;
 
-      // Calculate new position between neighbors
-      const prevPos = newIndex > 0 ? sortedBlocks[newIndex - 1].position : null;
-      const nextPos = newIndex < sortedBlocks.length - 1 ? sortedBlocks[newIndex + 1].position : null;
+      if (direction === 'up') {
+        if (currentIndex === 0) return; // Already at top
+        // Moving up: position between (currentIndex - 2) and (currentIndex - 1)
+        prevPos = currentIndex > 1 ? sortedBlocks[currentIndex - 2].position : null;
+        nextPos = sortedBlocks[currentIndex - 1].position;
+      } else {
+        if (currentIndex === sortedBlocks.length - 1) return; // Already at bottom
+        // Moving down: position between (currentIndex + 1) and (currentIndex + 2)
+        prevPos = sortedBlocks[currentIndex + 1].position;
+        nextPos = currentIndex < sortedBlocks.length - 2 ? sortedBlocks[currentIndex + 2].position : null;
+      }
+
       const newPosition = generateKeyBetween(prevPos, nextPos);
 
       // Update position (not delete-insert!)
@@ -356,11 +368,36 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
                 const yMap = yArray.get(blockIndex);
                 const yText = getBlockYText(yMap);
 
+                // Ensure Y.Text is actually in the document
+                if (!yText.doc) {
+                  console.warn('Y.Text not in document yet, deferring binding for block', block.id);
+                  // Try again on next tick
+                  setTimeout(() => {
+                    const yText = getBlockYText(yMap);
+                    if (yText.doc && el.isConnected) {
+                      const binding = new TextAreaBinding(yText, el);
+                      bindingsRef.current.set(block.id, binding);
+                    }
+                  }, 0);
+                  return () => {
+                    // Cleanup deferred binding if it was created
+                    const binding = bindingsRef.current.get(block.id);
+                    if (binding) {
+                      binding.destroy();
+                      bindingsRef.current.delete(block.id);
+                    }
+                  };
+                }
+
                 // Use official y-textarea binding
                 const binding = new TextAreaBinding(yText, el);
+                bindingsRef.current.set(block.id, binding);
 
                 // Return cleanup function - React will call it on unmount
-                return () => binding.destroy();
+                return () => {
+                  binding.destroy();
+                  bindingsRef.current.delete(block.id);
+                };
              }}
               defaultValue={block.content}
               onKeyDown={(e) => handleKeyDown(e, block)}
