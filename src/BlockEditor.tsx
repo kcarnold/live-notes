@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import * as Y from 'yjs';
 import { TextAreaBinding } from 'y-textarea';
+import { generateKeyBetween } from 'fractional-indexing';
 import {
   Block,
   BlockType,
@@ -36,6 +37,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   useEffect(() => {
     // Ensure minimum blocks on mount
     ensureMinimumBlocks(yArray);
+    window.yArray = yArray; // for debugging
 
     // Trigger initial render
     setVersion(v => v + 1);
@@ -59,7 +61,10 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   // Read blocks directly from Yjs during render
   // version is used to trigger re-renders via setState
   void version;
-  const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap));
+  const blocks = yArray
+    .toArray()
+    .map(yMap => yMapToBlock(yMap))
+    .sort((a, b) => a.position.localeCompare(b.position));
 
   // Focus management - focus the textarea when a block becomes focused
   useEffect(() => {
@@ -87,14 +92,23 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       // Never delete the last block
       if (yArray.length <= 1) return;
 
-      const index = yArray.toArray().findIndex((yMap) => yMap.get('id') === blockId);
-      if (index !== -1) {
-        yArray.delete(index, 1);
+      const sortedBlocks = yArray
+        .toArray()
+        .map(yMap => yMapToBlock(yMap))
+        .sort((a, b) => a.position.localeCompare(b.position));
 
-        // Focus previous block if available, otherwise next block
-        const newFocusIndex = index > 0 ? index - 1 : 0;
-        if (newFocusIndex < yArray.length) {
-          const newFocusBlock = yMapToBlock(yArray.get(newFocusIndex));
+      const sortedIndex = sortedBlocks.findIndex(b => b.id === blockId);
+      if (sortedIndex === -1) return;
+
+      // Find the Y.Map in the array and delete it
+      const arrayIndex = yArray.toArray().findIndex((yMap) => yMap.get('id') === blockId);
+      if (arrayIndex !== -1) {
+        yArray.delete(arrayIndex, 1);
+
+        // Focus previous block in sorted order, if available, otherwise next block
+        const newFocusIndex = sortedIndex > 0 ? sortedIndex - 1 : 0;
+        if (newFocusIndex < sortedBlocks.length) {
+          const newFocusBlock = sortedBlocks[newFocusIndex];
           setFocusedBlockId(newFocusBlock.id);
         }
       }
@@ -104,30 +118,54 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
 
   const insertBlockAfter = useCallback(
     (blockId: string, newBlock?: Block) => {
-      const index = yArray.toArray().findIndex((yMap) => yMap.get('id') === blockId);
-      if (index !== -1) {
-        const block = newBlock || createBlock();
-        yArray.insert(index + 1, [blockToYMap(block)]);
-        setFocusedBlockId(block.id);
+      const sortedBlocks = yArray
+        .toArray()
+        .map(yMap => yMapToBlock(yMap))
+        .sort((a, b) => a.position.localeCompare(b.position));
+
+      const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
+      if (currentIndex === -1) return;
+
+      // Calculate position between current and next block
+      const currentPos = sortedBlocks[currentIndex].position;
+      const nextPos = currentIndex < sortedBlocks.length - 1
+        ? sortedBlocks[currentIndex + 1].position
+        : null;
+      const newPosition = generateKeyBetween(currentPos, nextPos);
+
+      const block = newBlock || createBlock('', 'bullet', 0, newPosition);
+      if (!newBlock) {
+        block.position = newPosition;
       }
+
+      yArray.push([blockToYMap(block)]);
+      setFocusedBlockId(block.id);
     },
     [yArray]
   );
 
   const moveBlock = useCallback(
     (blockId: string, direction: 'up' | 'down') => {
-      const index = yArray.toArray().findIndex((yMap) => yMap.get('id') === blockId);
-      if (index === -1) return;
+      const sortedBlocks = yArray
+        .toArray()
+        .map(yMap => yMapToBlock(yMap))
+        .sort((a, b) => a.position.localeCompare(b.position));
 
-      const newIndex = direction === 'up' ? index - 1 : index + 1;
-      if (newIndex < 0 || newIndex >= yArray.length) return;
+      const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
+      if (currentIndex === -1) return;
 
-      // Move by removing and reinserting
-      const yMap = yArray.get(index);
-      yArray.delete(index, 1);
-      yArray.insert(newIndex, [yMap]);
+      const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      if (newIndex < 0 || newIndex >= sortedBlocks.length) return;
+
+      // Calculate new position between neighbors
+      const prevPos = newIndex > 0 ? sortedBlocks[newIndex - 1].position : null;
+      const nextPos = newIndex < sortedBlocks.length - 1 ? sortedBlocks[newIndex + 1].position : null;
+      const newPosition = generateKeyBetween(prevPos, nextPos);
+
+      // Update position (not delete-insert!)
+      updateBlock(blockId, { position: newPosition });
     },
-    [yArray]
+    [yArray, updateBlock]
   );
 
   const indent = useCallback(

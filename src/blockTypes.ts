@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import { v4 as uuidv4 } from 'uuid';
 import { setYTextFromString } from './yjsUtils';
+import { generateKeyBetween } from 'fractional-indexing';
 
 export type BlockType = 'heading' | 'bullet';
 
@@ -9,6 +10,7 @@ export interface Block {
   content: string; // For rendering; actual storage is Y.Text in the Y.Map
   type: BlockType;
   level: number; // 0-5 for indentation
+  position: string; // Fractional index for stable ordering
 }
 
 export const MAX_INDENT_LEVEL = 5;
@@ -19,13 +21,15 @@ export const MAX_INDENT_LEVEL = 5;
 export function createBlock(
   content = '',
   type: BlockType = 'bullet',
-  level = 0
+  level = 0,
+  position?: string
 ): Block {
   return {
     id: uuidv4(),
     content,
     type,
     level: Math.min(Math.max(0, level), MAX_INDENT_LEVEL),
+    position: position || generateKeyBetween(null, null),
   };
 }
 
@@ -41,6 +45,7 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
     content: yText ? yText.toString() : '',
     type: yMap.get('type') || 'bullet',
     level: yMap.get('level') || 0,
+    position: yMap.get('position') || generateKeyBetween(null, null),
   };
 }
 
@@ -67,6 +72,7 @@ export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
   if (block.level !== undefined) {
     yMap.set('level', Math.min(Math.max(0, block.level), MAX_INDENT_LEVEL));
   }
+  if (block.position !== undefined) yMap.set('position', block.position);
 }
 
 /**
