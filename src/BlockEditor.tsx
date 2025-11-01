@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import * as Y from 'yjs';
+import { TextAreaBinding } from 'y-textarea';
 import {
   Block,
   BlockType,
@@ -10,6 +11,7 @@ import {
   serializeBlocksToMarkdown,
   ensureMinimumBlocks,
   MAX_INDENT_LEVEL,
+  getBlockYText,
 } from './blockTypes';
 
 interface BlockEditorProps {
@@ -20,31 +22,44 @@ interface BlockEditorProps {
 }
 
 export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslationTrigger }: BlockEditorProps) {
-  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [version, setVersion] = useState(0);
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const textareaRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
+  const onTextChangedRef = useRef(onTextChanged);
 
-  // Sync Yjs array to local state
+  // Keep ref updated
   useEffect(() => {
-    const updateBlocks = () => {
-      const newBlocks = yArray.map((yMap) => yMapToBlock(yMap));
-      setBlocks(newBlocks);
+    onTextChangedRef.current = onTextChanged;
+  }, [onTextChanged]);
+
+  // Initialize and observe Yjs array
+  useEffect(() => {
+    // Ensure minimum blocks on mount
+    ensureMinimumBlocks(yArray);
+
+    // Trigger initial render
+    setVersion(v => v + 1);
+
+    // Observer just triggers re-renders
+    const observer = () => {
+      setVersion(v => v + 1);
 
       // Notify parent of markdown changes
-      if (onTextChanged) {
-        const markdown = serializeBlocksToMarkdown(newBlocks);
-        onTextChanged(markdown);
+      if (onTextChangedRef.current) {
+        const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap));
+        const markdown = serializeBlocksToMarkdown(blocks);
+        onTextChangedRef.current(markdown);
       }
     };
 
-    // Initial load
-    ensureMinimumBlocks(yArray);
-    updateBlocks();
+    yArray.observeDeep(observer);
+    return () => yArray.unobserveDeep(observer);
+  }, [yArray]);
 
-    // Listen for changes
-    yArray.observe(updateBlocks);
-    return () => yArray.unobserve(updateBlocks);
-  }, [yArray, onTextChanged]);
+  // Read blocks directly from Yjs during render
+  // version is used to trigger re-renders via setState
+  void version;
+  const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap));
 
   // Focus management - focus the textarea when a block becomes focused
   useEffect(() => {
@@ -291,14 +306,25 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
           {isFocused && editable ? (
             <textarea
               ref={(el) => {
-                if (el) {
-                  textareaRefs.current.set(block.id, el);
-                } else {
+                if (!el) return;
+                textareaRefs.current.set(block.id, el);
+
+                const blockIndex = yArray.toArray().findIndex(yMap => yMap.get('id') === block.id);
+                if (blockIndex === -1) {
                   textareaRefs.current.delete(block.id);
+                  return;
                 }
-              }}
-              value={block.content}
-              onChange={(e) => updateBlock(block.id, { content: e.target.value })}
+
+                const yMap = yArray.get(blockIndex);
+                const yText = getBlockYText(yMap);
+
+                // Use official y-textarea binding
+                const binding = new TextAreaBinding(yText, el);
+
+                // Return cleanup function - React will call it on unmount
+                return () => binding.destroy();
+             }}
+              defaultValue={block.content}
               onKeyDown={(e) => handleKeyDown(e, block)}
               onBlur={() => setFocusedBlockId(null)}
               className={`w-full border-none outline-none resize-none ${

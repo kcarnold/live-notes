@@ -32,6 +32,10 @@ export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
     });
   }, [doTranslations]);
 
+  const handleTextChanged = useCallback((val: string) => {
+    sourceTextRef.current = val;
+  }, []);
+
   return (
     <div className="flex flex-col gap-1 h-full">
       <h2 className="font-semibold text-xs text-gray-600 dark:text-gray-300 leading-tight">
@@ -40,13 +44,7 @@ export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
       <div className="flex-1 min-h-0 overflow-auto">
         <BlockEditor
           yArray={sourceBlocks}
-          onTextChanged={
-            isEditor
-              ? (val: string) => {
-                  sourceTextRef.current = val;
-                }
-              : undefined
-          }
+          onTextChanged={isEditor ? handleTextChanged : undefined}
           editable={isEditor}
           onTranslationTrigger={isEditor ? doTranslationsSync : undefined}
         />

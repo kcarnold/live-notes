@@ -1,11 +1,12 @@
 import * as Y from 'yjs';
 import { v4 as uuidv4 } from 'uuid';
+import { setYTextFromString } from './yjsUtils';
 
 export type BlockType = 'heading' | 'bullet';
 
 export interface Block {
   id: string;
-  content: string;
+  content: string; // For rendering; actual storage is Y.Text in the Y.Map
   type: BlockType;
   level: number; // 0-5 for indentation
 }
@@ -30,11 +31,14 @@ export function createBlock(
 
 /**
  * Convert a Y.Map to a Block
+ * Note: content is stored as Y.Text in the map, but we return it as string for rendering
  */
 export function yMapToBlock(yMap: Y.Map<any>): Block {
+  const yText = yMap.get('content') as Y.Text | undefined;
   return {
     id: yMap.get('id') || uuidv4(),
-    content: yMap.get('content') || '',
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    content: yText ? yText.toString() : '',
     type: yMap.get('type') || 'bullet',
     level: yMap.get('level') || 0,
   };
@@ -42,10 +46,23 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
 
 /**
  * Update a Y.Map with block data
+ * Note: content updates should go through the Y.Text directly, not this function
  */
 export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
   if (block.id !== undefined) yMap.set('id', block.id);
-  if (block.content !== undefined) yMap.set('content', block.content);
+  if (block.content !== undefined) {
+    // Initialize or replace content as Y.Text
+    let yText = yMap.get('content') as Y.Text | undefined;
+    if (!yText) {
+      yText = new Y.Text();
+      yMap.set('content', yText);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    const currentText = yText.toString();
+    if (currentText !== block.content) {
+      setYTextFromString(yText, block.content);
+    }
+  }
   if (block.type !== undefined) yMap.set('type', block.type);
   if (block.level !== undefined) {
     yMap.set('level', Math.min(Math.max(0, block.level), MAX_INDENT_LEVEL));
@@ -82,3 +99,16 @@ export function ensureMinimumBlocks(yArray: Y.Array<Y.Map<any>>): void {
     yArray.push([blockToYMap(createBlock())]);
   }
 }
+
+/**
+ * Get the Y.Text for a block's content
+ */
+export function getBlockYText(yMap: Y.Map<any>): Y.Text {
+  let yText = yMap.get('content') as Y.Text | undefined;
+  if (!yText) {
+    yText = new Y.Text();
+    yMap.set('content', yText);
+  }
+  return yText;
+}
+
