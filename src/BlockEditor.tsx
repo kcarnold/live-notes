@@ -26,7 +26,6 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   const [version, setVersion] = useState(0);
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const textareaRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
-  const bindingsRef = useRef<Map<string, TextAreaBinding>>(new Map());
   const onTextChangedRef = useRef(onTextChanged);
 
   // Keep ref updated
@@ -135,10 +134,9 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         : null;
       const newPosition = generateKeyBetween(currentPos, nextPos);
 
+      // Always use the calculated position, whether creating new or using provided block
       const block = newBlock || createBlock('', 'bullet', 0, newPosition);
-      if (!newBlock) {
-        block.position = newPosition;
-      }
+      block.position = newPosition;
 
       yArray.push([blockToYMap(block)]);
       setFocusedBlockId(block.id);
@@ -368,36 +366,11 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
                 const yMap = yArray.get(blockIndex);
                 const yText = getBlockYText(yMap);
 
-                // Ensure Y.Text is actually in the document
-                if (!yText.doc) {
-                  console.warn('Y.Text not in document yet, deferring binding for block', block.id);
-                  // Try again on next tick
-                  setTimeout(() => {
-                    const yText = getBlockYText(yMap);
-                    if (yText.doc && el.isConnected) {
-                      const binding = new TextAreaBinding(yText, el);
-                      bindingsRef.current.set(block.id, binding);
-                    }
-                  }, 0);
-                  return () => {
-                    // Cleanup deferred binding if it was created
-                    const binding = bindingsRef.current.get(block.id);
-                    if (binding) {
-                      binding.destroy();
-                      bindingsRef.current.delete(block.id);
-                    }
-                  };
-                }
-
                 // Use official y-textarea binding
                 const binding = new TextAreaBinding(yText, el);
-                bindingsRef.current.set(block.id, binding);
 
                 // Return cleanup function - React will call it on unmount
-                return () => {
-                  binding.destroy();
-                  bindingsRef.current.delete(block.id);
-                };
+                return () => binding.destroy();
              }}
               defaultValue={block.content}
               onKeyDown={(e) => handleKeyDown(e, block)}
