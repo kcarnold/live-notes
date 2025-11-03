@@ -93,12 +93,15 @@ export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
 }
 
 /**
- * Create a Y.Map from a Block
+ * Add a block to a Y.Array
+ * Creates the Y.Map first, adds it to the array (attaching to doc), then populates it.
+ * 
+ * This avoids warnings from Yjs about modifying a Y.Map before it's attached to a document.
  */
-export function blockToYMap(block: Block): Y.Map<any> {
+export function addBlockToYArray(yArray: Y.Array<Y.Map<any>>, block: Block): void {
   const yMap = new Y.Map();
+  yArray.push([yMap]);
   updateYMap(yMap, block);
-  return yMap;
 }
 
 /**
@@ -116,10 +119,13 @@ export function serializeBlocksToMarkdown(blocks: Block[]): string {
 
 /**
  * Ensure there's always at least one block
+ * Creates the Y.Map first, adds it to the array (attaching to doc), then populates it
  */
 export function ensureMinimumBlocks(yArray: Y.Array<Y.Map<any>>): void {
   if (yArray.length === 0) {
-    yArray.push([blockToYMap(createBlock())]);
+    const yMap = new Y.Map();
+    yArray.push([yMap]);
+    updateYMap(yMap, createBlock());
   }
 }
 

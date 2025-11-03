@@ -7,13 +7,13 @@ import {
   BlockType,
   createBlock,
   yMapToBlock,
-  blockToYMap,
   updateYMap,
   serializeBlocksToMarkdown,
   ensureMinimumBlocks,
   MAX_INDENT_LEVEL,
   getBlockYText,
   compareBlockPositions,
+  addBlockToYArray,
 } from './blockTypes';
 
 interface BlockEditorProps {
@@ -142,7 +142,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const block = newBlock || createBlock('', 'bullet', 0, newPosition);
       block.position = newPosition;
 
-      yArray.push([blockToYMap(block)]);
+      addBlockToYArray(yArray, block);
       setFocusedBlockId(block.id);
     },
     [yArray]
