@@ -118,3 +118,14 @@ export function getBlockYText(yMap: Y.Map<any>): Y.Text {
   return yText;
 }
 
+/**
+ * Compare function for sorting blocks by fractional index position.
+ * Uses native string comparison (case-sensitive) as required by fractional-indexing library.
+ * DO NOT use localeCompare() as it is case-insensitive and will give incorrect ordering.
+ * 
+ * See https://github.com/rocicorp/fractional-indexing?tab=readme-ov-file#sorting
+ */
+export function compareBlockPositions(a: Block, b: Block): number {
+  return a.position < b.position ? -1 : a.position > b.position ? 1 : 0;
+}
+

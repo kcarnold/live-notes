@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createBlock, serializeBlocksToMarkdown } from './blockTypes';
+import { createBlock, serializeBlocksToMarkdown, compareBlockPositions } from './blockTypes';
 
 describe('blockTypes', () => {
   describe('serializeBlocksToMarkdown', () => {
@@ -72,6 +72,52 @@ describe('blockTypes', () => {
     it('prevents negative levels', () => {
       const block = createBlock('test', 'bullet', -1);
       expect(block.level).toBe(0);
+    });
+  });
+
+  describe('compareBlockPositions', () => {
+    it('sorts blocks correctly using case-sensitive comparison', () => {
+      // Create blocks with fractional index positions
+      // The fractional-indexing library generates case-sensitive strings
+      const block1 = createBlock('First', 'bullet', 0, 'Yza');
+      const block2 = createBlock('Second', 'bullet', 0, 'YzZ');
+      const block3 = createBlock('Third', 'bullet', 0, 'Yzb');
+
+      const blocks = [block2, block3, block1]; // Out of order
+      const sorted = blocks.sort(compareBlockPositions);
+
+      expect(sorted.map(b => b.position)).toEqual(['YzZ', 'Yza', 'Yzb']);
+      expect(sorted.map(b => b.content)).toEqual(['Second', 'First', 'Third']);
+    });
+
+    it('handles identical positions', () => {
+      const block1 = createBlock('First', 'bullet', 0, 'abc');
+      const block2 = createBlock('Second', 'bullet', 0, 'abc');
+
+      const result = compareBlockPositions(block1, block2);
+      expect(result).toBe(0);
+    });
+
+    it('correctly orders uppercase before lowercase (case-sensitive)', () => {
+      // This is the critical difference from localeCompare
+      // Native string comparison: uppercase letters come before lowercase
+      const blockA = createBlock('A', 'bullet', 0, 'A');
+      const blockB = createBlock('a', 'bullet', 0, 'a');
+
+      const result = compareBlockPositions(blockA, blockB);
+      expect(result).toBe(-1); // 'A' < 'a' in native comparison
+      expect('A' < 'a').toBe(true); // Verify native behavior
+    });
+
+    it('sorts multiple blocks correctly', () => {
+      const positions = ['a0', 'a1', 'a2', 'a3', 'a4'];
+      const blocks = positions.map(pos => createBlock(`Block ${pos}`, 'bullet', 0, pos));
+
+      // Shuffle the blocks
+      const shuffled = [blocks[3], blocks[1], blocks[4], blocks[0], blocks[2]];
+      const sorted = shuffled.sort(compareBlockPositions);
+
+      expect(sorted.map(b => b.position)).toEqual(positions);
     });
   });
 });

@@ -13,6 +13,7 @@ import {
   ensureMinimumBlocks,
   MAX_INDENT_LEVEL,
   getBlockYText,
+  compareBlockPositions,
 } from './blockTypes';
 
 interface BlockEditorProps {
@@ -65,7 +66,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   const blocks = yArray
     .toArray()
     .map(yMap => yMapToBlock(yMap))
-    .sort((a, b) => a.position.localeCompare(b.position));
+    .sort(compareBlockPositions);
 
   // Focus management - focus the textarea when a block becomes focused
   useEffect(() => {
@@ -96,7 +97,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const sortedBlocks = yArray
         .toArray()
         .map(yMap => yMapToBlock(yMap))
-        .sort((a, b) => a.position.localeCompare(b.position));
+        .sort(compareBlockPositions);
 
       const sortedIndex = sortedBlocks.findIndex(b => b.id === blockId);
       if (sortedIndex === -1) return;
@@ -122,10 +123,13 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const sortedBlocks = yArray
         .toArray()
         .map(yMap => yMapToBlock(yMap))
-        .sort((a, b) => a.position.localeCompare(b.position));
+        .sort(compareBlockPositions);
 
       const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
-      if (currentIndex === -1) return;
+      if (currentIndex === -1) {
+        console.warn('insertBlockAfter: blockId not found', blockId);
+        return;
+      }
 
       // Calculate position between current and next block
       const currentPos = sortedBlocks[currentIndex].position;
@@ -149,7 +153,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const sortedBlocks = yArray
         .toArray()
         .map(yMap => yMapToBlock(yMap))
-        .sort((a, b) => a.position.localeCompare(b.position));
+        .sort(compareBlockPositions);
 
       const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
       if (currentIndex === -1) return;
