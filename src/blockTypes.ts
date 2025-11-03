@@ -33,6 +33,12 @@ export function createBlock(
   };
 }
 
+export function getPosition(prevBlock: Block | null, nextBlock: Block | null): string {
+  const prevPos = prevBlock ? prevBlock.position : null;
+  const nextPos = nextBlock ? nextBlock.position : null;
+  return generateKeyBetween(prevPos, nextPos);
+}
+
 /**
  * Convert a Y.Map to a Block
  * Note: content is stored as Y.Text in the map, but we return it as string for rendering
@@ -58,14 +64,25 @@ export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
   if (block.content !== undefined) {
     // Initialize or replace content as Y.Text
     let yText = yMap.get('content') as Y.Text | undefined;
+    const isNewYText = !yText;
     if (!yText) {
       yText = new Y.Text();
       yMap.set('content', yText);
     }
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    const currentText = yText.toString();
-    if (currentText !== block.content) {
-      setYTextFromString(yText, block.content);
+
+    if (isNewYText) {
+      // Newly created Y.Text - just insert content directly
+      // Don't read from it (toString) until it's attached to a doc
+      if (block.content) {
+        yText.insert(0, block.content);
+      }
+    } else {
+      // Existing Y.Text - update it using diff-based approach
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
+      const currentText = yText.toString();
+      if (currentText !== block.content) {
+        setYTextFromString(yText, block.content);
+      }
     }
   }
   if (block.type !== undefined) yMap.set('type', block.type);
