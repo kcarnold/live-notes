@@ -44,6 +44,13 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
     // Trigger initial render
     setVersion(v => v + 1);
 
+    // Call onTextChanged with initial state
+    if (onTextChangedRef.current) {
+      const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap));
+      const markdown = serializeBlocksToMarkdown(blocks);
+      onTextChangedRef.current(markdown);
+    }
+
     // Observer just triggers re-renders
     const observer = () => {
       setVersion(v => v + 1);
@@ -222,8 +229,15 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const isAtStart = cursorPos === 0;
       const isAtEnd = cursorPos === textarea.value.length;
 
+      // Cmd/Ctrl+Enter: trigger translation (check BEFORE plain Enter)
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (onTranslationTrigger) {
+          onTranslationTrigger();
+        }
+      }
       // Enter: split block or create new block
-      if (e.key === 'Enter' && !e.shiftKey) {
+      else if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         const beforeCursor = block.content.substring(0, cursorPos);
         const afterCursor = block.content.substring(cursorPos);
@@ -264,13 +278,6 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       else if (e.key === 'ArrowDown' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         moveBlock(block.id, 'down');
-      }
-      // Cmd/Ctrl+Enter: trigger translation
-      else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        if (onTranslationTrigger) {
-          onTranslationTrigger();
-        }
       }
       // ArrowUp at start: focus previous block
       else if (e.key === 'ArrowUp' && isAtStart) {

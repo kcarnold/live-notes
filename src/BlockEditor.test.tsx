@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Y from 'yjs';
 import { BlockEditor } from './BlockEditor';
@@ -144,10 +144,12 @@ describe('BlockEditor', () => {
       expect(screen.getByText('Original')).toBeInTheDocument();
 
       // Modify Yjs externally
-      const yMap = yArray.get(0);
-      const yText = yMap.get('content') as Y.Text;
-      yText.delete(0, yText.length);
-      yText.insert(0, 'Updated externally');
+      act(() => {
+        const yMap = yArray.get(0);
+        const yText = yMap.get('content') as Y.Text;
+        yText.delete(0, yText.length);
+        yText.insert(0, 'Updated externally');
+      });
 
       // Should update the display
       await waitFor(() => {
@@ -687,7 +689,9 @@ describe('BlockEditor', () => {
 
       // Blur the textarea
       const textarea = screen.getByRole('textbox');
-      textarea.blur();
+      act(() => {
+        textarea.blur();
+      });
 
       // Should switch back to div display
       await waitFor(() => {
@@ -760,8 +764,10 @@ describe('BlockEditor', () => {
       expect(screen.getByText('First')).toBeInTheDocument();
 
       // Add a block externally
-      const block2 = createBlock('Inserted', 'bullet', 0);
-      addBlockToYArray(yArray, block2);
+      act(() => {
+        const block2 = createBlock('Inserted', 'bullet', 0);
+        addBlockToYArray(yArray, block2);
+      });
 
       await waitFor(() => {
         expect(screen.getByText('Inserted')).toBeInTheDocument();
@@ -779,7 +785,9 @@ describe('BlockEditor', () => {
       expect(screen.getByText('Second')).toBeInTheDocument();
 
       // Delete a block externally
-      yArray.delete(1, 1);
+      act(() => {
+        yArray.delete(1, 1);
+      });
 
       await waitFor(() => {
         expect(screen.queryByText('Second')).not.toBeInTheDocument();
