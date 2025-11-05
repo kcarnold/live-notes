@@ -1,9 +1,9 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useState, useCallback, useEffect, useEffectEvent } from 'react';
 import { useScrollToBottom } from './reactUtils';
 import { useAsPlainText } from './yjsUtils';
 import { Remark } from 'react-remark';
 import { translatedTextKeyForLanguage } from './translationUtils';
-import { useAutoTTS } from './useAutoTTS';
+import { useTTS } from './useTTS';
 
 interface TranslatedTextViewerProps {
   language: string;
@@ -24,16 +24,73 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
-  const { state: autoTTSState, toggleEnabled, playLine } = useAutoTTS(
-    lines,
-    language,
-    isTTSEnabled
-  );
+  // Auto-speak state
+  const [autoSpeakEnabled, setAutoSpeakEnabled] = useState(false);
+  const [speechHistory, setSpeechHistory] = useState<string[]>([]);
+  const spokenLinesSet = useMemo(() => new Set(speechHistory), [speechHistory]);
 
-  // Determine which line is currently being played or loaded
-  const currentLineText = autoTTSState.currentlyPlayingIndex !== null
-    ? lines[autoTTSState.currentlyPlayingIndex]
-    : undefined;
+  // Low-level TTS hook
+  const tts = useTTS({
+    onFinished: (text) => {
+      // Add to history when finished
+      setSpeechHistory(prev => [...prev, text]);
+    },
+    onError: (error) => {
+      console.error('TTS error:', error);
+    }
+  });
+
+  /**
+   * Auto-play logic: find and play the next line after the last spoken one.
+   * Uses effect event to avoid stale closures.
+   */
+  const runAutoPlay = useEffectEvent(() => {
+    if (!autoSpeakEnabled || !isTTSEnabled || tts.status !== 'idle') {
+      return;
+    }
+
+    // Find the last spoken line in the current lines array
+    let lastSpokenIndex = -1;
+    for (let i = speechHistory.length - 1; i >= 0; i--) {
+      const lastSpokenText = speechHistory[i];
+      const indexInCurrentLines = lines.lastIndexOf(lastSpokenText);
+      if (indexInCurrentLines !== -1) {
+        lastSpokenIndex = indexInCurrentLines;
+        break;
+      }
+    }
+
+    // Play the next line after the last spoken one
+    const nextLineIndex = lastSpokenIndex + 1;
+    if (nextLineIndex < lines.length) {
+      const nextLine = lines[nextLineIndex];
+      tts.speak(nextLine, language);
+    }
+  });
+
+  // Trigger auto-play when lines change or when TTS becomes idle
+  useEffect(() => {
+    runAutoPlay();
+  }, [lines, tts.status]);
+
+  // Manual play: click on a line to speak it
+  const handleLineClick = useCallback((line: string) => {
+    if (!isTTSEnabled) return;
+
+    // If clicking the currently playing line, cancel it
+    if (tts.currentText === line) {
+      tts.cancel();
+      return;
+    }
+
+    // Otherwise, speak the clicked line
+    tts.speak(line, language);
+  }, [isTTSEnabled, language, tts]);
+
+  // Toggle auto-speak mode
+  const toggleAutoSpeak = useCallback(() => {
+    setAutoSpeakEnabled(prev => !prev);
+  }, []);
 
   return (
     <div className="relative h-full flex flex-col">
@@ -46,22 +103,22 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
             <>
               <button
                 type='button'
-                aria-label={autoTTSState.enabled ? "Disable auto text-to-speech" : "Enable auto text-to-speech"}
-                aria-pressed={autoTTSState.enabled}
-                onClick={toggleEnabled}
+                aria-label={autoSpeakEnabled ? "Disable auto text-to-speech" : "Enable auto text-to-speech"}
+                aria-pressed={autoSpeakEnabled}
+                onClick={toggleAutoSpeak}
                 className={`
                   px-3 py-1 rounded text-sm font-medium transition-colors
-                  ${autoTTSState.enabled
+                  ${autoSpeakEnabled
                     ? 'bg-blue-500 text-white hover:bg-blue-600'
                     : 'bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
                   }
                 `}
               >
-                {autoTTSState.enabled ? '⏸️ Auto-Speak' : '▶️ Tap to Speak'}
+                {autoSpeakEnabled ? '⏸️ Auto-Speak' : '▶️ Tap to Speak'}
               </button>
-              {autoTTSState.playbackStatus === 'error' && (
+              {tts.status === 'error' && (
                 <span className="text-sm text-red-600 dark:text-red-400">
-                  Error: {autoTTSState.errorMessage}
+                  Error: {tts.errorMessage}
                 </span>
               )}
             </>
@@ -75,21 +132,19 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({ language, f
         style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
       >
         {lines.map((line, index) => {
-          const isPlaying = autoTTSState.playbackStatus === 'playing' && currentLineText === line;
-          const isLoading = autoTTSState.playbackStatus === 'loading' && currentLineText === line;
-          const isLastSpoken = autoTTSState.lastSpokenLineIndex === index;
+          const isPlaying = tts.status === 'playing' && tts.currentText === line;
+          const isLoading = tts.status === 'loading' && tts.currentText === line;
+          const hasBeenSpoken = spokenLinesSet.has(line);
 
           return (
             <div
               key={index}
-              onClick={() => {
-                void playLine(line);
-              }}
+              onClick={() => handleLineClick(line)}
               className={`
                 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800
                 ${isPlaying ? 'bg-blue-200 dark:bg-blue-800' : ''}
                 ${isLoading ? 'tts-loading' : ''}
-                ${isLastSpoken && autoTTSState.enabled ? 'border-l-4 border-blue-500 pl-2' : ''}
+                ${hasBeenSpoken ? 'border-l-4 border-amber-200 dark:border-amber-700 pl-2' : ''}
               `}
             >
               <Remark>{line}</Remark>
