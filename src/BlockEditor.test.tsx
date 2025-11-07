@@ -509,6 +509,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
+      // Focus the block first to show the buttons
+      await user.click(screen.getByText('Test'));
+
       const hButton = screen.getByTitle(/Toggle heading/i);
       await user.click(hButton);
 
@@ -527,8 +530,11 @@ describe('BlockEditor', () => {
 
       const { container } = render(<BlockEditor yArray={yArray} />);
 
+      // Focus the second block first to show its buttons
+      await user.click(screen.getByText('Second'));
+
       const upButtons = screen.getAllByTitle(/Move up/i);
-      await user.click(upButtons[1]); // Click second block's up button
+      await user.click(upButtons[0]); // Click second block's up button (only visible button)
 
       await waitFor(() => {
         const blocks = yArray.toArray().map(yMap => ({
@@ -548,6 +554,9 @@ describe('BlockEditor', () => {
       addBlockToYArray(yArray, block2);
 
       render(<BlockEditor yArray={yArray} />);
+
+      // Focus the first block first to show its buttons
+      await user.click(screen.getByText('First'));
 
       const downButtons = screen.getAllByTitle(/Move down/i);
       await user.click(downButtons[0]); // Click first block's down button
@@ -569,6 +578,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
+      // Focus the block first to show the buttons
+      await user.click(screen.getByText('Test'));
+
       const indentButton = screen.getByTitle(/^Indent/i);
       await user.click(indentButton);
 
@@ -584,6 +596,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
+      // Focus the block first to show the buttons
+      await user.click(screen.getByText('Test'));
+
       const dedentButton = screen.getByTitle(/Dedent/i);
       await user.click(dedentButton);
 
@@ -592,20 +607,24 @@ describe('BlockEditor', () => {
       });
     });
 
-    it('disables up button for first block', () => {
+    it('disables up button for first block', async () => {
+      const user = userEvent.setup();
       const block1 = createBlock('First', 'bullet', 0);
       const block2 = createBlock('Second', 'bullet', 0);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
       render(<BlockEditor yArray={yArray} />);
+
+      // Focus the first block to show its buttons
+      await user.click(screen.getByText('First'));
 
       const upButtons = screen.getAllByTitle(/Move up/i);
       expect(upButtons[0]).toBeDisabled();
-      expect(upButtons[1]).not.toBeDisabled();
     });
 
-    it('disables down button for last block', () => {
+    it('disables down button for last block', async () => {
+      const user = userEvent.setup();
       const block1 = createBlock('First', 'bullet', 0);
       const block2 = createBlock('Second', 'bullet', 0);
       addBlockToYArray(yArray, block1);
@@ -613,26 +632,36 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
+      // Focus the second block to show its buttons
+      await user.click(screen.getByText('Second'));
+
       const downButtons = screen.getAllByTitle(/Move down/i);
-      expect(downButtons[0]).not.toBeDisabled();
-      expect(downButtons[1]).toBeDisabled();
+      expect(downButtons[0]).toBeDisabled();
     });
 
-    it('disables indent button at max level', () => {
+    it('disables indent button at max level', async () => {
+      const user = userEvent.setup();
       const block = createBlock('Test', 'bullet', 5);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
 
+      // Focus the block to show the buttons
+      await user.click(screen.getByText('Test'));
+
       const indentButton = screen.getByTitle(/^Indent/i);
       expect(indentButton).toBeDisabled();
     });
 
-    it('disables dedent button at level 0', () => {
+    it('disables dedent button at level 0', async () => {
+      const user = userEvent.setup();
       const block = createBlock('Test', 'bullet', 0);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
+
+      // Focus the block to show the buttons
+      await user.click(screen.getByText('Test'));
 
       const dedentButton = screen.getByTitle(/Dedent/i);
       expect(dedentButton).toBeDisabled();
