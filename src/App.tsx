@@ -14,7 +14,7 @@ import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { LayoutDiagram } from "./LayoutDiagram";
 import { useScrollToBottom } from "./reactUtils";
 import SpeechTranscriber from "./SpeechTranscriber";
-import TranslatedTextViewer from "./TranslatedTextViewer";
+import TranslatedTextViewerContainer from "./TranslatedTextViewerContainer";
 import { ClientToken } from "@y-sweet/sdk";
 import SlidesPlayer from "./SlidesPlayer";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
@@ -111,7 +111,7 @@ function TranslatedOutlineComponent({ language, onLanguageChange }: { language: 
         " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"
       }
     >
-      <TranslatedTextViewer
+      <TranslatedTextViewerContainer
         language={language}
         fontSize={fontSize}
         headerControls={

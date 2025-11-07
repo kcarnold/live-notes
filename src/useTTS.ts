@@ -126,13 +126,19 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSResult {
         audioRef.current = audio;
 
         audio.addEventListener('ended', () => {
-          setState({ currentText: null, status: 'idle' });
-          onFinishedRef.current?.(text);
+          // Only call callback if this request is still current
+          if (currentRequestRef.current === request) {
+            setState({ currentText: null, status: 'idle' });
+            onFinishedRef.current?.(text);
+          }
         });
 
         audio.addEventListener('error', () => {
-          setState({ currentText: null, status: 'error', errorMessage: 'Audio playback error' });
-          onErrorRef.current?.('Audio playback error', text);
+          // Only call callback if this request is still current
+          if (currentRequestRef.current === request) {
+            setState({ currentText: null, status: 'error', errorMessage: 'Audio playback error' });
+            onErrorRef.current?.('Audio playback error', text);
+          }
         });
 
         setState({ currentText: text, status: 'playing' });
