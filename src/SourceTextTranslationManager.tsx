@@ -2,7 +2,7 @@ import { useAtomValue } from "jotai";
 import { useCallback, useRef } from "react";
 import * as Y from "yjs";
 import { isEditorAtom, languages } from "./configAtoms";
-import ProseMirrorEditor from "./ProseMirrorEditor";
+import { BlockEditor } from "./BlockEditor";
 import { useTranslationManager } from "./useTranslationManager";
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigator/platform#examples
@@ -14,7 +14,7 @@ const modifierKeyPrefix =
 export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
   const sourceTextRef = useRef("");
   const isEditor = useAtomValue(isEditorAtom);
-  const prosemirrorFragment = ydoc.getXmlFragment("prosemirror");
+  const sourceBlocks = ydoc.getArray<Y.Map<string | number>>("sourceBlocks");
   const {
     isTranslating,
     translationError,
@@ -32,23 +32,21 @@ export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
     });
   }, [doTranslations]);
 
+  const handleTextChanged = useCallback((val: string) => {
+    sourceTextRef.current = val;
+  }, []);
+
   return (
     <div className="flex flex-col gap-1 h-full">
       <h2 className="font-semibold text-xs text-gray-600 dark:text-gray-300 leading-tight">
         Original Text
       </h2>
       <div className="flex-1 min-h-0 overflow-auto">
-        <ProseMirrorEditor
-          yXmlFragment={prosemirrorFragment}
-          onTextChanged={
-            isEditor
-              ? (val) => {
-                  sourceTextRef.current = val;
-                }
-              : () => null
-          }
+        <BlockEditor
+          yArray={sourceBlocks}
+          onTextChanged={isEditor ? handleTextChanged : undefined}
           editable={isEditor}
-          onTranslationTrigger={isEditor ? doTranslationsSync : () => null}
+          onTranslationTrigger={isEditor ? doTranslationsSync : undefined}
         />
       </div>
       {isEditor ? (
