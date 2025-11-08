@@ -105,13 +105,7 @@ const BlockItem = memo(function BlockItem({
           onMouseDown={(e) => e.preventDefault()} // Prevent blur when clicking buttons
         >
           <button
-            onClick={() => onToggleHeading(blockId)}
-            className="px-1 text-xs border rounded hover:bg-gray-100"
-            title="Toggle heading (Cmd+H)"
-          >
-            H
-          </button>
-          <button
+            type="button"
             onClick={() => onMoveBlock(blockId, 'up')}
             className="px-1 text-xs border rounded hover:bg-gray-100"
             title="Move up (Cmd+↑)"
@@ -120,6 +114,7 @@ const BlockItem = memo(function BlockItem({
             ↑
           </button>
           <button
+            type="button"
             onClick={() => onMoveBlock(blockId, 'down')}
             className="px-1 text-xs border rounded hover:bg-gray-100"
             title="Move down (Cmd+↓)"
@@ -128,6 +123,7 @@ const BlockItem = memo(function BlockItem({
             ↓
           </button>
           <button
+            type="button"
             onClick={() => onIndent(blockId)}
             className="px-1 text-xs border rounded hover:bg-gray-100"
             title="Indent (Tab)"
@@ -136,6 +132,7 @@ const BlockItem = memo(function BlockItem({
             →
           </button>
           <button
+            type="button"
             onClick={() => onDedent(blockId)}
             className="px-1 text-xs border rounded hover:bg-gray-100"
             title="Dedent (Shift+Tab)"
@@ -146,10 +143,19 @@ const BlockItem = memo(function BlockItem({
         </div>
       )}
 
-      {/* Prefix indicator */}
-      <span className={`flex-shrink-0 ${block.type === 'heading' ? 'font-bold' : ''}`}>
+      {/* Prefix indicator - clickable to toggle heading (Cmd+H) */}
+      <button
+        type="button"
+        onClick={() => onToggleHeading(blockId)}
+        onMouseDown={(e) => e.preventDefault()} // Prevent blur when clicking
+        className={`flex-shrink-0 bg-transparent border-none cursor-pointer hover:opacity-60 p-0 ${
+          block.type === 'heading' ? 'font-bold' : ''
+        }`}
+        title="Click to toggle heading (Cmd+H)"
+        disabled={!editable}
+      >
         {prefix}
-      </span>
+      </button>
 
       {/* Content */}
       <div className="flex-grow min-w-0">
@@ -201,7 +207,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   // Initialize and observe Yjs array
   useEffect(() => {
     // Ensure minimum blocks on mount
-    ensureMinimumBlocks(yArray);
+    const timeout = setTimeout(() => ensureMinimumBlocks(yArray), 1000);
     // @ts-expect-error - for debugging
     window.yArray = yArray;
 
@@ -228,7 +234,10 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
     };
 
     yArray.observeDeep(observer);
-    return () => yArray.unobserveDeep(observer);
+    return () => {
+      yArray.unobserveDeep(observer);
+      clearTimeout(timeout);
+    }
   }, [yArray]);
 
   // Memoized sorted list of block IDs
@@ -300,14 +309,25 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const nextPos = currentIndex < sortedBlocks.length - 1
         ? sortedBlocks[currentIndex + 1].position
         : null;
-      const newPosition = generateKeyBetween(currentPos, nextPos);
+      const newPosition = generateKeyBetween(currentPos, nextPos) as string;
 
-      // Always use the calculated position, whether creating new or using provided block
-      const block = newBlock || createBlock('', 'bullet', 0, newPosition);
-      block.position = newPosition;
+      // Determine type and level for the new block
+      const currentBlock = sortedBlocks[currentIndex];
+      const type = currentBlock.type === 'heading' ? 'bullet' : currentBlock.type;
+      const level = currentBlock.type === 'heading' ? 0 : currentBlock.level;
 
-      addBlockToYArray(yArray, block);
-      setFocusedBlockId(block.id);
+      // If no block provided, create a new one; otherwise update the provided block
+      if (!newBlock) {
+        newBlock = createBlock('', type, level, newPosition);
+      } else {
+        // Apply heading-to-bullet reset even when block is provided (e.g., from Enter split)
+        newBlock.type = type;
+        newBlock.level = level;
+        newBlock.position = newPosition;
+      }
+
+      addBlockToYArray(yArray, newBlock);
+      setFocusedBlockId(newBlock.id);
     },
     [yArray]
   );

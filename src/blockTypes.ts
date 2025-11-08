@@ -16,20 +16,20 @@ export interface Block {
 export const MAX_INDENT_LEVEL = 5;
 
 /**
- * Create a new block with default values
+ * Create a new block with required position to ensure stable ordering
  */
 export function createBlock(
   content = '',
   type: BlockType = 'bullet',
   level = 0,
-  position?: string
+  position: string
 ): Block {
   return {
     id: uuidv4(),
     content,
     type,
     level: Math.min(Math.max(0, level), MAX_INDENT_LEVEL),
-    position: position || generateKeyBetween(null, null),
+    position,
   };
 }
 
@@ -42,16 +42,36 @@ export function getPosition(prevBlock: Block | null, nextBlock: Block | null): s
 /**
  * Convert a Y.Map to a Block
  * Note: content is stored as Y.Text in the map, but we return it as string for rendering
+ *
+ * Logs warnings if expected fields are missing - indicates incorrect state.
  */
 export function yMapToBlock(yMap: Y.Map<any>): Block {
   const yText = yMap.get('content') as Y.Text | undefined;
+  const id = yMap.get('id') as string | undefined;
+  const type = yMap.get('type') as BlockType | undefined;
+  const level = yMap.get('level') as number | undefined;
+  const position = yMap.get('position') as string | undefined;
+
+  if (!id) {
+    console.warn('[yMapToBlock] Missing id field in Y.Map, generating new one', yMap);
+  }
+  if (!type) {
+    console.warn('[yMapToBlock] Missing type field in Y.Map, defaulting to bullet', yMap);
+  }
+  if (level === undefined || level === null) {
+    console.warn('[yMapToBlock] Missing level field in Y.Map, defaulting to 0', yMap);
+  }
+  if (!position) {
+    console.warn('[yMapToBlock] Missing position field in Y.Map, generating new one', yMap);
+  }
+
   return {
-    id: yMap.get('id') || uuidv4(),
+    id: id || uuidv4(),
     // eslint-disable-next-line @typescript-eslint/no-base-to-string
     content: yText ? yText.toString() : '',
-    type: yMap.get('type') || 'bullet',
-    level: yMap.get('level') || 0,
-    position: yMap.get('position') || generateKeyBetween(null, null),
+    type: type || 'bullet',
+    level: level ?? 0,
+    position: position || getPosition(null, null),
   };
 }
 
@@ -131,7 +151,8 @@ export function ensureMinimumBlocks(yArray: Y.Array<Y.Map<any>>): void {
   if (yArray.length === 0) {
     const yMap = new Y.Map();
     yArray.push([yMap]);
-    updateYMap(yMap, createBlock());
+    const position = getPosition(null, null);
+    updateYMap(yMap, createBlock('', 'bullet', 0, position));
   }
 }
 
@@ -151,10 +172,39 @@ export function getBlockYText(yMap: Y.Map<any>): Y.Text {
  * Compare function for sorting blocks by fractional index position.
  * Uses native string comparison (case-sensitive) as required by fractional-indexing library.
  * DO NOT use localeCompare() as it is case-insensitive and will give incorrect ordering.
- * 
+ *
  * See https://github.com/rocicorp/fractional-indexing?tab=readme-ov-file#sorting
  */
 export function compareBlockPositions(a: Block, b: Block): number {
   return a.position < b.position ? -1 : a.position > b.position ? 1 : 0;
+}
+
+/**
+ * Test utility: Generate sequential positions for creating multiple blocks in order.
+ * Makes tests less verbose by generating all positions at once.
+ *
+ * @param count - Number of sequential positions to generate
+ * @returns Array of position strings in sorted order
+ *
+ * @example
+ * const positions = createSequentialPositions(3);
+ * const blocks = [
+ *   createBlock('Block 1', 'bullet', 0, positions[0]),
+ *   createBlock('Block 2', 'bullet', 0, positions[1]),
+ *   createBlock('Block 3', 'bullet', 0, positions[2]),
+ * ];
+ */
+export function createSequentialPositions(count: number): string[] {
+  const positions: string[] = [];
+  let prevPos: string | null = null;
+
+  for (let i = 0; i < count; i++) {
+    const nextPos = i < count - 1 ? null : null;
+    const pos = generateKeyBetween(prevPos, nextPos) as string;
+    positions.push(pos);
+    prevPos = pos;
+  }
+
+  return positions;
 }
 

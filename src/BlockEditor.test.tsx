@@ -3,7 +3,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Y from 'yjs';
 import { BlockEditor } from './BlockEditor';
-import { createBlock, getPosition, serializeBlocksToMarkdown, addBlockToYArray } from './blockTypes';
+import { createBlock, getPosition, serializeBlocksToMarkdown, addBlockToYArray, createSequentialPositions } from './blockTypes';
 
 describe('BlockEditor', () => {
   let ydoc: Y.Doc;
@@ -15,13 +15,6 @@ describe('BlockEditor', () => {
   });
 
   describe('Basic Rendering', () => {
-    it('initializes with a default block when array is empty', () => {
-      render(<BlockEditor yArray={yArray} />);
-
-      expect(yArray.length).toBe(1);
-      expect(screen.getByText(/Click to edit/i)).toBeInTheDocument();
-    });
-
     it('renders existing blocks from Yjs array', () => {
       const block1 = createBlock('First block', 'bullet', 0, getPosition(null, null));
       const block2 = createBlock('Second block', 'heading', 0, getPosition(block1, null));
@@ -36,8 +29,9 @@ describe('BlockEditor', () => {
     });
 
     it('renders blocks with correct prefixes', () => {
-      const bullet = createBlock('Bullet item', 'bullet', 0);
-      const heading = createBlock('Heading', 'heading', 0);
+      const positions = createSequentialPositions(2);
+      const bullet = createBlock('Bullet item', 'bullet', 0, positions[0]);
+      const heading = createBlock('Heading', 'heading', 0, positions[1]);
 
       addBlockToYArray(yArray, bullet);
       addBlockToYArray(yArray, heading);
@@ -68,20 +62,23 @@ describe('BlockEditor', () => {
     });
 
     it('does not render operation buttons when editable is false', () => {
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} editable={false} />);
 
-      expect(screen.queryByTitle(/Toggle heading/i)).not.toBeInTheDocument();
       expect(screen.queryByTitle(/Move up/i)).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/Move down/i)).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/Indent/i)).not.toBeInTheDocument();
     });
   });
 
   describe('Text Editing', () => {
     it('allows clicking a block to focus and edit it', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Click me', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Click me', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -96,7 +93,8 @@ describe('BlockEditor', () => {
 
     it('syncs typed text to Yjs Y.Text', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Initial', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Initial', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -119,7 +117,8 @@ describe('BlockEditor', () => {
     it('calls onTextChanged callback when content changes', async () => {
       const user = userEvent.setup();
       const onTextChanged = vi.fn();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} onTextChanged={onTextChanged} />);
@@ -182,9 +181,10 @@ describe('BlockEditor', () => {
       });
     });
 
-    it('creates new block with same type and level', async () => {
+    it('creates new block with bullet at level 0 after a heading', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'heading', 2);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'heading', 2, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -196,7 +196,27 @@ describe('BlockEditor', () => {
       await waitFor(() => {
         expect(yArray.length).toBe(2);
         const newBlock = yArray.get(1);
-        expect(newBlock.get('type')).toBe('heading');
+        expect(newBlock.get('type')).toBe('bullet');
+        expect(newBlock.get('level')).toBe(0);
+      });
+    });
+
+    it('creates new block with same type and level after a bullet', async () => {
+      const user = userEvent.setup();
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 2, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea = screen.getByRole('textbox');
+      await user.keyboard('{Enter}');
+
+      await waitFor(() => {
+        expect(yArray.length).toBe(2);
+        const newBlock = yArray.get(1);
+        expect(newBlock.get('type')).toBe('bullet');
         expect(newBlock.get('level')).toBe(2);
       });
     });
@@ -220,8 +240,9 @@ describe('BlockEditor', () => {
   describe('Keyboard Shortcuts - Backspace', () => {
     it('deletes empty block on Backspace at start', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -257,7 +278,8 @@ describe('BlockEditor', () => {
   describe('Keyboard Shortcuts - Indentation', () => {
     it('indents block on Tab', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -274,7 +296,8 @@ describe('BlockEditor', () => {
 
     it('dedents block on Shift+Tab', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 2);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 2, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -291,7 +314,8 @@ describe('BlockEditor', () => {
 
     it('does not indent beyond max level', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 5);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 5, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -308,7 +332,8 @@ describe('BlockEditor', () => {
 
     it('does not dedent below level 0', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -327,7 +352,8 @@ describe('BlockEditor', () => {
   describe('Keyboard Shortcuts - Toggle Heading', () => {
     it('toggles bullet to heading on Cmd+H', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -344,7 +370,8 @@ describe('BlockEditor', () => {
 
     it('toggles heading to bullet on Cmd+H', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'heading', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'heading', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -363,8 +390,9 @@ describe('BlockEditor', () => {
   describe('Keyboard Shortcuts - Move Blocks', () => {
     it('moves block up on Cmd+ArrowUp', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -388,8 +416,9 @@ describe('BlockEditor', () => {
 
     it('moves block down on Cmd+ArrowDown', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -412,8 +441,9 @@ describe('BlockEditor', () => {
 
     it('does not move first block up', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -433,8 +463,9 @@ describe('BlockEditor', () => {
 
     it('does not move last block down', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -456,8 +487,9 @@ describe('BlockEditor', () => {
   describe('Keyboard Shortcuts - Navigation', () => {
     it('navigates to previous block on ArrowUp at start', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -479,8 +511,9 @@ describe('BlockEditor', () => {
 
     it('navigates to next block on ArrowDown at end', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -502,9 +535,10 @@ describe('BlockEditor', () => {
   });
 
   describe('Button Interactions', () => {
-    it('toggles heading when H button is clicked', async () => {
+    it('toggles heading when prefix indicator is clicked', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -512,8 +546,8 @@ describe('BlockEditor', () => {
       // Focus the block first to show the buttons
       await user.click(screen.getByText('Test'));
 
-      const hButton = screen.getByTitle(/Toggle heading/i);
-      await user.click(hButton);
+      const prefixButton = screen.getByTitle(/Click to toggle heading/i);
+      await user.click(prefixButton);
 
       await waitFor(() => {
         const yMap = yArray.get(0);
@@ -523,8 +557,9 @@ describe('BlockEditor', () => {
 
     it('moves block up when up button is clicked', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -548,8 +583,9 @@ describe('BlockEditor', () => {
 
     it('moves block down when down button is clicked', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -573,7 +609,8 @@ describe('BlockEditor', () => {
 
     it('indents when indent button is clicked', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -591,7 +628,8 @@ describe('BlockEditor', () => {
 
     it('dedents when dedent button is clicked', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 2);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 2, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -609,8 +647,9 @@ describe('BlockEditor', () => {
 
     it('disables up button for first block', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -625,8 +664,9 @@ describe('BlockEditor', () => {
 
     it('disables down button for last block', async () => {
       const user = userEvent.setup();
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
@@ -641,7 +681,8 @@ describe('BlockEditor', () => {
 
     it('disables indent button at max level', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 5);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 5, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -655,7 +696,8 @@ describe('BlockEditor', () => {
 
     it('disables dedent button at level 0', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -673,9 +715,10 @@ describe('BlockEditor', () => {
       const user = userEvent.setup();
       const onTextChanged = vi.fn();
 
-      const block1 = createBlock('Title', 'heading', 0);
-      const block2 = createBlock('First point', 'bullet', 0);
-      const block3 = createBlock('Nested point', 'bullet', 1);
+      const positions = createSequentialPositions(3);
+      const block1 = createBlock('Title', 'heading', 0, positions[0]);
+      const block2 = createBlock('First point', 'bullet', 0, positions[1]);
+      const block3 = createBlock('Nested point', 'bullet', 1, positions[2]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
       addBlockToYArray(yArray, block3);
@@ -695,7 +738,8 @@ describe('BlockEditor', () => {
   describe('Focus Management', () => {
     it('focuses textarea when block becomes focused', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -708,7 +752,8 @@ describe('BlockEditor', () => {
 
     it('unfocuses block when clicking away (onBlur)', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       const { container } = render(<BlockEditor yArray={yArray} />);
@@ -733,7 +778,8 @@ describe('BlockEditor', () => {
   describe('Non-editable Mode', () => {
     it('does not allow editing when editable is false', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} editable={false} />);
@@ -746,7 +792,8 @@ describe('BlockEditor', () => {
 
     it('does not process keyboard shortcuts when editable is false', async () => {
       const user = userEvent.setup();
-      const block = createBlock('Test', 'bullet', 0);
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       const { container } = render(<BlockEditor yArray={yArray} editable={false} />);
@@ -785,7 +832,8 @@ describe('BlockEditor', () => {
     });
 
     it('handles external Yjs insertions', async () => {
-      const block1 = createBlock('First', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block1);
 
       render(<BlockEditor yArray={yArray} />);
@@ -794,7 +842,7 @@ describe('BlockEditor', () => {
 
       // Add a block externally
       act(() => {
-        const block2 = createBlock('Inserted', 'bullet', 0);
+        const block2 = createBlock('Inserted', 'bullet', 0, positions[1]);
         addBlockToYArray(yArray, block2);
       });
 
@@ -804,8 +852,9 @@ describe('BlockEditor', () => {
     });
 
     it('handles external Yjs deletions', async () => {
-      const block1 = createBlock('First', 'bullet', 0);
-      const block2 = createBlock('Second', 'bullet', 0);
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
