@@ -44,10 +44,10 @@ describe('blockTypes', () => {
       expect(markdown).toBe('## Title\n- First point\n  - Nested point\n- Another point');
     });
 
-    it('handles empty content', () => {
+    it('ignores empty content', () => {
       const blocks = [createBlock('', 'bullet', 0, positions[0])];
       const markdown = serializeBlocksToMarkdown(blocks);
-      expect(markdown).toBe('- ');
+      expect(markdown).toBe('');
     });
 
     it('handles maximum indentation', () => {
