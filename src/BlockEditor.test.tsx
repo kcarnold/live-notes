@@ -137,7 +137,7 @@ describe('BlockEditor', () => {
     });
 
     it('updates display when Yjs is modified externally', async () => {
-      const block = createBlock('Original', 'bullet', 0);
+      const block = createBlock('Original', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
       render(<BlockEditor yArray={yArray} />);
@@ -797,7 +797,7 @@ describe('BlockEditor', () => {
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
-      render(<BlockEditor yArray={yArray} />);
+      const { container } = render(<BlockEditor yArray={yArray} />);
 
       // Should render in sorted order by position
       const texts = Array.from(container.querySelectorAll('.cursor-text')).map(
