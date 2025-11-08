@@ -16,6 +16,8 @@ import {
   addBlockToYArray,
 } from './blockTypes';
 
+const SHOW_BUTTONS = false;
+
 interface BlockEditorProps {
   yArray: Y.Array<Y.Map<any>>;
   onTextChanged?: (markdown: string) => void;
@@ -87,7 +89,7 @@ const BlockItem = memo(function BlockItem({
 
   const block = yMapToBlock(yMap);
   // Headings are not indented; bullets use level for indentation
-  const indentPadding = block.type === 'heading' ? 0 : block.level * 24;
+  const indentPadding = block.type === 'heading' ? 0 : block.level * 12;
   // Headings use level for number of #'s (level 0 = ##, level 1 = ###, etc.)
   const prefix = block.type === 'heading'
     ? '#'.repeat(block.level + 2) + ' '
@@ -99,9 +101,9 @@ const BlockItem = memo(function BlockItem({
       style={{ paddingLeft: `${indentPadding}px` }}
     >
       {/* Operation buttons - only shown when focused */}
-      {editable && isFocused && (
+      {SHOW_BUTTONS && editable && isFocused && (
         <div
-          className="flex gap-1 pt-1 flex-shrink-0"
+          className="flex gap-0 pt-1 flex-shrink-0"
           onMouseDown={(e) => e.preventDefault()} // Prevent blur when clicking buttons
         >
           <button
@@ -477,7 +479,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   );
 
   return (
-    <div className="border rounded p-4 bg-white">
+    <div className="border rounded p-1 bg-white">
       {sortedBlockIds.length === 0 ? (
         <div className="text-gray-400 italic">No blocks yet</div>
       ) : (
