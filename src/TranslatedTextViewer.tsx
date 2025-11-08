@@ -1,12 +1,13 @@
-import React, { useRef, useState, useCallback, useEffect, useEffectEvent } from 'react';
+import React, { useRef, useState, useCallback, useEffect, useEffectEvent, useMemo } from 'react';
 import { useScrollToBottom } from './reactUtils';
-import { Remark } from 'react-remark';
 import { useTTS } from './useTTS';
+import { Block } from './blockTypes';
+import { BlockViewer } from './BlockViewer';
 
 interface TranslatedTextViewerProps {
-  /** Lines of text to display (non-empty lines only) */
-  lines: string[];
-  /** Language for TTS (determines if TTS is enabled) */
+  /** Blocks to display (should be sorted by position) */
+  blocks: Block[];
+  /** Language for TTS (determines if TTS is enabled and which translation to show) */
   language: string;
   /** Optional font size override */
   fontSize?: number;
@@ -20,18 +21,27 @@ interface TranslatedTextViewerProps {
  * Displays translated text with optional text-to-speech functionality.
  *
  * TTS Features:
- * - Manual mode: Click any line to speak it
- * - Auto mode: Automatically plays lines sequentially using a playhead cursor
+ * - Manual mode: Click any block to speak it
+ * - Auto mode: Automatically plays blocks sequentially using a playhead cursor
  * - Toggle between modes with the Auto-Speak button
  */
 const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
-  lines,
+  blocks,
   language,
   fontSize,
   headerControls
 }) => {
   const translatedTextEndRef = useRef<HTMLDivElement | null>(null);
-  useScrollToBottom(translatedTextEndRef, [lines], true);
+
+  // Filter to blocks with translations in the target language
+  const translatedBlocks = useMemo(() => {
+    return blocks.filter(block => {
+      const translation = block.translations[language];
+      return translation && translation.trim() !== '';
+    });
+  }, [blocks, language]);
+
+  useScrollToBottom(translatedTextEndRef, [translatedBlocks], true);
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
@@ -39,17 +49,20 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
   const [autoSpeakEnabled, setAutoSpeakEnabled] = useState(false);
 
   /**
-   * Playhead cursor: index of the last line that finished playing.
+   * Playhead cursor: index of the last block that finished playing.
    * -1 means we haven't played anything yet.
-   * When auto-speak is enabled, we always play lines[playhead + 1] next.
+   * When auto-speak is enabled, we always play translatedBlocks[playhead + 1] next.
    */
   const [playhead, setPlayhead] = useState(-1);
 
   // Low-level TTS hook
   const tts = useTTS({
     onFinished: (text) => {
-      // When a line finishes, advance the playhead
-      const finishedIndex = lines.indexOf(text);
+      // When a block finishes, advance the playhead
+      const finishedIndex = translatedBlocks.findIndex(block => {
+        const translation = block.translations[language];
+        return translation === text;
+      });
       if (finishedIndex !== -1) {
         setPlayhead(finishedIndex);
       }
@@ -60,7 +73,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
   });
 
   /**
-   * Auto-play logic: play the next line after the playhead.
+   * Auto-play logic: play the next block after the playhead.
    * Uses effect event to avoid stale closures.
    */
   const runAutoPlay = useEffectEvent(() => {
@@ -68,39 +81,57 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
       return;
     }
 
-    const nextLineIndex = playhead + 1;
-    if (nextLineIndex < lines.length) {
-      const nextLine = lines[nextLineIndex];
-      tts.speak(nextLine, language);
+    const nextBlockIndex = playhead + 1;
+    if (nextBlockIndex < translatedBlocks.length) {
+      const nextBlock = translatedBlocks[nextBlockIndex];
+      const translation = nextBlock.translations[language];
+      if (translation) {
+        tts.speak(translation, language);
+      }
     }
   });
 
   // Trigger auto-play when conditions change
   useEffect(() => {
     runAutoPlay();
-  }, [lines.length, tts.status, autoSpeakEnabled, playhead]);
+  }, [translatedBlocks.length, tts.status, autoSpeakEnabled, playhead]);
 
-  // Manual play: click on a line to speak it
-  const handleLineClick = useCallback((lineIndex: number) => {
+  // Manual play: click on a block to speak it
+  const handleBlockClick = useCallback((block: Block, blockIndex: number) => {
     if (!isTTSEnabled) return;
 
-    const line = lines[lineIndex];
+    const translation = block.translations[language];
+    if (!translation) return;
 
-    // If clicking the currently playing line, cancel it
-    if (tts.currentText === line) {
+    // If clicking the currently playing block, cancel it
+    if (tts.currentText === translation) {
       tts.cancel();
       return;
     }
 
-    // Otherwise, speak the clicked line
-    // Note: clicking a line doesn't update the playhead - only onFinished does
-    tts.speak(line, language);
-  }, [isTTSEnabled, language, lines, tts]);
+    // Otherwise, speak the clicked block's translation
+    // Note: clicking a block doesn't update the playhead - only onFinished does
+    tts.speak(translation, language);
+  }, [isTTSEnabled, language, tts]);
 
   // Toggle auto-speak mode
   const toggleAutoSpeak = useCallback(() => {
     setAutoSpeakEnabled(prev => !prev);
   }, []);
+
+  // Get className for each block based on TTS state
+  const getBlockClassName = useCallback((block: Block, index: number) => {
+    const translation = block.translations[language];
+    const isPlaying = tts.status === 'playing' && tts.currentText === translation;
+    const isLoading = tts.status === 'loading' && tts.currentText === translation;
+    const isPlayhead = index === playhead;
+
+    return `
+      ${isPlaying ? 'bg-blue-200 dark:bg-blue-800' : ''}
+      ${isLoading ? 'tts-loading' : ''}
+      ${isPlayhead ? 'border-l-4 border-green-500 dark:border-green-600 pl-2' : ''}
+    `;
+  }, [language, tts.status, tts.currentText, playhead]);
 
   return (
     <div className="relative h-full flex flex-col">
@@ -137,31 +168,15 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
       )}
 
       {/* Translated Text Content */}
-      <div
-        className="overflow-auto pb-16 max-w-2xl w-full mx-auto flex-1"
-        style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
-      >
-        {lines.map((line, index) => {
-          const isPlaying = tts.status === 'playing' && tts.currentText === line;
-          const isLoading = tts.status === 'loading' && tts.currentText === line;
-          const isPlayhead = index === playhead;
-
-          return (
-            <div
-              key={index}
-              onClick={() => handleLineClick(index)}
-              className={`
-                cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800
-                ${isPlaying ? 'bg-blue-200 dark:bg-blue-800' : ''}
-                ${isLoading ? 'tts-loading' : ''}
-                ${isPlayhead ? 'border-l-4 border-green-500 dark:border-green-600 pl-2' : ''}
-              `}
-            >
-              <Remark>{line}</Remark>
-            </div>
-          );
-        })}
-        <div ref={translatedTextEndRef} />
+      <div className="relative flex-1 overflow-hidden">
+        <BlockViewer
+          blocks={translatedBlocks}
+          language={language}
+          fontSize={fontSize}
+          onBlockClick={handleBlockClick}
+          getBlockClassName={getBlockClassName}
+        />
+        <div ref={translatedTextEndRef} className="absolute bottom-0" />
       </div>
     </div>
   );

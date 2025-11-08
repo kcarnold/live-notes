@@ -41,6 +41,27 @@ export const usePlainTextSetter = (name: string): ((newText: string) => void) =>
   return setPlainText;
 };
 
+/**
+ * Hook to observe a Yjs array and get a version number that increments on changes
+ * Returns [array, version] where version increments whenever the array changes
+ */
+export const useYjsArray = <T>(yArray: Y.Array<T>): [Y.Array<T>, number] => {
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    const observer = () => {
+      setVersion(v => v + 1);
+    };
+
+    yArray.observeDeep(observer);
+    return () => {
+      yArray.unobserveDeep(observer);
+    };
+  }, [yArray]);
+
+  return [yArray, version];
+};
+
 
 export function setYTextFromString(yText: Y.Text, text: string) {
   // eslint-disable-next-line @typescript-eslint/no-base-to-string

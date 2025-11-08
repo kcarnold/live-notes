@@ -235,3 +235,147 @@ export async function getUpdatedTranslation(language: string, translationCache: 
 }
 
 export const translatedTextKeyForLanguage = (language: string) => `translatedText-${language}`;
+
+// ===== Block-based translation functions =====
+
+export interface BlockTranslationInput {
+    blockId: string;
+    content: string;
+}
+
+export interface BlockTranslationTodo {
+    blocks: BlockTranslationInput[];
+    isTranslationNeeded: boolean[];
+    translatedContext: string;
+}
+
+/**
+ * Get translation todos for blocks (without markdown formatting)
+ *
+ * Unlike the markdown-based approach, blocks are already structured,
+ * so we translate just the content without format preservation.
+ */
+export function getBlockTranslationTodos(
+    language: string,
+    blocks: BlockTranslationInput[],
+    translationCache: TranslationCache
+): BlockTranslationTodo[] {
+    // Determine which blocks need translation
+    const blockStatus = blocks.map((block) => {
+        return (block.content === "" || translationCache.has(translationCacheKey(language, block.content))) ? 0 : 1;
+    });
+
+    // Mark a few lines before each "need to translate" block as "context"
+    for (let i = 0; i < blockStatus.length; i++) {
+        if (blockStatus[i] === 1) {
+            for (let j = 1; j <= 3; j++) {
+                if (i - j >= 0 && blockStatus[i - j] === 0) {
+                    // @ts-ignore
+                    blockStatus[i - j] = 2;
+                }
+            }
+        }
+    }
+
+    // Create contiguous blocks of text to translate
+    const translationTodoBlocks = findContiguousBlocks(blockStatus);
+
+    const translationTodos: BlockTranslationTodo[] = [];
+    for (const block of translationTodoBlocks) {
+        const [start, end] = block;
+        const blocksInContext = blocks.slice(start, end + 1);
+        const statusesInContext = blockStatus.slice(start, end + 1);
+
+        // Build translated context from already-translated blocks
+        const translatedContext = blocksInContext.map((block) => {
+            const key = translationCacheKey(language, block.content);
+            const cachedTranslation = translationCache.get(key);
+            return cachedTranslation || '';
+        }).join('\n');
+
+        const isTranslationNeeded = statusesInContext.map(x => x === 1);
+
+        translationTodos.push({
+            blocks: blocksInContext,
+            isTranslationNeeded,
+            translatedContext,
+        });
+    }
+
+    return translationTodos;
+}
+
+/**
+ * Update translation cache from block translation server response
+ */
+export function updateBlockTranslationCache(serverResponse: any, translationCache: TranslationCache) {
+    const translationResults = serverResponse.results as { sourceText: string; translatedText: string; language: string}[][];
+    for (const block of translationResults) {
+        for (const result of block) {
+            const { sourceText, translatedText, language } = result;
+            const trimmedSourceText = sourceText.trim();
+            const trimmedTranslatedText = translatedText.trim();
+            if (sourceText !== trimmedSourceText) {
+                console.warn('Source text was trimmed:', [sourceText, trimmedSourceText]);
+            }
+            if (translatedText !== trimmedTranslatedText) {
+                console.warn('Translated text was trimmed:', [translatedText, trimmedTranslatedText]);
+            }
+            translationCache.set(translationCacheKey(language, trimmedSourceText), trimmedTranslatedText);
+        }
+    }
+}
+
+/**
+ * Get updated block translations using cache
+ */
+export async function getUpdatedBlockTranslations(
+    language: string,
+    translationCache: TranslationCache,
+    blocks: BlockTranslationInput[]
+): Promise<Map<string, string>> {
+    const translationTodos = getBlockTranslationTodos(language, blocks, translationCache);
+
+    if (translationTodos.length > 0) {
+        // Convert block todos to the format expected by the server
+        const serverTodos = translationTodos.map(todo => ({
+            chunks: todo.blocks.map(b => b.content),
+            offset: 0, // Not used for block-based translation
+            isTranslationNeeded: todo.isTranslationNeeded,
+            translatedContext: todo.translatedContext,
+        }));
+
+        const response = await fetch('/api/requestTranslatedBlocks', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                translationTodos: serverTodos,
+                language: language,
+            }),
+        });
+
+        const result = await response.json().catch(() => null);
+        if (!response.ok || !result?.ok) {
+            if (result?.error) {
+                throw new Error(`Translation error (${response.status}): ${result.error}`);
+            } else {
+                throw new Error(`Translation error (${response.status}): ${response.statusText}`);
+            }
+        }
+        updateBlockTranslationCache(result, translationCache);
+    }
+
+    // Return map of blockId -> translated text
+    const translations = new Map<string, string>();
+    for (const block of blocks) {
+        const key = translationCacheKey(language, block.content);
+        const translation = translationCache.get(key);
+        if (translation) {
+            translations.set(block.blockId, translation);
+        }
+    }
+
+    return translations;
+}

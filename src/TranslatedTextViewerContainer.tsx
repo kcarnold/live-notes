@@ -1,7 +1,9 @@
 import React, { useMemo } from 'react';
-import { useAsPlainText } from './yjsUtils';
-import { translatedTextKeyForLanguage } from './translationUtils';
+import { useYDoc } from '@y-sweet/react';
+import { useYjsArray } from './yjsUtils';
+import { yMapToBlock, compareBlockPositions, Block } from './blockTypes';
 import TranslatedTextViewer from './TranslatedTextViewer';
+import * as Y from 'yjs';
 
 interface TranslatedTextViewerContainerProps {
   language: string;
@@ -13,26 +15,31 @@ interface TranslatedTextViewerContainerProps {
  * Container component that connects TranslatedTextViewer to Yjs.
  *
  * This wrapper:
- * 1. Fetches translated text from Yjs shared document
- * 2. Splits text into lines
- * 3. Passes lines to the pure TranslatedTextViewer component
+ * 1. Fetches source blocks from Yjs shared document
+ * 2. Converts to Block objects and sorts by position
+ * 3. Passes blocks to TranslatedTextViewer (which displays translations)
  */
 const TranslatedTextViewerContainer: React.FC<TranslatedTextViewerContainerProps> = ({
   language,
   fontSize,
-  headerControls
+  headerControls,
 }) => {
-  const yJsKey = translatedTextKeyForLanguage(language);
-  const [translatedText] = useAsPlainText(yJsKey);
+  const ydoc = useYDoc();
+  const sourceBlocks = ydoc.getArray<Y.Map<any>>("sourceBlocks");
+  const [, version] = useYjsArray(sourceBlocks);
 
-  const lines = useMemo(() => {
-    const lines = translatedText ? translatedText.split('\n') : [];
-    return lines.filter(line => line.trim() !== '');
-  }, [translatedText]);
+  const blocks = useMemo(() => {
+    const blockArray: Block[] = sourceBlocks
+      .toArray()
+      .map((yMap: Y.Map<any>) => yMapToBlock(yMap))
+      .sort(compareBlockPositions);
+
+    return blockArray;
+  }, [sourceBlocks, version]);
 
   return (
     <TranslatedTextViewer
-      lines={lines}
+      blocks={blocks}
       language={language}
       fontSize={fontSize}
       headerControls={headerControls}
