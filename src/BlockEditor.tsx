@@ -292,7 +292,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   );
 
   const insertBlockAfter = useCallback(
-    (blockId: string, content: string, type?: BlockType, level?: number) => {
+    (blockId: string, content: string, type: BlockType, level: number) => {
       const sortedBlocks = yArray
         .toArray()
         .map(yMap => yMapToBlock(yMap))
@@ -311,12 +311,12 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         : null;
       const newPosition = generateKeyBetween(currentPos, nextPos) as string;
 
-      // Determine type and level for the new block
-      const currentBlock = sortedBlocks[currentIndex];
-      const newType = currentBlock.type === 'heading' ? 'bullet' : currentBlock.type;
-      const newLevel = currentBlock.type === 'heading' ? 0 : currentBlock.level;
-
-      const newBlock = createBlock(content, newType, newLevel, newPosition);
+      const newBlock = createBlock(
+        content,
+        type,
+        level,
+        newPosition
+      );
       addBlockToYArray(yArray, newBlock);
       setFocusedBlockId(newBlock.id);
     },
@@ -421,7 +421,10 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         updateBlock(block.id, { content: beforeCursor });
 
         // Create new block with content after cursor
-        insertBlockAfter(block.id, afterCursor, block.type, block.level);
+        const newType = block.type === 'heading' ? 'bullet' : block.type;
+        const newLevel = block.type === 'heading' ? 0 : block.level;
+
+        insertBlockAfter(block.id, afterCursor, newType, newLevel);
       }
       // Backspace at start: merge with previous block
       else if (e.key === 'Backspace' && isAtStart && block.content === '') {

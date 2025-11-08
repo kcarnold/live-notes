@@ -168,7 +168,7 @@ describe('BlockEditor', () => {
       render(<BlockEditor yArray={yArray} />);
 
       await user.click(screen.getByText('Hello World'));
-      const textarea = screen.getByRole('textbox');
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
 
       // Position cursor after "Hello "
       textarea.setSelectionRange(6, 6);
@@ -193,6 +193,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Enter}');
 
       await waitFor(() => {
@@ -213,6 +214,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Enter}');
 
       await waitFor(() => {
@@ -233,6 +235,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Meta>}{Enter}{/Meta}');
 
       expect(onTranslationTrigger).toHaveBeenCalled();
@@ -251,6 +254,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText(/Click to edit/i));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Backspace}');
 
       await waitFor(() => {
@@ -267,6 +271,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText(/Click to edit/i));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Backspace}');
 
       // Should still have 1 block
@@ -286,6 +291,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Tab}');
 
       await waitFor(() => {
@@ -303,6 +309,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Shift>}{Tab}{/Shift}');
 
       await waitFor(() => {
@@ -320,6 +327,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Tab}');
 
       await waitFor(() => {
@@ -337,6 +345,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Shift>}{Tab}{/Shift}');
 
       await waitFor(() => {
@@ -356,6 +365,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Meta>}h{/Meta}');
 
       await waitFor(() => {
@@ -373,6 +383,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Test'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Meta>}h{/Meta}');
 
       await waitFor(() => {
@@ -394,6 +405,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Second'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Meta>}{ArrowUp}{/Meta}');
 
       await waitFor(() => {
@@ -420,6 +432,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('First'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Meta>}{ArrowDown}{/Meta}');
 
       await waitFor(() => {
@@ -445,6 +458,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('First'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       const originalPosition = (yArray.get(0).get('position') as string);
 
       await user.keyboard('{Meta>}{ArrowUp}{/Meta}');
@@ -466,6 +480,7 @@ describe('BlockEditor', () => {
 
       await user.click(screen.getByText('Second'));
       const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       const originalPosition = (yArray.get(1).get('position') as string);
 
       await user.keyboard('{Meta>}{ArrowDown}{/Meta}');
@@ -552,7 +567,7 @@ describe('BlockEditor', () => {
       addBlockToYArray(yArray, block1);
       addBlockToYArray(yArray, block2);
 
-      const { container } = render(<BlockEditor yArray={yArray} />);
+      render(<BlockEditor yArray={yArray} />);
 
       // Focus the second block first to show its buttons
       await user.click(screen.getByText('Second'));
@@ -694,7 +709,6 @@ describe('BlockEditor', () => {
 
   describe('Markdown Serialization', () => {
     it('generates correct markdown through onTextChanged', async () => {
-      const user = userEvent.setup();
       const onTextChanged = vi.fn();
 
       const block1 = createBlock('Title', 'heading', 0, positions[0]);
@@ -735,7 +749,7 @@ describe('BlockEditor', () => {
       const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
-      const { container } = render(<BlockEditor yArray={yArray} />);
+      render(<BlockEditor yArray={yArray} />);
 
       await user.click(screen.getByText('Test'));
       expect(screen.getByRole('textbox')).toBeInTheDocument();

@@ -188,7 +188,7 @@ describe('TranslatedTextViewer', () => {
         return mockTTS;
       });
 
-      const { container, rerender } = render(
+      const { rerender } = render(
         <TranslatedTextViewer lines={lines} language="French" />
       );
 
