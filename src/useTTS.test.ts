@@ -3,6 +3,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { useTTS } from './useTTS';
 
 describe('useTTS', () => {
+  let audioEventHandlers: Map<string, EventListener>;
   let mockAudio: {
     play: ReturnType<typeof vi.fn>;
     pause: ReturnType<typeof vi.fn>;
@@ -10,8 +11,6 @@ describe('useTTS', () => {
     removeEventListener: ReturnType<typeof vi.fn>;
     load: ReturnType<typeof vi.fn>;
   };
-
-  let audioEventHandlers: Map<string, EventListener>;
 
   beforeEach(() => {
     // Reset event handlers for each test
@@ -21,21 +20,28 @@ describe('useTTS', () => {
     mockAudio = {
       play: vi.fn().mockResolvedValue(undefined),
       pause: vi.fn(),
-      addEventListener: vi.fn((event: string, handler: EventListener) => {
-        audioEventHandlers.set(event, handler);
-      }),
+      addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
       load: vi.fn(),
     };
 
+    // Set up addEventListener to track handlers
+    mockAudio.addEventListener.mockImplementation((event: string, handler: EventListener) => {
+      audioEventHandlers.set(event, handler);
+    });
+
     // Mock Audio constructor
-    global.Audio = vi.fn(() => mockAudio) as unknown as typeof Audio;
+    global.Audio = class {
+      constructor() {
+        Object.assign(this, mockAudio);
+      }
+    } as unknown as typeof Audio;
 
     // Mock fetch for TTS API
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ audioUrl: 'http://example.com/audio.mp3' }),
-    });
+      json: vi.fn().mockResolvedValue({ audioUrl: 'http://example.com/audio.mp3' }),
+    } as unknown as Response);
   });
 
   afterEach(() => {
@@ -51,7 +57,7 @@ describe('useTTS', () => {
       expect(result.current.errorMessage).toBeUndefined();
     });
 
-    it('should transition to loading when speak is called', async () => {
+    it('should transition to loading when speak is called', () => {
       const { result } = renderHook(() => useTTS());
 
       act(() => {
@@ -142,10 +148,11 @@ describe('useTTS', () => {
 
       // Make fetch slow
       let resolveFetch: (value: Response) => void;
-      global.fetch = vi.fn().mockImplementation(() =>
-        new Promise<Response>((resolve) => {
-          resolveFetch = resolve;
-        })
+      global.fetch = vi.fn().mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFetch = resolve;
+          })
       );
 
       const { result } = renderHook(() => useTTS({ onFinished }));
@@ -164,10 +171,10 @@ describe('useTTS', () => {
 
       // Resolve first fetch (should be ignored)
       act(() => {
-        resolveFetch!({
+        resolveFetch({
           ok: true,
-          json: async () => ({ audioUrl: 'http://example.com/first.mp3' }),
-        } as Response);
+          json: vi.fn().mockResolvedValue({ audioUrl: 'http://example.com/first.mp3' }),
+        } as unknown as Response);
       });
 
       // Second request should still be loading
@@ -179,7 +186,7 @@ describe('useTTS', () => {
 
       // Make fetch slow
       global.fetch = vi.fn().mockImplementation(
-        () => new Promise(() => {}) // Never resolves
+        () => new Promise<Response>(() => {}) // Never resolves
       );
 
       const { result } = renderHook(() => useTTS({ onFinished }));
@@ -291,8 +298,8 @@ describe('useTTS', () => {
       // Mock successful fetch for second attempt
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ audioUrl: 'http://example.com/audio.mp3' }),
-      });
+        json: vi.fn().mockResolvedValue({ audioUrl: 'http://example.com/audio.mp3' }),
+      } as unknown as Response);
 
       // Second attempt should work
       act(() => {
