@@ -216,7 +216,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
 
     // Call onTextChanged with initial state
     if (onTextChangedRef.current) {
-      const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap));
+      const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap)).sort(compareBlockPositions);
       const markdown = serializeBlocksToMarkdown(blocks);
       onTextChangedRef.current(markdown);
     }
@@ -227,7 +227,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
 
       // Notify parent of markdown changes
       if (onTextChangedRef.current) {
-        const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap));
+        const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap)).sort(compareBlockPositions);
         const markdown = serializeBlocksToMarkdown(blocks);
         onTextChangedRef.current(markdown);
       }
