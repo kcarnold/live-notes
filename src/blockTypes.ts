@@ -24,6 +24,9 @@ export function createBlock(
   level = 0,
   position: string
 ): Block {
+  if (!position) { 
+    throw new Error('Position is required to create a block');
+  }
   return {
     id: uuidv4(),
     content,
@@ -52,17 +55,14 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
   const level = yMap.get('level') as number | undefined;
   const position = yMap.get('position') as string | undefined;
 
-  if (!id) {
-    console.warn('[yMapToBlock] Missing id field in Y.Map, generating new one', yMap);
-  }
-  if (!type) {
-    console.warn('[yMapToBlock] Missing type field in Y.Map, defaulting to bullet', yMap);
-  }
-  if (level === undefined || level === null) {
-    console.warn('[yMapToBlock] Missing level field in Y.Map, defaulting to 0', yMap);
-  }
-  if (!position) {
-    console.warn('[yMapToBlock] Missing position field in Y.Map, generating new one', yMap);
+  if (!id || !type || level === undefined || !position) {
+    console.warn('yMapToBlock: Missing required fields in Y.Map', {
+      id,
+      type,
+      level,
+      position,
+    });
+    //throw new Error('[yMapToBlock] Missing required fields in Y.Map');
   }
 
   return {
@@ -121,7 +121,13 @@ export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
 export function addBlockToYArray(yArray: Y.Array<Y.Map<any>>, block: Block): void {
   const yMap = new Y.Map();
   yArray.push([yMap]);
-  updateYMap(yMap, block);
+  if (yArray.doc == null) {
+    updateYMap(yMap, block);
+  } else {
+    yArray.doc.transact(() => {
+      updateYMap(yMap, block);
+    });
+  }
 }
 
 /**
@@ -145,15 +151,13 @@ export function serializeBlocksToMarkdown(blocks: Block[]): string {
 
 /**
  * Ensure there's always at least one block
- * Creates the Y.Map first, adds it to the array (attaching to doc), then populates it
  */
 export function ensureMinimumBlocks(yArray: Y.Array<Y.Map<any>>): void {
-  if (yArray.length === 0) {
-    const yMap = new Y.Map();
-    yArray.push([yMap]);
-    const position = getPosition(null, null);
-    updateYMap(yMap, createBlock('', 'bullet', 0, position));
+  if (yArray.length > 0) {
+    return;
   }
+  const block = createBlock('', 'bullet', 0, getPosition(null, null));
+  addBlockToYArray(yArray, block);
 }
 
 /**
@@ -199,8 +203,7 @@ export function createSequentialPositions(count: number): string[] {
   let prevPos: string | null = null;
 
   for (let i = 0; i < count; i++) {
-    const nextPos = i < count - 1 ? null : null;
-    const pos = generateKeyBetween(prevPos, nextPos) as string;
+    const pos = generateKeyBetween(prevPos, null) as string;
     positions.push(pos);
     prevPos = pos;
   }
