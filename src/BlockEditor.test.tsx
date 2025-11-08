@@ -728,6 +728,30 @@ describe('BlockEditor', () => {
       const markdown = onTextChanged.mock.calls[onTextChanged.mock.calls.length - 1][0];
       expect(markdown).toBe('## Title\n- First point\n  - Nested point');
     });
+
+    it('skips empty blocks when serializing', async () => {
+      const onTextChanged = vi.fn();
+
+      const block1 = createBlock('Title', 'heading', 0, positions[0]);
+      const block2 = createBlock('', 'bullet', 0, positions[1]); // empty
+      const block3 = createBlock('Point', 'bullet', 0, positions[2]);
+      const block4 = createBlock('  ', 'bullet', 1, positions[3]); // whitespace only
+      addBlockToYArray(yArray, block1);
+      addBlockToYArray(yArray, block2);
+      addBlockToYArray(yArray, block3);
+      addBlockToYArray(yArray, block4);
+
+      render(<BlockEditor yArray={yArray} onTextChanged={onTextChanged} />);
+
+      // Wait for initial render callback
+      await waitFor(() => {
+        expect(onTextChanged).toHaveBeenCalled();
+      });
+
+      const markdown = onTextChanged.mock.calls[onTextChanged.mock.calls.length - 1][0];
+      // Should only contain Title and Point, skipping empty and whitespace-only blocks
+      expect(markdown).toBe('## Title\n- Point');
+    });
   });
 
   describe('Focus Management', () => {

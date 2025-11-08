@@ -132,9 +132,11 @@ export function addBlockToYArray(yArray: Y.Array<Y.Map<any>>, block: Block): voi
 
 /**
  * Serialize blocks to markdown string
+ * Skips empty blocks (blocks with no content)
  */
 export function serializeBlocksToMarkdown(blocks: Block[]): string {
   return blocks
+    .filter((block) => block.content.trim() !== '')
     .map((block) => {
       if (block.type === 'heading') {
         // Headings use level for number of #'s (level 0 = ##, level 1 = ###, etc.)
