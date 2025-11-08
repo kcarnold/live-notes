@@ -24,6 +24,9 @@ export function createBlock(
   level = 0,
   position: string
 ): Block {
+  if (!position) { 
+    throw new Error('Position is required to create a block');
+  }
   return {
     id: uuidv4(),
     content,
@@ -52,17 +55,8 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
   const level = yMap.get('level') as number | undefined;
   const position = yMap.get('position') as string | undefined;
 
-  if (!id) {
-    console.warn('[yMapToBlock] Missing id field in Y.Map, generating new one', yMap);
-  }
-  if (!type) {
-    console.warn('[yMapToBlock] Missing type field in Y.Map, defaulting to bullet', yMap);
-  }
-  if (level === undefined || level === null) {
-    console.warn('[yMapToBlock] Missing level field in Y.Map, defaulting to 0', yMap);
-  }
-  if (!position) {
-    console.warn('[yMapToBlock] Missing position field in Y.Map, generating new one', yMap);
+  if (!id || !type || level === undefined || !position) {
+    throw new Error('[yMapToBlock] Missing required fields in Y.Map');
   }
 
   return {
