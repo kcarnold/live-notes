@@ -11,7 +11,7 @@ services:
     env_file: "./.env"
     restart: unless-stopped
     volumes:
-      - audio_cache:/usr/src/app/audio_cache
+      - ./audio_cache:/usr/src/app/audio_cache
     # For development, you might want to uncomment these volumes
     # volumes:
     #   - ./:/usr/src/app
