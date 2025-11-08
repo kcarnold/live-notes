@@ -121,7 +121,13 @@ export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
 export function addBlockToYArray(yArray: Y.Array<Y.Map<any>>, block: Block): void {
   const yMap = new Y.Map();
   yArray.push([yMap]);
-  updateYMap(yMap, block);
+  if (yArray.doc == null) {
+    updateYMap(yMap, block);
+  } else {
+    yArray.doc.transact(() => {
+      updateYMap(yMap, block);
+    });
+  }
 }
 
 /**
