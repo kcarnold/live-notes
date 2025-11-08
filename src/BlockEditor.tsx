@@ -86,8 +86,12 @@ const BlockItem = memo(function BlockItem({
   }
 
   const block = yMapToBlock(yMap);
-  const indentPadding = block.level * 24;
-  const prefix = block.type === 'heading' ? '## ' : '- ';
+  // Headings are not indented; bullets use level for indentation
+  const indentPadding = block.type === 'heading' ? 0 : block.level * 24;
+  // Headings use level for number of #'s (level 0 = ##, level 1 = ###, etc.)
+  const prefix = block.type === 'heading'
+    ? '#'.repeat(block.level + 2) + ' '
+    : '- ';
 
   return (
     <div

@@ -110,9 +110,15 @@ export function addBlockToYArray(yArray: Y.Array<Y.Map<any>>, block: Block): voi
 export function serializeBlocksToMarkdown(blocks: Block[]): string {
   return blocks
     .map((block) => {
-      const indent = '  '.repeat(block.level);
-      const prefix = block.type === 'heading' ? '## ' : '- ';
-      return `${indent}${prefix}${block.content}`;
+      if (block.type === 'heading') {
+        // Headings use level for number of #'s (level 0 = ##, level 1 = ###, etc.)
+        const hashes = '#'.repeat(block.level + 2);
+        return `${hashes} ${block.content}`;
+      } else {
+        // Bullets use level for indentation
+        const indent = '  '.repeat(block.level);
+        return `${indent}- ${block.content}`;
+      }
     })
     .join('\n');
 }
