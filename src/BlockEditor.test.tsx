@@ -3,7 +3,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Y from 'yjs';
 import { BlockEditor } from './BlockEditor';
-import { createBlock, getPosition, serializeBlocksToMarkdown, addBlockToYArray, createSequentialPositions } from './blockTypes';
+import { createBlock, getPosition, addBlockToYArray, createSequentialPositions } from './blockTypes';
 
 describe('BlockEditor', () => {
   let ydoc: Y.Doc;

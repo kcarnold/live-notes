@@ -199,8 +199,7 @@ export function createSequentialPositions(count: number): string[] {
   let prevPos: string | null = null;
 
   for (let i = 0; i < count; i++) {
-    const nextPos = i < count - 1 ? null : null;
-    const pos = generateKeyBetween(prevPos, nextPos) as string;
+    const pos = generateKeyBetween(prevPos, null) as string;
     positions.push(pos);
     prevPos = pos;
   }
