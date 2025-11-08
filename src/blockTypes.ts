@@ -56,7 +56,13 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
   const position = yMap.get('position') as string | undefined;
 
   if (!id || !type || level === undefined || !position) {
-    throw new Error('[yMapToBlock] Missing required fields in Y.Map');
+    console.warn('yMapToBlock: Missing required fields in Y.Map', {
+      id,
+      type,
+      level,
+      position,
+    });
+    //throw new Error('[yMapToBlock] Missing required fields in Y.Map');
   }
 
   return {
@@ -139,15 +145,13 @@ export function serializeBlocksToMarkdown(blocks: Block[]): string {
 
 /**
  * Ensure there's always at least one block
- * Creates the Y.Map first, adds it to the array (attaching to doc), then populates it
  */
 export function ensureMinimumBlocks(yArray: Y.Array<Y.Map<any>>): void {
-  if (yArray.length === 0) {
-    const yMap = new Y.Map();
-    yArray.push([yMap]);
-    const position = getPosition(null, null);
-    updateYMap(yMap, createBlock('', 'bullet', 0, position));
+  if (yArray.length > 0) {
+    return;
   }
+  const block = createBlock('', 'bullet', 0, getPosition(null, null));
+  addBlockToYArray(yArray, block);
 }
 
 /**
