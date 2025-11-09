@@ -223,7 +223,6 @@ const BlockItem = memo(function BlockItem({
           className={`w-full border-none outline-none resize-none overflow-hidden ${
             block.type === 'heading' ? 'font-bold text-lg' : ''
           } ${!isFocused ? 'cursor-text' : ''}`}
-          style={{ minHeight: '1.5rem' }}
         />
       </div>
     </div>
