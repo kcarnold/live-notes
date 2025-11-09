@@ -2,40 +2,57 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useTTS } from './useTTS';
 
-describe('useTTS', () => {
-  let audioEventHandlers: Map<string, EventListener>;
-  let mockAudio: {
-    play: ReturnType<typeof vi.fn>;
-    pause: ReturnType<typeof vi.fn>;
-    addEventListener: ReturnType<typeof vi.fn>;
-    removeEventListener: ReturnType<typeof vi.fn>;
-    load: ReturnType<typeof vi.fn>;
+// Store callbacks and mock Howl instance at module level
+let howlCallbacks: {
+  onend?: () => void;
+  onloaderror?: (id: number, error: unknown) => void;
+  onplayerror?: (id: number, error: unknown) => void;
+};
+
+// Factory to create a new mock Howl instance
+const createMockHowl = () => ({
+  play: vi.fn(),
+  stop: vi.fn(),
+  unload: vi.fn(),
+});
+
+let mockHowlInstance: ReturnType<typeof createMockHowl>;
+
+// Mock Howler at module level
+vi.mock('howler', () => {
+  // Create a mock class that can be used with 'new'
+  class MockHowl {
+    constructor(config: {
+      src: string[];
+      html5?: boolean;
+      onend?: () => void;
+      onloaderror?: (id: number, error: unknown) => void;
+      onplayerror?: (id: number, error: unknown) => void;
+    }) {
+      // Store callbacks globally
+      howlCallbacks = {
+        onend: config.onend,
+        onloaderror: config.onloaderror,
+        onplayerror: config.onplayerror,
+      };
+
+      // Copy methods from the mock instance
+      Object.assign(this, mockHowlInstance);
+    }
+  }
+
+  return {
+    Howl: MockHowl,
   };
+});
 
+describe('useTTS', () => {
   beforeEach(() => {
-    // Reset event handlers for each test
-    audioEventHandlers = new Map();
+    // Reset callbacks for each test
+    howlCallbacks = {};
 
-    // Create mock Audio instance
-    mockAudio = {
-      play: vi.fn().mockResolvedValue(undefined),
-      pause: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      load: vi.fn(),
-    };
-
-    // Set up addEventListener to track handlers
-    mockAudio.addEventListener.mockImplementation((event: string, handler: EventListener) => {
-      audioEventHandlers.set(event, handler);
-    });
-
-    // Mock Audio constructor
-    global.Audio = class {
-      constructor() {
-        Object.assign(this, mockAudio);
-      }
-    } as unknown as typeof Audio;
+    // Create fresh mock Howl instance
+    mockHowlInstance = createMockHowl();
 
     // Mock fetch for TTS API
     global.fetch = vi.fn().mockResolvedValue({
@@ -80,7 +97,7 @@ describe('useTTS', () => {
       });
 
       expect(result.current.currentText).toBe('Hello world');
-      expect(mockAudio.play).toHaveBeenCalled();
+      expect(mockHowlInstance.play).toHaveBeenCalled();
     });
 
     it('should call onFinished when audio ends', async () => {
@@ -97,8 +114,7 @@ describe('useTTS', () => {
 
       // Simulate audio ending
       act(() => {
-        const endHandler = audioEventHandlers.get('ended');
-        if (endHandler) endHandler(new Event('ended'));
+        if (howlCallbacks.onend) howlCallbacks.onend();
       });
 
       await waitFor(() => {
@@ -135,8 +151,7 @@ describe('useTTS', () => {
 
       // First audio ending should not trigger onFinished
       act(() => {
-        const endHandler = audioEventHandlers.get('ended');
-        if (endHandler) endHandler(new Event('ended'));
+        if (howlCallbacks.onend) howlCallbacks.onend();
       });
 
       // onFinished should not be called for cancelled request
@@ -223,12 +238,11 @@ describe('useTTS', () => {
 
       expect(result.current.status).toBe('idle');
       expect(result.current.currentText).toBeNull();
-      expect(mockAudio.pause).toHaveBeenCalled();
+      expect(mockHowlInstance.stop).toHaveBeenCalled();
 
       // Ending audio after cancel should not trigger onFinished
       act(() => {
-        const endHandler = audioEventHandlers.get('ended');
-        if (endHandler) endHandler(new Event('ended'));
+        if (howlCallbacks.onend) howlCallbacks.onend();
       });
 
       expect(onFinished).not.toHaveBeenCalled();
@@ -269,8 +283,7 @@ describe('useTTS', () => {
 
       // Simulate audio error
       act(() => {
-        const errorHandler = audioEventHandlers.get('error');
-        if (errorHandler) errorHandler(new Event('error'));
+        if (howlCallbacks.onplayerror) howlCallbacks.onplayerror(0, 'Audio playback error');
       });
 
       await waitFor(() => {
@@ -337,8 +350,7 @@ describe('useTTS', () => {
 
       // Simulate audio ending
       act(() => {
-        const endHandler = audioEventHandlers.get('ended');
-        if (endHandler) endHandler(new Event('ended'));
+        if (howlCallbacks.onend) howlCallbacks.onend();
       });
 
       await waitFor(() => {
