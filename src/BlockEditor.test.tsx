@@ -790,7 +790,6 @@ describe('BlockEditor', () => {
 
   describe('Non-editable Mode', () => {
     it('does not allow editing when editable is false', async () => {
-      const user = userEvent.setup();
       const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
