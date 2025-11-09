@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { Howl } from 'howler';
 
 /**
  * Fetches audio for a given text and language from the TTS API.
@@ -73,7 +74,7 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSResult {
     status: 'idle',
   });
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<Howl | null>(null);
   const currentRequestRef = useRef<{ text: string; language: string } | null>(null);
 
   // Use refs for callbacks to avoid stale closures
@@ -90,7 +91,8 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSResult {
    */
   const cancel = useCallback(() => {
     if (audioRef.current) {
-      audioRef.current.pause();
+      audioRef.current.stop();
+      audioRef.current.unload();
       audioRef.current = null;
     }
     currentRequestRef.current = null;
@@ -121,28 +123,38 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSResult {
           return;
         }
 
-        // Create and play audio
-        const audio = new Audio(audioUrl);
+        // Create and play audio using Howler (better iOS support)
+        const audio = new Howl({
+          src: [audioUrl],
+          html5: true, // Use HTML5 Audio for streaming
+          onend: () => {
+            // Only call callback if this request is still current
+            if (currentRequestRef.current === request) {
+              setState({ currentText: null, status: 'idle' });
+              onFinishedRef.current?.(text);
+            }
+          },
+          onloaderror: (_id, error) => {
+            // Only call callback if this request is still current
+            if (currentRequestRef.current === request) {
+              const errorMsg = typeof error === 'string' ? error : 'Audio load error';
+              setState({ currentText: null, status: 'error', errorMessage: errorMsg });
+              onErrorRef.current?.(errorMsg, text);
+            }
+          },
+          onplayerror: (_id, error) => {
+            // Only call callback if this request is still current
+            if (currentRequestRef.current === request) {
+              const errorMsg = typeof error === 'string' ? error : 'Audio playback error';
+              setState({ currentText: null, status: 'error', errorMessage: errorMsg });
+              onErrorRef.current?.(errorMsg, text);
+            }
+          },
+        });
         audioRef.current = audio;
 
-        audio.addEventListener('ended', () => {
-          // Only call callback if this request is still current
-          if (currentRequestRef.current === request) {
-            setState({ currentText: null, status: 'idle' });
-            onFinishedRef.current?.(text);
-          }
-        });
-
-        audio.addEventListener('error', () => {
-          // Only call callback if this request is still current
-          if (currentRequestRef.current === request) {
-            setState({ currentText: null, status: 'error', errorMessage: 'Audio playback error' });
-            onErrorRef.current?.('Audio playback error', text);
-          }
-        });
-
         setState({ currentText: text, status: 'playing' });
-        void audio.play();
+        audio.play();
       })
       .catch((error) => {
         // Only handle error if this request is still current
@@ -158,7 +170,8 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSResult {
   useEffect(() => {
     return () => {
       if (audioRef.current) {
-        audioRef.current.pause();
+        audioRef.current.stop();
+        audioRef.current.unload();
         audioRef.current = null;
       }
     };
