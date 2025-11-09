@@ -16,7 +16,7 @@ import {
   addBlockToYArray,
 } from './blockTypes';
 
-const SHOW_BUTTONS = false;
+const SHOW_BUTTONS = true;
 
 interface BlockEditorProps {
   yArray: Y.Array<Y.Map<any>>;
@@ -58,6 +58,7 @@ const BlockItem = memo(function BlockItem({
 }: BlockItemProps) {
   const [version, setVersion] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const bindingRef = useRef<TextAreaBinding | null>(null);
 
   // Find the Y.Map for this specific block
   const yMap = useMemo(() => {
@@ -76,12 +77,39 @@ const BlockItem = memo(function BlockItem({
     return () => yMap.unobserveDeep(observer);
   }, [yMap]);
 
+  // Auto-resize textarea to fit content
+  const autoResize = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // Reset height to auto to get the correct scrollHeight
+    textarea.style.height = 'auto';
+    // Set height to scrollHeight to fit content
+    textarea.style.height = textarea.scrollHeight + 'px';
+  }, []);
+
   // Focus management
   useEffect(() => {
     if (isFocused && textareaRef.current) {
       textareaRef.current.focus();
     }
   }, [isFocused]);
+
+  // Auto-resize when content changes
+  useEffect(() => {
+    if (!textareaRef.current || !yMap) return;
+
+    const yText = getBlockYText(yMap);
+    const observer = () => {
+      autoResize();
+    };
+
+    yText.observe(observer);
+    // Initial resize
+    autoResize();
+
+    return () => yText.unobserve(observer);
+  }, [yMap, autoResize]);
 
   if (!yMap) {
     return null; // Block was deleted
@@ -159,38 +187,44 @@ const BlockItem = memo(function BlockItem({
         {prefix}
       </button>
 
-      {/* Content */}
+      {/* Content - always show textarea for better selection */}
       <div className="flex-grow min-w-0">
-        {isFocused && editable ? (
-          <textarea
-            ref={(el) => {
-              if (!el) return;
-              textareaRef.current = el;
+        <textarea
+          key={blockId}
+          defaultValue={block.content}
+          ref={(el) => {
+            if (!el) {
+              // Cleanup: destroy binding when element is removed
+              if (bindingRef.current) {
+                bindingRef.current.destroy();
+                bindingRef.current = null;
+              }
+              textareaRef.current = null;
+              return;
+            }
 
-              const yText = getBlockYText(yMap);
-              const binding = new TextAreaBinding(yText, el);
+            // Store ref
+            textareaRef.current = el;
 
-              return () => binding.destroy();
-            }}
-            defaultValue={block.content}
-            onKeyDown={(e) => onKeyDown(e, block)}
-            onBlur={onBlur}
-            className={`w-full border-none outline-none resize-none ${
-              block.type === 'heading' ? 'font-bold text-lg' : ''
-            }`}
-            rows={1}
-            style={{ minHeight: '1.5rem' }}
-          />
-        ) : (
-          <div
-            onClick={() => editable && onFocus(blockId)}
-            className={`cursor-text ${block.type === 'heading' ? 'font-bold text-lg' : ''}`}
-          >
-            {block.content || (
-              <span className="text-gray-400 italic">Click to edit...</span>
-            )}
-          </div>
-        )}
+            // Create Yjs binding
+            const yText = getBlockYText(yMap);
+            if (bindingRef.current) {
+              bindingRef.current.destroy();
+            }
+            bindingRef.current = new TextAreaBinding(yText, el);
+
+            // Initial resize
+            autoResize();
+          }}
+          onKeyDown={(e) => editable && isFocused && onKeyDown(e, block)}
+          onFocus={() => editable && onFocus(blockId)}
+          onBlur={onBlur}
+          readOnly={!editable || !isFocused}
+          className={`w-full border-none outline-none resize-none overflow-hidden ${
+            block.type === 'heading' ? 'font-bold text-lg' : ''
+          } ${!isFocused ? 'cursor-text' : ''}`}
+          style={{ minHeight: '1.5rem' }}
+        />
       </div>
     </div>
   );
