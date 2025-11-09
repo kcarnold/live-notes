@@ -16,7 +16,7 @@ import {
   addBlockToYArray,
 } from './blockTypes';
 
-const SHOW_BUTTONS = true;
+const SHOW_BUTTONS = false;
 
 interface BlockEditorProps {
   yArray: Y.Array<Y.Map<any>>;
