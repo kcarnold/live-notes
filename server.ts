@@ -9,6 +9,8 @@ import pLimit from 'p-limit';
 import { DocumentManager } from '@y-sweet/sdk'
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
+import { PostHog } from 'posthog-node';
+
 import { translateBlock, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
 
@@ -21,10 +23,16 @@ function getEnvOrCrash(name: string): string {
   return value;
 }
 
+const phClient = new PostHog(
+  getEnvOrCrash('VITE_PUBLIC_POSTHOG_KEY'),
+  { host: getEnvOrCrash('VITE_PUBLIC_POSTHOG_HOST') }
+);
+
 const geminiProvider = new GeminiProvider({
   apiKey: getEnvOrCrash('GEMINI_API_KEY'),
   defaultModel: "gemini-2.0-flash-lite",
   maxTokens: 8192,
+  posthog: phClient
 });
 
 const documentManager = new DocumentManager(getEnvOrCrash("YSWEET_CONNECTION_STRING"));

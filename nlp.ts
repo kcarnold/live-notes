@@ -1,14 +1,17 @@
-import genAI from '@google/genai'; 
+import { GoogleGenAI } from '@posthog/ai'; 
+import genAI from '@google/genai'; // for types
+import { PostHog } from 'posthog-node';
 
 export class GeminiProvider {
-  apiClient: genAI.GoogleGenAI;
+  apiClient: GoogleGenAI;
   defaultModel: string;
   maxTokens: number;
   
 
-  constructor({ apiKey, defaultModel, maxTokens }: { apiKey: string, defaultModel: string, maxTokens: number }) {
-    this.apiClient = new genAI.GoogleGenAI({
-      apiKey: apiKey
+  constructor({ apiKey, defaultModel, maxTokens, posthog }: { apiKey: string, defaultModel: string, maxTokens: number, posthog: PostHog }) {
+    this.apiClient = new GoogleGenAI({
+      apiKey: apiKey,
+      posthog: posthog
     });
     this.defaultModel = defaultModel;
     this.maxTokens = maxTokens;
