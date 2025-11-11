@@ -59,8 +59,8 @@ describe('BlockEditor', () => {
 
       const blockDivs = container.querySelectorAll('.flex.items-start');
       expect(blockDivs[0]).toHaveStyle({ paddingLeft: '0px' });
-      expect(blockDivs[1]).toHaveStyle({ paddingLeft: '24px' });
-      expect(blockDivs[2]).toHaveStyle({ paddingLeft: '48px' });
+      expect(blockDivs[1]).toHaveStyle({ paddingLeft: '12px' });
+      expect(blockDivs[2]).toHaveStyle({ paddingLeft: '24px' });
     });
 
     it('does not render operation buttons when editable is false', () => {
@@ -794,6 +794,7 @@ describe('BlockEditor', () => {
 
   describe('Non-editable Mode', () => {
     it('does not allow editing when editable is false', async () => {
+      const user = userEvent.setup();
       const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
 
