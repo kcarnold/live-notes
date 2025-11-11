@@ -28,6 +28,7 @@
     "howler": "^2.2.4",
     "jotai": "^2.12.4",
     "p-limit": "^7.1.1",
+    "posthog-js": "^1.290.0",
     "prosemirror-example-setup": "^1.2.3",
     "prosemirror-markdown": "^1.13.1",
     "prosemirror-model": "^1.25.1",
