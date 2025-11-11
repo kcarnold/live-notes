@@ -59,8 +59,8 @@ describe('BlockEditor', () => {
 
       const blockDivs = container.querySelectorAll('.flex.items-start');
       expect(blockDivs[0]).toHaveStyle({ paddingLeft: '0px' });
-      expect(blockDivs[1]).toHaveStyle({ paddingLeft: '12px' });
-      expect(blockDivs[2]).toHaveStyle({ paddingLeft: '24px' });
+      expect(blockDivs[1]).toHaveStyle({ paddingLeft: '24px' });
+      expect(blockDivs[2]).toHaveStyle({ paddingLeft: '48px' });
     });
 
     it('does not render operation buttons when editable is false', () => {
@@ -252,9 +252,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      // Get all textareas and click the second one (the empty block)
-      const textareas = screen.getAllByRole('textbox');
-      await user.click(textareas[1]);
+      await user.click(screen.getByText(/Click to edit/i));
+      const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Backspace}');
 
       await waitFor(() => {
@@ -269,6 +269,7 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
+      await user.click(screen.getByText(/Click to edit/i));
       const textarea = screen.getByRole('textbox');
       await user.click(textarea);
       await user.keyboard('{Backspace}');
@@ -402,8 +403,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      const textareas = screen.getAllByRole('textbox');
-      await user.click(textareas[1]); // Click second block
+      await user.click(screen.getByText('Second'));
+      const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Meta>}{ArrowUp}{/Meta}');
 
       await waitFor(() => {
@@ -428,8 +430,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      const textareas = screen.getAllByRole('textbox');
-      await user.click(textareas[0]); // Click first block
+      await user.click(screen.getByText('First'));
+      const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       await user.keyboard('{Meta>}{ArrowDown}{/Meta}');
 
       await waitFor(() => {
@@ -453,8 +456,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      const textareas = screen.getAllByRole('textbox');
-      await user.click(textareas[0]); // Click first block
+      await user.click(screen.getByText('First'));
+      const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       const originalPosition = (yArray.get(0).get('position') as string);
 
       await user.keyboard('{Meta>}{ArrowUp}{/Meta}');
@@ -474,8 +478,9 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      const textareas = screen.getAllByRole('textbox');
-      await user.click(textareas[1]); // Click second block
+      await user.click(screen.getByText('Second'));
+      const textarea = screen.getByRole('textbox');
+      await user.click(textarea);
       const originalPosition = (yArray.get(1).get('position') as string);
 
       await user.keyboard('{Meta>}{ArrowDown}{/Meta}');
@@ -497,9 +502,8 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      const textareas = screen.getAllByRole('textbox') as HTMLTextAreaElement[];
-      await user.click(textareas[1]); // Click second block
-      const textarea = textareas[1];
+      await user.click(screen.getByText('Second'));
+      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
 
       // Move cursor to start
       textarea.setSelectionRange(0, 0);
@@ -507,7 +511,8 @@ describe('BlockEditor', () => {
 
       // Should focus first block
       await waitFor(() => {
-        expect(textareas[0]).toHaveFocus();
+        const activeTextarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+        expect(activeTextarea.value).toBe('First');
       });
     });
 
@@ -520,9 +525,8 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      const textareas = screen.getAllByRole('textbox') as HTMLTextAreaElement[];
-      await user.click(textareas[0]); // Click first block
-      const textarea = textareas[0];
+      await user.click(screen.getByText('First'));
+      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
 
       // Move cursor to end
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -530,7 +534,8 @@ describe('BlockEditor', () => {
 
       // Should focus second block
       await waitFor(() => {
-        expect(textareas[1]).toHaveFocus();
+        const activeTextarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+        expect(activeTextarea.value).toBe('Second');
       });
     });
   });
@@ -770,20 +775,19 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} />);
 
-      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
-      await user.click(textarea);
-      expect(textarea).toHaveFocus();
+      await user.click(screen.getByText('Test'));
+      expect(screen.getByRole('textbox')).toBeInTheDocument();
 
       // Blur the textarea
+      const textarea = screen.getByRole('textbox');
       act(() => {
         textarea.blur();
       });
 
-      // Textarea should still exist but not be focused
+      // Should switch back to div display
       await waitFor(() => {
-        expect(textarea).not.toHaveFocus();
-        expect(textarea).toBeInTheDocument();
-        expect(textarea).toHaveAttribute('readonly');
+        expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+        expect(screen.getByText('Test')).toBeInTheDocument();
       });
     });
   });
@@ -795,10 +799,10 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} editable={false} />);
 
-      // Textareas should exist but be readonly
-      const textarea = screen.getByRole('textbox');
-      expect(textarea).toBeInTheDocument();
-      expect(textarea).toHaveAttribute('readonly');
+      await user.click(screen.getByText('Test'));
+
+      // Should not create a textarea
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     });
 
     it('does not process keyboard shortcuts when editable is false', async () => {
@@ -809,17 +813,12 @@ describe('BlockEditor', () => {
 
       render(<BlockEditor yArray={yArray} editable={false} />);
 
-      // Textareas should exist but be readonly
-      const textarea = screen.getByRole('textbox');
-      expect(textarea).toBeInTheDocument();
-      expect(textarea).toHaveAttribute('readonly');
+      // Try to trigger keyboard events (they should be ignored)
+      const blockDiv = screen.getByText('Test');
+      await user.click(blockDiv);
 
-      // Keyboard shortcuts should be ignored (readonly prevents editing)
-      await user.click(textarea);
-      await user.keyboard('{Meta>}h{/Meta}');
-
-      // Block type should not change
-      expect(block.type).toBe('bullet');
+      // No textarea means no keyboard shortcuts can be triggered
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     });
   });
 

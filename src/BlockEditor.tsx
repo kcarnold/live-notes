@@ -58,7 +58,6 @@ const BlockItem = memo(function BlockItem({
 }: BlockItemProps) {
   const [version, setVersion] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const bindingRef = useRef<TextAreaBinding | null>(null);
 
   // Find the Y.Map for this specific block
   const yMap = useMemo(() => {
@@ -94,22 +93,6 @@ const BlockItem = memo(function BlockItem({
       textareaRef.current.focus();
     }
   }, [isFocused]);
-
-  // Auto-resize when content changes
-  useEffect(() => {
-    if (!textareaRef.current || !yMap) return;
-
-    const yText = getBlockYText(yMap);
-    const observer = () => {
-      autoResize();
-    };
-
-    yText.observe(observer);
-    // Initial resize
-    autoResize();
-
-    return () => yText.unobserve(observer);
-  }, [yMap, autoResize]);
 
   if (!yMap) {
     return null; // Block was deleted
@@ -187,43 +170,40 @@ const BlockItem = memo(function BlockItem({
         {prefix}
       </button>
 
-      {/* Content - always show textarea for better selection */}
+      {/* Content */}
       <div className="flex-grow min-w-0">
-        <textarea
-          key={blockId}
-          defaultValue={block.content}
-          ref={(el) => {
-            if (!el) {
-              // Cleanup: destroy binding when element is removed
-              if (bindingRef.current) {
-                bindingRef.current.destroy();
-                bindingRef.current = null;
-              }
-              textareaRef.current = null;
-              return;
-            }
+        {isFocused && editable ? (
+          <textarea
+            ref={(el) => {
+              if (!el) return;
+              textareaRef.current = el;
 
-            // Store ref
-            textareaRef.current = el;
+              const yText = getBlockYText(yMap);
+              const binding = new TextAreaBinding(yText, el);
 
-            // Create Yjs binding
-            const yText = getBlockYText(yMap);
-            if (bindingRef.current) {
-              bindingRef.current.destroy();
-            }
-            bindingRef.current = new TextAreaBinding(yText, el);
-
-            // Initial resize
-            autoResize();
-          }}
-          onKeyDown={(e) => editable && isFocused && onKeyDown(e, block)}
-          onFocus={() => editable && onFocus(blockId)}
-          onBlur={onBlur}
-          readOnly={!editable || !isFocused}
-          className={`w-full border-none outline-none resize-none overflow-hidden ${
-            block.type === 'heading' ? 'font-bold text-lg' : ''
-          } ${!isFocused ? 'cursor-text' : ''}`}
-        />
+              // Initial resize
+              autoResize();
+              return () => binding.destroy();
+            }}
+            defaultValue={block.content}
+            onKeyDown={(e) => onKeyDown(e, block)}
+            onBlur={onBlur}
+            className={`w-full border-none outline-none resize-none ${
+              block.type === 'heading' ? 'font-bold text-lg' : ''
+            }`}
+            rows={1}
+            style={{ minHeight: '1.5rem' }}
+          />
+        ) : (
+          <div
+            onClick={() => editable && onFocus(blockId)}
+            className={`cursor-text ${block.type === 'heading' ? 'font-bold text-lg' : ''}`}
+          >
+            {block.content || (
+              <span className="text-gray-400 italic">Click to edit...</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
