@@ -19,6 +19,11 @@ import { ClientToken } from "@y-sweet/sdk";
 import SlidesPlayer from "./SlidesPlayer";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import ProseMirrorEditor from "./ProseMirrorEditor";
+import posthog from "posthog-js";
+
+const logError = (error: Error, info: { componentStack: string }) => {
+  posthog.captureException(error, info);
+}
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -296,7 +301,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
 
   // Function to render a component based on its string identifier
   const renderComponent = (componentStr: string, key: string, rowIdx: number, colIdx: number) => {
-    return <ErrorBoundary key={key} fallback={<div>Error loading component {componentStr}</div>}>
+    return <ErrorBoundary key={key} fallback={<div>Error loading component {componentStr}</div>} onError={logError}>
       {renderComponentInner(componentStr, key, rowIdx, colIdx)}
     </ErrorBoundary>;
   }
