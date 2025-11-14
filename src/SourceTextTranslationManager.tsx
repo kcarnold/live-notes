@@ -21,7 +21,6 @@ export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
     doResetTranslations,
   } = useBlockTranslationManager({
     languages,
-    translationCacheName: "notesTranslationCache",
   });
 
   const doTranslationsSync = useCallback(() => {
