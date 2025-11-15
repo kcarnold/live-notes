@@ -432,14 +432,17 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         const beforeCursor = block.content.substring(0, cursorPos);
         const afterCursor = block.content.substring(cursorPos);
 
-        // Update current block with content before cursor
-        updateBlock(block.id, { content: beforeCursor });
+        // Wrap both operations in a transaction for atomicity
+        yArray.doc?.transact(() => {
+          // Update current block with content before cursor
+          updateBlock(block.id, { content: beforeCursor });
 
-        // Create new block with content after cursor
-        const newType = block.type === 'heading' ? 'bullet' : block.type;
-        const newLevel = block.type === 'heading' ? 0 : block.level;
+          // Create new block with content after cursor
+          const newType = block.type === 'heading' ? 'bullet' : block.type;
+          const newLevel = block.type === 'heading' ? 0 : block.level;
 
-        insertBlockAfter(block.id, afterCursor, newType, newLevel);
+          insertBlockAfter(block.id, afterCursor, newType, newLevel);
+        });
       }
       // Backspace at start: merge with previous block
       else if (e.key === 'Backspace' && isAtStart && block.content === '') {
