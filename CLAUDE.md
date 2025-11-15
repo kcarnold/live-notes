@@ -75,21 +75,50 @@ The app uses **Yjs** for real-time collaborative state management:
 3. **Key shared data structures**:
    - `transcriptDoc` (XmlFragment): Live transcription from speech
    - `prosemirror` (XmlFragment): User-edited source text for translation
-   - `translatedText-{language}` (Y.Text): Translated output for each language
+   - `sourceBlocks` (Y.Array<Y.Map>): Structured blocks containing content and translations
    - `meta` (Y.Map): Metadata like video visibility settings
-   - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
+
+### Block Structure
+
+Each block in `sourceBlocks` is a Y.Map containing:
+
+```typescript
+interface Block {
+  id: string;              // Unique block identifier
+  content: string;         // Source text (Y.Text)
+  type: BlockType;         // 'bullet' | 'heading'
+  level: number;           // Indentation level (0-based)
+  position: string;        // Fractional index for stable ordering
+  translations: Record<string, string>;        // language -> translated text (Y.Text stored as `translation-{lang}`)
+  translationSources: Record<string, string>;  // language -> source snapshot (stored as `translationSource-{lang}`)
+}
+```
+
+**Key features**:
+- Translations are stored **directly in each block** (no separate documents)
+- **Source snapshots** detect when content changes after translation
+- Blocks are sorted by `position` using fractional indexing for stable ordering
+- All blocks use Y.Text for collaborative editing of content and translations
 
 ### Translation Pipeline
 
-The translation system is sophisticated with caching and incremental updates:
+The translation system uses a **block-based approach** with staleness detection:
 
-1. **Chunking** ([translationUtils.ts:53-90](translationUtils.ts#L53-L90)): Source text is split into chunks (lines), with whitespace handling
-2. **Decomposition** ([translationUtils.ts:30-42](translationUtils.ts#L30-L42)): Each chunk is decomposed into `format` (markdown syntax), `content`, and `trailingWhitespace`
-3. **Cache lookup** ([translationUtils.ts:112-164](translationUtils.ts#L112-L164)): Check which chunks need translation using `translationCache`
-4. **Context provision**: Untranslated chunks get 3 lines of context from already-translated chunks
-5. **Batch translation** ([server.ts:76-90](server.ts#L76-L90)): Server endpoint processes batches via Gemini
-6. **Cache update** ([translationUtils.ts:166-185](translationUtils.ts#L166-L185)): New translations are cached in the shared Y.Map
-7. **Reconstruction** ([translationUtils.ts:187-204](translationUtils.ts#L187-L204)): Final text is reassembled from cached translations with original formatting
+1. **Block collection** ([useBlockTranslationManager.ts](src/useBlockTranslationManager.ts)): Convert Y.Array blocks to translation input, sorted by position
+2. **Staleness detection** ([translationUtils.ts:267-292](translationUtils.ts#L267-L292)): Check each block's translation status:
+   - No translation exists → needs translation
+   - Translation exists but no source snapshot → needs translation (legacy data)
+   - Content differs from snapshot → needs re-translation
+   - Content matches snapshot → skip (translation is current)
+3. **Context provision**: Untranslated blocks get 3 lines of context from already-translated blocks
+4. **Batch translation** ([server.ts:76-90](server.ts#L76-L90)): Server endpoint processes batches via Gemini
+5. **Atomic storage** ([useBlockTranslationManager.ts:42-60](src/useBlockTranslationManager.ts#L42-L60)): Store translation AND source snapshot together in block's Y.Map
+
+**No cache needed**: Blocks are the single source of truth. Duplicate content may translate multiple times, but API costs are negligible and context differs anyway.
+
+**Migration from old documents**: Documents created before this refactoring may have:
+- Old `translatedText-{language}` Y.Text docs (ignored, harmless)
+- Blocks without `translationSource` snapshots (treated as stale, will re-translate on first click)
 
 ### Auto-TTS System
 
@@ -200,13 +229,17 @@ The app has two modes determined by URL hash (`#editor`):
 ### Frontend Core
 - [App.tsx](src/App.tsx) - Main React app with routing and layout system
 - [ProseMirrorEditor.tsx](src/ProseMirrorEditor.tsx) - Collaborative rich text editor
-- [translationUtils.ts](src/translationUtils.ts) - Translation pipeline logic (chunking, caching, reconstruction)
+- [blockTypes.ts](src/blockTypes.ts) - Block data structure and type definitions
+- [translationUtils.ts](src/translationUtils.ts) - Translation pipeline logic (block-based and legacy markdown-based functions)
 - [yjsUtils.ts](src/yjsUtils.ts) - Yjs utility functions and React hooks
 
 ### Components
 - [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
 - [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - Web Speech API integration for live transcription
-- [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer for translated output with TTS controls
+- [BlockEditor.tsx](src/BlockEditor.tsx) - Collaborative block editor with ProseMirror integration
+- [BlockViewer.tsx](src/BlockViewer.tsx) - Direct block rendering (headings, bullets) without Markdown parsing
+- [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Block viewer for translations with TTS controls
+- [useBlockTranslationManager.ts](src/useBlockTranslationManager.ts) - React hook for managing block translations
 
 ### Auto-TTS System
 - [useAutoTTS.ts](src/useAutoTTS.ts) - React hook integrating reducer with audio playback
@@ -235,12 +268,20 @@ const fragment = ydoc.getXmlFragment('prosemirror');
 // Modified via y-prosemirror plugin
 ```
 
-### Translation Cache Keys
+### Block Translation Updates
 
-Translation cache keys combine language and content ([translationUtils.ts:106-110](translationUtils.ts#L106-L110)):
+When updating block translations, always store both the translation AND the source snapshot atomically:
+
 ```typescript
-translationCacheKey(language, chunkText) // Returns "{language}:{chunkText}"
+// Store translation
+const translationYText = getBlockTranslationYText(yMap, language);
+setYTextFromString(translationYText, translatedText);
+
+// Store source snapshot (what content was translated)
+setBlockTranslationSource(yMap, language, currentContent);
 ```
+
+This ensures staleness detection works correctly - if the block content changes later, the system will detect that `content !== translationSource` and re-translate.
 
 ### Reducer-Based State Management
 
