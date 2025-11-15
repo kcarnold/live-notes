@@ -1,3 +1,4 @@
+// ===== Shared utility functions =====
 
 export function findContiguousBlocks(arr: any[]) {
     const blocks = [];
@@ -20,6 +21,10 @@ export function findContiguousBlocks(arr: any[]) {
 
     return blocks;
 }
+
+// ===== Legacy markdown-based translation (deprecated) =====
+// The following functions are from the old markdown-based translation system.
+// They are kept for backward compatibility but new code should use block-based functions.
 
 export interface DecomposedChunk {
     format: string;
@@ -271,8 +276,14 @@ export function getBlockTranslationTodos(
         // No translation exists = need to translate
         if (!block.existingTranslation) return 1;
 
+        // Translation exists but no source snapshot = treat as stale (legacy data)
+        // This handles old blocks from before we tracked source snapshots
+        if (block.translationSource === undefined) {
+            return 1;
+        }
+
         // Translation exists but content has changed = need to re-translate
-        if (block.translationSource !== undefined && block.content !== block.translationSource) {
+        if (block.content !== block.translationSource) {
             return 1;
         }
 
@@ -360,21 +371,36 @@ export async function getUpdatedBlockTranslations(
     }
 
     // Build map of blockId -> translated text from server response
+    // The server returns results in the same order as our todos, so we can match by position
     const translations = new Map<string, string>();
     const translationResults = result.results as { sourceText: string; translatedText: string; language: string}[][];
 
-    let blockIndex = 0;
+    let globalBlockIndex = 0;
     for (const todoResults of translationResults) {
         for (const translationResult of todoResults) {
-            // Find the block with this source text
-            while (blockIndex < blocks.length) {
-                const block = blocks[blockIndex];
+            // Find the next block that needs translation
+            while (globalBlockIndex < blocks.length) {
+                const block = blocks[globalBlockIndex];
+                globalBlockIndex++;
+
+                // Match by content to validate server response
                 if (block.content === translationResult.sourceText) {
                     translations.set(block.blockId, translationResult.translatedText.trim());
-                    blockIndex++;
                     break;
+                } else {
+                    // Server returned unexpected content - log warning but continue
+                    console.warn('Translation mismatch:', {
+                        expected: block.content,
+                        got: translationResult.sourceText,
+                        blockId: block.blockId
+                    });
+                    // Try to find matching block (handles duplicate content case)
+                    const matchingBlock = blocks.find(b => b.content === translationResult.sourceText);
+                    if (matchingBlock) {
+                        translations.set(matchingBlock.blockId, translationResult.translatedText.trim());
+                        break;
+                    }
                 }
-                blockIndex++;
             }
         }
     }
