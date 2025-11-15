@@ -242,6 +242,7 @@ export interface BlockTranslationInput {
     blockId: string;
     content: string;
     existingTranslation?: string; // Current translation if it exists
+    translationSource?: string; // Source content snapshot from when translation was created
 }
 
 export interface BlockTranslationTodo {
@@ -254,7 +255,9 @@ export interface BlockTranslationTodo {
  * Get translation todos for blocks (without cache)
  *
  * Checks each block's existing translation to determine what needs translating.
- * Context matters for quality, so we may re-translate even if content is duplicated.
+ * Translation is needed if:
+ * - Block has no translation, OR
+ * - Block content has changed since translation (content !== translationSource)
  */
 export function getBlockTranslationTodos(
     language: string,
@@ -262,8 +265,19 @@ export function getBlockTranslationTodos(
 ): BlockTranslationTodo[] {
     // Determine which blocks need translation
     const blockStatus = blocks.map((block) => {
-        // Empty content or already has translation = don't translate
-        return (block.content === "" || block.existingTranslation) ? 0 : 1;
+        // Skip empty blocks
+        if (block.content === "") return 0;
+
+        // No translation exists = need to translate
+        if (!block.existingTranslation) return 1;
+
+        // Translation exists but content has changed = need to re-translate
+        if (block.translationSource !== undefined && block.content !== block.translationSource) {
+            return 1;
+        }
+
+        // Translation exists and content hasn't changed = don't translate
+        return 0;
     });
 
     // Mark a few lines before each "need to translate" block as "context"

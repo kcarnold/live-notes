@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { useYDoc } from '@y-sweet/react';
 import * as Y from 'yjs';
 import { getUpdatedBlockTranslations } from './translationUtils';
-import { yMapToBlock, getBlockTranslationYText, compareBlockPositions } from './blockTypes';
+import { yMapToBlock, getBlockTranslationYText, compareBlockPositions, setBlockTranslationSource } from './blockTypes';
 import { setYTextFromString } from './yjsUtils';
 
 export function useBlockTranslationManager({
@@ -27,7 +27,8 @@ export function useBlockTranslationManager({
         .map((block) => ({
           blockId: block.id,
           content: block.content,
-          existingTranslation: block.translations[language], // Pass existing translation
+          existingTranslation: block.translations[language],
+          translationSource: block.translationSources[language], // Pass source snapshot
         }));
 
       if (blocks.length === 0) {
@@ -37,14 +38,23 @@ export function useBlockTranslationManager({
 
       const translations = await getUpdatedBlockTranslations(language, blocks);
 
-      // Update each block's translation in its yMap
+      // Update each block's translation AND source snapshot in its yMap
       ydoc.transact(() => {
         sourceBlocks.forEach((yMap: Y.Map<any>) => {
           const blockId = yMap.get('id') as string;
           const translatedText = translations.get(blockId);
           if (translatedText !== undefined) {
+            // Get current content from the yMap
+            const contentYText = yMap.get('content') as Y.Text;
+            // eslint-disable-next-line @typescript-eslint/no-base-to-string
+            const currentContent = contentYText ? contentYText.toString() : '';
+
+            // Store the translation
             const translationYText = getBlockTranslationYText(yMap, language);
             setYTextFromString(translationYText, translatedText);
+
+            // Store the source snapshot (what content was translated)
+            setBlockTranslationSource(yMap, language, currentContent);
           }
         });
       });
@@ -69,9 +79,15 @@ export function useBlockTranslationManager({
     ydoc.transact(() => {
       sourceBlocks.forEach((yMap: Y.Map<any>) => {
         for (const lang of languages) {
-          const key = `translation-${lang}`;
-          if (yMap.has(key)) {
-            yMap.delete(key);
+          // Delete translation
+          const translationKey = `translation-${lang}`;
+          if (yMap.has(translationKey)) {
+            yMap.delete(translationKey);
+          }
+          // Delete source snapshot
+          const sourceKey = `translationSource-${lang}`;
+          if (yMap.has(sourceKey)) {
+            yMap.delete(sourceKey);
           }
         }
       });
