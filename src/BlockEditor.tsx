@@ -16,7 +16,7 @@ import {
   addBlockToYArray,
 } from './blockTypes';
 
-const SHOW_BUTTONS = true;
+const SHOW_BUTTONS = false;
 
 interface BlockEditorProps {
   yArray: Y.Array<Y.Map<any>>;
@@ -501,7 +501,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         }
       }
     },
-    [editable, sortedBlockIds, updateBlock, insertBlockAfter, deleteBlock, indent, dedent, toggleHeading, moveBlock, onTranslationTrigger, yArray]
+    [editable, sortedBlockIds, updateBlock, insertBlockAfter, deleteBlock, indent, dedent, toggleHeading, moveBlock, onTranslationTrigger, yArray.doc]
   );
 
   return (
