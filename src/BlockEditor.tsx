@@ -432,14 +432,24 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         const beforeCursor = block.content.substring(0, cursorPos);
         const afterCursor = block.content.substring(cursorPos);
 
-        // Update current block with content before cursor
-        updateBlock(block.id, { content: beforeCursor });
+        const performSplit = () => {
+          // Update current block with content before cursor
+          updateBlock(block.id, { content: beforeCursor });
 
-        // Create new block with content after cursor
-        const newType = block.type === 'heading' ? 'bullet' : block.type;
-        const newLevel = block.type === 'heading' ? 0 : block.level;
+          // Create new block with content after cursor
+          const newType = block.type === 'heading' ? 'bullet' : block.type;
+          const newLevel = block.type === 'heading' ? 0 : block.level;
 
-        insertBlockAfter(block.id, afterCursor, newType, newLevel);
+          insertBlockAfter(block.id, afterCursor, newType, newLevel);
+        };
+
+        // Wrap both operations in a transaction for atomicity
+        if (yArray.doc) {
+          yArray.doc.transact(performSplit);
+        } else {
+          console.warn('BlockEditor: yArray not attached to document, split operation will not be atomic');
+          performSplit();
+        }
       }
       // Backspace at start: merge with previous block
       else if (e.key === 'Backspace' && isAtStart && block.content === '') {

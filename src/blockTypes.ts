@@ -78,38 +78,53 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
 /**
  * Update a Y.Map with block data
  * Note: content updates should go through the Y.Text directly, not this function
+ *
+ * All updates are wrapped in a transaction to ensure atomicity when multiple
+ * fields are updated simultaneously.
  */
 export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
-  if (block.id !== undefined) yMap.set('id', block.id);
-  if (block.content !== undefined) {
-    // Initialize or replace content as Y.Text
-    let yText = yMap.get('content') as Y.Text | undefined;
-    const isNewYText = !yText;
-    if (!yText) {
-      yText = new Y.Text();
-      yMap.set('content', yText);
-    }
+  const doc = yMap.doc;
 
-    if (isNewYText) {
-      // Newly created Y.Text - just insert content directly
-      // Don't read from it (toString) until it's attached to a doc
-      if (block.content) {
-        yText.insert(0, block.content);
+  const performUpdates = () => {
+    if (block.id !== undefined) yMap.set('id', block.id);
+    if (block.content !== undefined) {
+      // Initialize or replace content as Y.Text
+      let yText = yMap.get('content') as Y.Text | undefined;
+      const isNewYText = !yText;
+      if (!yText) {
+        yText = new Y.Text();
+        yMap.set('content', yText);
       }
-    } else {
-      // Existing Y.Text - update it using diff-based approach
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      const currentText = yText.toString();
-      if (currentText !== block.content) {
-        setYTextFromString(yText, block.content);
+
+      if (isNewYText) {
+        // Newly created Y.Text - just insert content directly
+        // Don't read from it (toString) until it's attached to a doc
+        if (block.content) {
+          yText.insert(0, block.content);
+        }
+      } else {
+        // Existing Y.Text - update it using diff-based approach
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
+        const currentText = yText.toString();
+        if (currentText !== block.content) {
+          setYTextFromString(yText, block.content);
+        }
       }
     }
+    if (block.type !== undefined) yMap.set('type', block.type);
+    if (block.level !== undefined) {
+      yMap.set('level', Math.min(Math.max(0, block.level), MAX_INDENT_LEVEL));
+    }
+    if (block.position !== undefined) yMap.set('position', block.position);
+  };
+
+  // Wrap all updates in a transaction if attached to a document
+  if (doc) {
+    doc.transact(performUpdates);
+  } else {
+    // If not attached to a doc yet, just perform updates directly
+    performUpdates();
   }
-  if (block.type !== undefined) yMap.set('type', block.type);
-  if (block.level !== undefined) {
-    yMap.set('level', Math.min(Math.max(0, block.level), MAX_INDENT_LEVEL));
-  }
-  if (block.position !== undefined) yMap.set('position', block.position);
 }
 
 /**
