@@ -1,3 +1,4 @@
+// ===== Shared utility functions =====
 
 export function findContiguousBlocks(arr: any[]) {
     const blocks = [];
@@ -20,6 +21,10 @@ export function findContiguousBlocks(arr: any[]) {
 
     return blocks;
 }
+
+// ===== Legacy markdown-based translation (deprecated) =====
+// The following functions are from the old markdown-based translation system.
+// They are kept for backward compatibility but new code should use block-based functions.
 
 export interface DecomposedChunk {
     format: string;
@@ -235,3 +240,170 @@ export async function getUpdatedTranslation(language: string, translationCache: 
 }
 
 export const translatedTextKeyForLanguage = (language: string) => `translatedText-${language}`;
+
+// ===== Block-based translation functions =====
+
+export interface BlockTranslationInput {
+    blockId: string;
+    content: string;
+    existingTranslation?: string; // Current translation if it exists
+    translationSource?: string; // Source content snapshot from when translation was created
+}
+
+export interface BlockTranslationTodo {
+    blocks: BlockTranslationInput[];
+    isTranslationNeeded: boolean[];
+    translatedContext: string;
+}
+
+/**
+ * Get translation todos for blocks (without cache)
+ *
+ * Checks each block's existing translation to determine what needs translating.
+ * Translation is needed if:
+ * - Block has no translation, OR
+ * - Block content has changed since translation (content !== translationSource)
+ */
+export function getBlockTranslationTodos(
+    language: string,
+    blocks: BlockTranslationInput[]
+): BlockTranslationTodo[] {
+    // Determine which blocks need translation
+    const blockStatus = blocks.map((block) => {
+        // Skip empty blocks
+        if (block.content === "") return 0;
+
+        // No translation exists = need to translate
+        if (!block.existingTranslation) return 1;
+
+        // Translation exists but no source snapshot = treat as stale (legacy data)
+        // This handles old blocks from before we tracked source snapshots
+        if (block.translationSource === undefined) {
+            return 1;
+        }
+
+        // Translation exists but content has changed = need to re-translate
+        if (block.content !== block.translationSource) {
+            return 1;
+        }
+
+        // Translation exists and content hasn't changed = don't translate
+        return 0;
+    });
+
+    // Mark a few lines before each "need to translate" block as "context"
+    for (let i = 0; i < blockStatus.length; i++) {
+        if (blockStatus[i] === 1) {
+            for (let j = 1; j <= 3; j++) {
+                if (i - j >= 0 && blockStatus[i - j] === 0) {
+                    // @ts-ignore
+                    blockStatus[i - j] = 2;
+                }
+            }
+        }
+    }
+
+    // Create contiguous blocks of text to translate
+    const translationTodoBlocks = findContiguousBlocks(blockStatus);
+
+    const translationTodos: BlockTranslationTodo[] = [];
+    for (const block of translationTodoBlocks) {
+        const [start, end] = block;
+        const blocksInContext = blocks.slice(start, end + 1);
+        const statusesInContext = blockStatus.slice(start, end + 1);
+
+        // Build translated context from already-translated blocks
+        const translatedContext = blocksInContext.map((block) => {
+            return block.existingTranslation || '';
+        }).join('\n');
+
+        const isTranslationNeeded = statusesInContext.map(x => x === 1);
+
+        translationTodos.push({
+            blocks: blocksInContext,
+            isTranslationNeeded,
+            translatedContext,
+        });
+    }
+
+    return translationTodos;
+}
+
+/**
+ * Get updated block translations (no cache needed)
+ */
+export async function getUpdatedBlockTranslations(
+    language: string,
+    blocks: BlockTranslationInput[]
+): Promise<Map<string, string>> {
+    const translationTodos = getBlockTranslationTodos(language, blocks);
+
+    if (translationTodos.length === 0) {
+        return new Map();
+    }
+
+    // Convert block todos to the format expected by the server
+    const serverTodos = translationTodos.map(todo => ({
+        chunks: todo.blocks.map(b => b.content),
+        offset: 0, // Not used for block-based translation
+        isTranslationNeeded: todo.isTranslationNeeded,
+        translatedContext: todo.translatedContext,
+    }));
+
+    const response = await fetch('/api/requestTranslatedBlocks', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            translationTodos: serverTodos,
+            language: language,
+        }),
+    });
+
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result?.ok) {
+        if (result?.error) {
+            throw new Error(`Translation error (${response.status}): ${result.error}`);
+        } else {
+            throw new Error(`Translation error (${response.status}): ${response.statusText}`);
+        }
+    }
+
+    // Build map of blockId -> translated text from server response
+    // The server returns results in the same order as our todos, so we can match by position
+    const translations = new Map<string, string>();
+    const translationResults = result.results as { sourceText: string; translatedText: string; language: string}[][];
+
+    let globalBlockIndex = 0;
+    for (const todoResults of translationResults) {
+        for (const translationResult of todoResults) {
+            // Find the next block that needs translation
+            while (globalBlockIndex < blocks.length) {
+                const block = blocks[globalBlockIndex];
+                globalBlockIndex++;
+
+                // Match by content to validate server response
+                if (block.content === translationResult.sourceText) {
+                    translations.set(block.blockId, translationResult.translatedText.trim());
+                    break;
+                } else {
+                    // Server returned unexpected content - log warning but continue
+                    console.warn('Translation mismatch:', {
+                        expected: block.content,
+                        got: translationResult.sourceText,
+                        blockId: block.blockId
+                    });
+                    // Try to find matching block (handles duplicate content case)
+                    const matchingBlock = blocks.find(b => b.content === translationResult.sourceText);
+                    if (matchingBlock) {
+                        translations.set(matchingBlock.blockId, translationResult.translatedText.trim());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return translations;
+}

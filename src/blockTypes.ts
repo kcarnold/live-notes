@@ -11,6 +11,8 @@ export interface Block {
   type: BlockType;
   level: number; // 0-5 for indentation
   position: string; // Fractional index for stable ordering
+  translations: Record<string, string>; // language -> translated content (stored as Y.Text in Y.Map)
+  translationSources: Record<string, string>; // language -> source content snapshot at translation time
 }
 
 export const MAX_INDENT_LEVEL = 5;
@@ -24,7 +26,7 @@ export function createBlock(
   level = 0,
   position: string
 ): Block {
-  if (!position) { 
+  if (!position) {
     throw new Error('Position is required to create a block');
   }
   return {
@@ -33,6 +35,8 @@ export function createBlock(
     type,
     level: Math.min(Math.max(0, level), MAX_INDENT_LEVEL),
     position,
+    translations: {},
+    translationSources: {},
   };
 }
 
@@ -65,6 +69,25 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
     //throw new Error('[yMapToBlock] Missing required fields in Y.Map');
   }
 
+  // Extract translations from Y.Map (keys like "translation-French")
+  const translations: Record<string, string> = {};
+  const translationSources: Record<string, string> = {};
+
+  yMap.forEach((value: any, key: string) => {
+    if (key.startsWith('translation-')) {
+      const language = key.substring('translation-'.length);
+      if (value instanceof Y.Text) {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
+        translations[language] = value.toString();
+      }
+    } else if (key.startsWith('translationSource-')) {
+      const language = key.substring('translationSource-'.length);
+      if (typeof value === 'string') {
+        translationSources[language] = value;
+      }
+    }
+  });
+
   return {
     id: id || uuidv4(),
     // eslint-disable-next-line @typescript-eslint/no-base-to-string
@@ -72,6 +95,8 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
     type: type || 'bullet',
     level: level ?? 0,
     position: position || getPosition(null, null),
+    translations,
+    translationSources,
   };
 }
 
@@ -187,6 +212,29 @@ export function getBlockYText(yMap: Y.Map<any>): Y.Text {
     yMap.set('content', yText);
   }
   return yText;
+}
+
+/**
+ * Get or create the Y.Text for a block's translation
+ */
+export function getBlockTranslationYText(yMap: Y.Map<any>, language: string): Y.Text {
+  const key = `translation-${language}`;
+  let yText = yMap.get(key) as Y.Text | undefined;
+  if (!yText) {
+    yText = new Y.Text();
+    yMap.set(key, yText);
+  }
+  return yText;
+}
+
+/**
+ * Set the source snapshot for a translation
+ * This tracks what source content was used to generate the translation,
+ * allowing us to detect when the source has changed and needs re-translation.
+ */
+export function setBlockTranslationSource(yMap: Y.Map<any>, language: string, sourceContent: string): void {
+  const key = `translationSource-${language}`;
+  yMap.set(key, sourceContent);
 }
 
 /**

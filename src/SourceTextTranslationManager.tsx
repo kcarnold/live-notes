@@ -1,9 +1,9 @@
 import { useAtomValue } from "jotai";
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import * as Y from "yjs";
 import { isEditorAtom, languages } from "./configAtoms";
 import { BlockEditor } from "./BlockEditor";
-import { useTranslationManager } from "./useTranslationManager";
+import { useBlockTranslationManager } from "./useBlockTranslationManager";
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigator/platform#examples
 const modifierKeyPrefix =
@@ -12,7 +12,6 @@ const modifierKeyPrefix =
     : "^"; // control key
 
 export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
-  const sourceTextRef = useRef("");
   const isEditor = useAtomValue(isEditorAtom);
   const sourceBlocks = ydoc.getArray<Y.Map<string | number>>("sourceBlocks");
   const {
@@ -20,10 +19,8 @@ export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
     translationError,
     doTranslations,
     doResetTranslations,
-  } = useTranslationManager({
+  } = useBlockTranslationManager({
     languages,
-    sourceTextRef,
-    translationCacheName: "notesTranslationCache",
   });
 
   const doTranslationsSync = useCallback(() => {
@@ -31,10 +28,6 @@ export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
       console.error("Error during translation:", err);
     });
   }, [doTranslations]);
-
-  const handleTextChanged = useCallback((val: string) => {
-    sourceTextRef.current = val;
-  }, []);
 
   return (
     <div className="flex flex-col gap-1 h-full">
@@ -44,7 +37,6 @@ export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
       <div className="flex-1 min-h-0 overflow-auto">
         <BlockEditor
           yArray={sourceBlocks}
-          onTextChanged={isEditor ? handleTextChanged : undefined}
           editable={isEditor}
           onTranslationTrigger={isEditor ? doTranslationsSync : undefined}
         />
