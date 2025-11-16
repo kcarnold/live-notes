@@ -252,7 +252,8 @@ function HomePage() {
             </div>
           );
         })}
-        <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/transcript,sourceText|translatedOutline-French,video#editor">Transcriber</a>
+        <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/transcript,sourceText|translatedOutline-French,video#editor">Transcriber</a> |
+        <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedOutline-French#editor">Note-Taker</a>
       </div>
     </div>
   );
