@@ -29,7 +29,14 @@ Required environment variables (`.env`):
 - `YSWEET_CONNECTION_STRING` - Y-Sweet connection string from jamsocket.com
 - `GEMINI_API_KEY` - Google Gemini API key
 - `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
-- `TTS_MAX_CONCURRENT` - (Optional) Max concurrent TTS requests (default: 2)
+
+Optional environment variables:
+- `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
+- `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
+- `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
+- `POSTHOG_CLI_TOKEN` - PostHog CLI token (for sourcemap uploads during Docker build)
+- `POSTHOG_CLI_ENV_ID` - PostHog environment ID (for sourcemap uploads)
+- `POSTHOG_CLI_HOST` - PostHog CLI host (for sourcemap uploads)
 
 ### Development
 ```bash
@@ -67,9 +74,21 @@ npm start
 
 ### Deployment
 ```bash
-docker-compose build
-docker-compose up -d
+# Build and run with Docker Compose
+docker compose build
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
 ```
+
+**Docker Notes**:
+- Environment variables are loaded from `.env` file automatically (see `compose.yaml`)
+- Audio cache is persisted in `./audio-cache` directory
+- PostHog sourcemaps are uploaded during build if `POSTHOG_CLI_TOKEN` is provided
 
 ## Architecture
 
