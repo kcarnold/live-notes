@@ -6,6 +6,10 @@ services:
       args:
         VITE_PUBLIC_POSTHOG_KEY: ${VITE_PUBLIC_POSTHOG_KEY}
         VITE_PUBLIC_POSTHOG_HOST: ${VITE_PUBLIC_POSTHOG_HOST}
+        POSTHOG_CLI_ENV_ID: ${POSTHOG_CLI_ENV_ID}
+        POSTHOG_CLI_HOST: ${POSTHOG_CLI_HOST}
+      secrets:
+        - posthog_cli_token
     ports:
       - "5008:5008"
     environment:
@@ -19,3 +23,7 @@ services:
     # volumes:
     #   - ./:/usr/src/app
     #   - /usr/src/app/node_modules
+
+secrets:
+  posthog_cli_token:
+    environment: POSTHOG_CLI_TOKEN
