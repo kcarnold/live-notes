@@ -419,7 +419,6 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
       const isAtStart = cursorPos === 0;
       const isAtEnd = cursorPos === textarea.value.length;
 
-      // Cmd/Ctrl+Enter: trigger translation (check BEFORE plain Enter)
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         if (onTranslationTrigger) {
@@ -449,6 +448,10 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         } else {
           console.warn('BlockEditor: yArray not attached to document, split operation will not be atomic');
           performSplit();
+        }
+
+        if (onTranslationTrigger) {
+          onTranslationTrigger();
         }
       }
       // Backspace at start: merge with previous block
@@ -498,7 +501,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         }
       }
     },
-    [editable, sortedBlockIds, updateBlock, insertBlockAfter, deleteBlock, indent, dedent, toggleHeading, moveBlock, onTranslationTrigger]
+    [editable, sortedBlockIds, updateBlock, insertBlockAfter, deleteBlock, indent, dedent, toggleHeading, moveBlock, onTranslationTrigger, yArray]
   );
 
   return (
