@@ -37,7 +37,7 @@ RUN --mount=type=secret,id=posthog_cli_token \
         fi && \
         export POSTHOG_CLI_TOKEN && \
         posthog-cli $POSTHOG_ARGS sourcemap inject --directory ./dist --project live-outline && \
-        posthog-cli sourcemap upload --directory ./dist --delete-after; \
+        posthog-cli sourcemap upload --directory ./dist ; \
       fi; \
     fi
 
