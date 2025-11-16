@@ -16,7 +16,14 @@ RUN npm ci
 # Copy the rest of the source files into the image.
 COPY . .
 
+# Accept Vite environment variables as build args
+ARG VITE_PUBLIC_POSTHOG_KEY
+ARG VITE_PUBLIC_POSTHOG_HOST
+
 ENV NODE_ENV=production
+ENV VITE_PUBLIC_POSTHOG_KEY=${VITE_PUBLIC_POSTHOG_KEY}
+ENV VITE_PUBLIC_POSTHOG_HOST=${VITE_PUBLIC_POSTHOG_HOST}
+
 RUN npm run build
 
 # Create the audio cache directory and set permissions.
