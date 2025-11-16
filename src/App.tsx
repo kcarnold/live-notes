@@ -225,7 +225,7 @@ function HomePage() {
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-950 dark:to-gray-900 text-black dark:text-gray-200">
       <h1 className="text-2xl font-bold mb-6 mt-8">
-        Choose Language & Layout
+        Choose Layout
       </h1>
       <div className="flex flex-col gap-6 w-full max-w-xl">
         {availableLayouts.map((layout) => {
