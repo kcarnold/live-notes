@@ -8,7 +8,6 @@ import {
 import React, { useRef, useState } from "react";
 import "./App.css";
 
-import { ErrorBoundary } from "react-error-boundary";
 import { useAtom, useAtomValue } from "jotai";
 import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { LayoutDiagram } from "./LayoutDiagram";
@@ -19,6 +18,7 @@ import { ClientToken } from "@y-sweet/sdk";
 import SlidesPlayer from "./SlidesPlayer";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import ProseMirrorEditor from "./ProseMirrorEditor";
+import { PostHogErrorBoundary } from "posthog-js/react";
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -296,9 +296,9 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
 
   // Function to render a component based on its string identifier
   const renderComponent = (componentStr: string, key: string, rowIdx: number, colIdx: number) => {
-    return <ErrorBoundary key={key} fallback={<div>Error loading component {componentStr}</div>}>
+    return <PostHogErrorBoundary key={key} fallback={<div>Error loading component {componentStr}</div>}>
       {renderComponentInner(componentStr, key, rowIdx, colIdx)}
-    </ErrorBoundary>;
+    </PostHogErrorBoundary>;
   }
   const renderComponentInner = (componentStr: string, key: string, rowIdx: number, colIdx: number) => {
     if (componentStr === 'transcript') {

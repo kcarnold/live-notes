@@ -59,8 +59,8 @@ describe('BlockEditor', () => {
 
       const blockDivs = container.querySelectorAll('.flex.items-start');
       expect(blockDivs[0]).toHaveStyle({ paddingLeft: '0px' });
-      expect(blockDivs[1]).toHaveStyle({ paddingLeft: '24px' });
-      expect(blockDivs[2]).toHaveStyle({ paddingLeft: '48px' });
+      expect(blockDivs[1]).toHaveStyle({ paddingLeft: '12px' });
+      expect(blockDivs[2]).toHaveStyle({ paddingLeft: '24px' });
     });
 
     it('does not render operation buttons when editable is false', () => {

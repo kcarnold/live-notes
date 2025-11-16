@@ -16,7 +16,7 @@ import {
   addBlockToYArray,
 } from './blockTypes';
 
-const SHOW_BUTTONS = false;
+const SHOW_BUTTONS = true;
 
 interface BlockEditorProps {
   yArray: Y.Array<Y.Map<any>>;
@@ -75,6 +75,17 @@ const BlockItem = memo(function BlockItem({
     yMap.observeDeep(observer);
     return () => yMap.unobserveDeep(observer);
   }, [yMap]);
+
+  // Auto-resize textarea to fit content
+  const autoResize = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // Reset height to get accurate measurement
+    textarea.style.height = '0px';
+    // Set height to scrollHeight to fit content
+    textarea.style.height = textarea.scrollHeight + 'px';
+  }, []);
 
   // Focus management
   useEffect(() => {
@@ -170,6 +181,8 @@ const BlockItem = memo(function BlockItem({
               const yText = getBlockYText(yMap);
               const binding = new TextAreaBinding(yText, el);
 
+              // Initial resize
+              autoResize();
               return () => binding.destroy();
             }}
             defaultValue={block.content}
@@ -419,14 +432,24 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         const beforeCursor = block.content.substring(0, cursorPos);
         const afterCursor = block.content.substring(cursorPos);
 
-        // Update current block with content before cursor
-        updateBlock(block.id, { content: beforeCursor });
+        const performSplit = () => {
+          // Update current block with content before cursor
+          updateBlock(block.id, { content: beforeCursor });
 
-        // Create new block with content after cursor
-        const newType = block.type === 'heading' ? 'bullet' : block.type;
-        const newLevel = block.type === 'heading' ? 0 : block.level;
+          // Create new block with content after cursor
+          const newType = block.type === 'heading' ? 'bullet' : block.type;
+          const newLevel = block.type === 'heading' ? 0 : block.level;
 
-        insertBlockAfter(block.id, afterCursor, newType, newLevel);
+          insertBlockAfter(block.id, afterCursor, newType, newLevel);
+        };
+
+        // Wrap both operations in a transaction for atomicity
+        if (yArray.doc) {
+          yArray.doc.transact(performSplit);
+        } else {
+          console.warn('BlockEditor: yArray not attached to document, split operation will not be atomic');
+          performSplit();
+        }
       }
       // Backspace at start: merge with previous block
       else if (e.key === 'Backspace' && isAtStart && block.content === '') {

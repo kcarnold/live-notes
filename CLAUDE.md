@@ -45,18 +45,25 @@ npm run dev
 # Run tests
 npm test
 
+# Run tests without ANSI color codes (useful for agents/CI)
+npm test -- --no-color
+
 # Run specific test file
 npm test -- path/to/test.ts --run
 
 # Lint code
 npm run lint
 
-# Build for production
+# Build for production (requires npm install first)
 npm run build
 
 # Start production server (serves built files)
 npm start
 ```
+
+**Important**:
+- Always run `npm install` before building or testing, especially in fresh environments. The build will fail with module resolution errors if dependencies aren't installed.
+- When running tests via tools/agents, use `--no-color` flag to disable ANSI color codes in output.
 
 ### Deployment
 ```bash
@@ -120,72 +127,133 @@ The translation system uses a **block-based approach** with staleness detection:
 - Old `translatedText-{language}` Y.Text docs (ignored, harmless)
 - Blocks without `translationSource` snapshots (treated as stale, will re-translate on first click)
 
-### Auto-TTS System
+### Text-to-Speech (TTS) System
 
-The auto-TTS system provides automatic text-to-speech playback with intelligent catchup logic:
+The TTS system provides both manual and automatic text-to-speech playback with a clean separation of concerns:
 
 #### Architecture
-- **Reducer-based state machine** ([autoTTSReducer.ts](src/autoTTSReducer.ts)): Pure state logic, easily testable
-- **React hook wrapper** ([useAutoTTS.ts](src/useAutoTTS.ts)): Integrates reducer with audio playback side effects
-- **ElevenLabs API** ([server.ts](server.ts)): Backend TTS endpoint with caching and retry logic
 
-#### State Machine
-```
-States: idle | loading | playing | error
+The TTS system uses a two-layer architecture that separates "how to speak" from "what to read":
 
-Tracks:
-- lastSpokenLineIndex: Last line that finished playing
-- currentlyPlayingIndex: Currently playing line (or null)
-- currentlyPlayingText: Text being played (for handling insertions/deletions)
-- playbackStatus: Current state
-- enabled: Whether auto-TTS mode is active
-```
+**Layer 1: Low-level audio playback** ([useTTS.ts](src/useTTS.ts))
+- Simple hook that manages audio fetching and playback lifecycle
+- Handles race conditions (cancel, superseded requests)
+- Provides callbacks for completion and errors
+- No knowledge of which line to play next - just plays what it's told
 
-#### Catchup Logic ([autoTTSReducer.ts:calculateNextLine](src/autoTTSReducer.ts))
-When new translated text arrives faster than speech:
-1. If we haven't started: always start at line 0
-2. Calculate backlog: `totalLines - (lastSpokenIndex + 1)`
-3. If backlog > threshold (default: 3): skip ahead to stay current
-4. Otherwise: play next line sequentially
+**Layer 2: Playback logic** ([TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx))
+- Decides which lines to play and when
+- Manages playhead cursor and auto-play mode
+- Responds to user interactions (clicks, auto-mode toggle)
+- Pure component (accepts `lines[]` prop), Yjs integration in container
 
-Example: If at line 2 with 10 total lines and threshold 3:
-- Backlog = 7 lines (exceeds threshold)
-- Skip to line 7 (plays last 3 lines: 7, 8, 9)
+**Backend** ([server.ts](server.ts))
+- ElevenLabs API integration
+- Audio file caching in `/audio-cache` (MD5 hash keys)
+- Concurrency limiting (2 concurrent requests by default)
+- Exponential backoff on rate limit errors (429)
+- In-flight request deduplication
 
-#### Handling Stale Indices
-**Problem**: When lines are inserted/deleted during playback, array indices become stale.
+#### Playhead-Based Auto-Play
 
-**Solution**: Hybrid approach tracking both text and index ([useAutoTTS.ts](src/useAutoTTS.ts)):
-```typescript
-audio.onended = () => {
-  // Search for the text we just played
-  const currentIndex = lines.indexOf(playedText);
+The auto-play system uses a simple **playhead cursor** approach:
 
-  // If found at different index, use new position (handles insertions)
-  // If not found, use stored index with bounds check (handles edits)
-  const reconciledIndex = currentIndex !== -1
-    ? currentIndex
-    : Math.min(storedIndex, lines.length - 1);
-};
-```
+**State**:
+- `playhead`: Index of last line that finished playing (starts at -1)
+- `autoSpeakEnabled`: Whether auto-play mode is active
+- `tts.status`: Current playback status (idle | loading | playing | error)
 
-This handles the common case (insertions before cursor) correctly while degrading gracefully for edge cases.
+**Logic**:
+1. When auto-play is enabled and TTS is idle:
+   - Play `lines[playhead + 1]` if it exists
+2. When a line finishes playing:
+   - Update playhead to that line's index
+   - Trigger step 1 again (via useEffect)
 
-**Note**: This is a temporary solution. Future versions will use proper Yjs document structure with stable identifiers instead of array indices.
+**Example**: Starting with 5 lines and playhead = -1:
+- Auto-mode enabled → plays line 0
+- Line 0 finishes → playhead = 0 → plays line 1
+- Line 1 finishes → playhead = 1 → plays line 2
+- User adds 2 more lines (now 7 total)
+- Line 2 finishes → playhead = 2 → plays line 3
+- Continues sequentially through all lines
 
 #### Dual Modes
-- **Auto mode ON**: Automatic playback with catchup
-- **Auto mode OFF**: Click-to-play any line (existing behavior preserved)
 
-#### TTS Backend
-- **Caching**: Audio files cached in `/audio-cache` (MD5 hash keys)
-- **Concurrency**: Limited to 2 concurrent requests (configurable)
-- **Retry**: Exponential backoff on rate limit errors (429)
-- **Deduplication**: In-flight request caching prevents duplicate fetches
+**Manual mode** (default):
+- Click any line to speak it
+- Click again to cancel
+- Playhead still advances when lines finish (for potential auto-mode switch)
+
+**Auto mode**:
+- Toggle with "Auto-Speak" button
+- Automatically plays from playhead + 1
+- Stops when disabled (can resume later from same position)
+- No complex catchup logic - just plays sequentially
+
+#### Race Condition Handling
+
+The `useTTS` hook carefully prevents race conditions:
+
+```typescript
+// Each request is tracked with an identity object
+const request = { text, language };
+currentRequestRef.current = request;
+
+// Event listeners check if request is still current
+audio.addEventListener('ended', () => {
+  if (currentRequestRef.current === request) {
+    // Only call callback if not cancelled/superseded
+    onFinished(text);
+  }
+});
+```
+
+This ensures:
+- Callbacks don't fire after `cancel()`
+- Callbacks don't fire when a new `speak()` supersedes the request
+- Clean state even after errors or rapid interactions
+
+### Block-Based Editor
+
+The app includes a **block-based collaborative editor** ([BlockEditor.tsx](src/BlockEditor.tsx)) as an alternative to ProseMirror:
+
+#### Architecture
+- **Yjs-backed blocks**: Each block stored as `Y.Map` in a `Y.Array`
+- **Fractional indexing**: Blocks use fractional-index positions for stable ordering
+- **Auto-sizing textareas**: Textareas grow/shrink to fit content
+- **Parent-child structure**: `BlockEditor` manages state, `BlockItem` components handle individual blocks
+
+#### Block Structure
+Each block is a `Y.Map` with:
+- `id`: UUID for stable identity
+- `type`: 'paragraph' | 'heading' | 'listItem'
+- `position`: Fractional-index string for ordering
+- `indent`: 0-3 (max indent level)
+- `text`: Y.Text for collaborative editing
+
+#### Features
+- **Live collaboration**: Multiple users can edit different blocks simultaneously via Yjs
+- **Markdown serialization**: Blocks convert to markdown (headings, lists with indentation)
+- **Keyboard shortcuts**:
+  - `Enter`: Create new block below
+  - `Backspace` at start: Delete empty block or merge with previous
+  - `Tab/Shift-Tab`: Indent/dedent (for lists)
+- **Empty block filtering**: Empty blocks aren't serialized to markdown
+
+#### Textarea Auto-sizing
+The editor uses a custom auto-sizing solution:
+```typescript
+// Reset height to measure scrollHeight accurately
+textarea.style.height = '0px';
+// Set height to content height
+textarea.style.height = textarea.scrollHeight + 'px';
+```
+This ensures textareas are exactly the right height without extra lines.
 
 ### ProseMirror Integration
 
-The app uses ProseMirror for collaborative rich text editing:
+The app also uses ProseMirror for collaborative rich text editing:
 
 - **Yjs binding**: [y-prosemirror](https://github.com/yjs/y-prosemirror) synchronizes ProseMirror state with Y.XmlFragment
 - **Markdown serialization** ([ProseMirrorEditor.tsx:74-83](ProseMirrorEditor.tsx#L74-L83)): Content is converted to markdown on every change
@@ -234,17 +302,19 @@ The app has two modes determined by URL hash (`#editor`):
 - [yjsUtils.ts](src/yjsUtils.ts) - Yjs utility functions and React hooks
 
 ### Components
+- [BlockEditor.tsx](src/BlockEditor.tsx) - Block-based collaborative editor with Yjs backing
+- [blockTypes.ts](src/blockTypes.ts) - Block data structures and utilities
 - [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
 - [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - Web Speech API integration for live transcription
-- [BlockEditor.tsx](src/BlockEditor.tsx) - Collaborative block editor with ProseMirror integration
 - [BlockViewer.tsx](src/BlockViewer.tsx) - Direct block rendering (headings, bullets) without Markdown parsing
 - [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Block viewer for translations with TTS controls
 - [useBlockTranslationManager.ts](src/useBlockTranslationManager.ts) - React hook for managing block translations
+- [TranslatedTextViewerContainer.tsx](src/TranslatedTextViewerContainer.tsx) - Yjs connector for TranslatedTextViewer
 
-### Auto-TTS System
-- [useAutoTTS.ts](src/useAutoTTS.ts) - React hook integrating reducer with audio playback
-- [autoTTSReducer.ts](src/autoTTSReducer.ts) - Pure state machine logic for auto-TTS (attempts to be testable, but async functions and extra logic in useAutoTTS add untested edge cases)
-- [autoTTSReducer.test.ts](src/autoTTSReducer.test.ts) - Some unit tests, doesn't address effects in the reducer.
+### TTS System
+- [useTTS.ts](src/useTTS.ts) - Low-level TTS hook managing audio playback lifecycle
+- [useTTS.test.ts](src/useTTS.test.ts) - Comprehensive tests for useTTS hook (12 tests)
+- [TranslatedTextViewer.test.tsx](src/TranslatedTextViewer.test.tsx) - Component tests for playhead and auto-play (15 tests)
 
 ## Important Patterns
 
@@ -284,51 +354,51 @@ setBlockTranslationSource(yMap, language, currentContent);
 This ensures staleness detection works correctly - if the block content changes later, the system will detect that `content !== translationSource` and re-translate.
 
 ### Reducer-Based State Management
+### Component Testing Pattern
 
-For complex state machines, use the reducer pattern to separate pure logic from side effects:
+The codebase favors **separating pure components from Yjs concerns** to enable comprehensive testing:
+
+**Pattern**:
+1. **Pure component**: Accepts plain props (`lines: string[]`), no Yjs dependencies
+2. **Container component**: Connects to Yjs and passes props to pure component
+3. **Tests**: Focus on pure component with mock data
 
 **Benefits**:
-- Pure functions are easily testable without React
-- State transitions are explicit and traceable
-- Impossible states are prevented by TypeScript
-- Logic can be understood in isolation
+- Components testable without Yjs setup
+- Clear separation of concerns
+- Easy to reason about component behavior
+- Fast test execution
 
-**Structure**:
+**Example**: `TranslatedTextViewer` (pure) + `TranslatedTextViewerContainer` (Yjs connector)
+
 ```typescript
-// 1. Define state and actions
-interface State { /* ... */ }
-type Action = { type: 'ACTION_NAME'; payload?: any } | /* ... */
-
-// 2. Pure reducer function (testable without React)
-function reducer(state: State, action: Action): State {
-  switch (action.type) {
-    case 'ACTION_NAME': return { ...state, /* updates */ };
-    // ...
-  }
+// Pure component - easy to test
+function TranslatedTextViewer({ lines, language }: Props) {
+  // All logic works with plain arrays
 }
 
-// 3. React hook wrapping reducer + side effects
-function useMyFeature() {
-  const [state, dispatch] = useReducer(reducer, initialState);
-
-  useEffect(() => {
-    // Side effects based on state
-  }, [state.someField]);
-
-  return { state, actions };
+// Container - handles Yjs
+function TranslatedTextViewerContainer({ language }: ContainerProps) {
+  const lines = useYText(...); // Get data from Yjs
+  return <TranslatedTextViewer lines={lines} language={language} />;
 }
 ```
 
-**Example**: Auto-TTS ([autoTTSReducer.ts](src/autoTTSReducer.ts) + [useAutoTTS.ts](src/useAutoTTS.ts))
-
 ### Testing Philosophy
 
-- **Unit tests for pure logic**: Test reducers and utility functions in isolation
-- **Integration tests for hooks**: Test React hooks with mock dependencies
+- **Unit tests for pure logic**: Test utility functions and pure components in isolation
+- **Component tests with React Testing Library**: Test user interactions and state changes
 - **Keep tests simple**: Each test should verify one clear behavior
 - **Test edge cases**: Empty arrays, null values, boundary conditions
-- **Use descriptive test names**: "handles line insertion during playback" not "test case 5"
+- **Use descriptive test names**: "should play next line when current line finishes" not "test case 5"
+- **Mock external dependencies**: Use fake Audio API, mock fetch calls
 
-**Example**: [autoTTSReducer.test.ts](src/autoTTSReducer.test.ts) - tests covering state transitions, catchup logic, and edge cases
+**Examples**:
+- [useTTS.test.ts](src/useTTS.test.ts) - Low-level hook tests (race conditions, callbacks, error handling)
+- [TranslatedTextViewer.test.tsx](src/TranslatedTextViewer.test.tsx) - Component tests (playhead, auto-play, user interactions)
+- [blockTypes.test.ts](src/blockTypes.test.ts) - Pure utility function tests
 
-Challenge: logic bleeds into effects, async functions add hidden states.
+**Test Infrastructure**:
+- Vitest for test runner
+- @testing-library/react for component testing
+- Global Audio mock in [test/setup.ts](src/test/setup.ts)
