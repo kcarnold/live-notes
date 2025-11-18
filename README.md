@@ -3,7 +3,10 @@
 - Copy `template-.env` to `.env`
 - Get a [y-sweet account](https://jamsocket.com/) (free is fine). Put the connection string in `.env` as `YSWEET_CONNECTION_STRING`.
 - Get a Gemini API key and add it to `.env` as `GEMINI_API_KEY`.
-- Get an ElevenLabs API key and add it to `.env` as `ELEVENLABS_API_KEY`.
+- Set up Google Cloud Text-to-Speech:
+  - Create a Google Cloud project and enable the Text-to-Speech API
+  - Create a service account and download the JSON key file
+  - Set `GOOGLE_APPLICATION_CREDENTIALS` in `.env` to point to the key file path
 - Run `npm install` to install packages.
 
 ## To run
@@ -57,7 +60,7 @@ docker compose down
 This is a live translation application for presentations/talks. It provides:
 - Real-time speech transcription (Web Speech API)
 - AI-powered translation (Google Gemini)
-- Text-to-speech output (ElevenLabs)
+- Text-to-speech output (Google Cloud Text-to-Speech with Chirp 3 HD voices)
 - Collaborative editing (Y-Sweet/Yjs)
 - Multiple layout configurations
 

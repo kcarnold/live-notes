@@ -9,7 +9,7 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Real-time collaboration**: Y-Sweet/Yjs for shared state across viewers
 - **Speech transcription**: Web Speech API (browser-native) for live speech-to-text
 - **Translation**: Google Gemini for AI-powered translation
-- **Text-to-Speech**: ElevenLabs for audio playback of translations
+- **Text-to-Speech**: Google Cloud Text-to-Speech (Chirp 3 HD) for audio playback of translations
 - **Rich text editing**: ProseMirror for collaborative markdown editing
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
@@ -28,7 +28,7 @@ npm install
 Required environment variables (`.env`):
 - `YSWEET_CONNECTION_STRING` - Y-Sweet connection string from jamsocket.com
 - `GEMINI_API_KEY` - Google Gemini API key
-- `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
+- `GOOGLE_APPLICATION_CREDENTIALS` - Path to Google Cloud service account JSON key file (for Text-to-Speech)
 
 Optional environment variables:
 - `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
@@ -138,10 +138,9 @@ The TTS system uses a two-layer architecture that separates "how to speak" from 
 - Pure component (accepts `lines[]` prop), Yjs integration in container
 
 **Backend** ([server.ts](server.ts))
-- ElevenLabs API integration
+- Google Cloud Text-to-Speech API integration with Chirp 3 HD voices
 - Audio file caching in `/audio-cache` (MD5 hash keys)
 - Concurrency limiting (2 concurrent requests by default)
-- Exponential backoff on rate limit errors (429)
 - In-flight request deduplication
 
 #### Playhead-Based Auto-Play
