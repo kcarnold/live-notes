@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tauri Speech Recognition Spike</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>Speech Recognition Spike</h1>
+      <p class="subtitle">Testing Web Speech API vs macOS Native API in Tauri</p>
+
+      <div class="controls">
+        <h2>Web Speech API</h2>
+        <button id="web-start-btn" class="btn btn-start">Start Web Speech</button>
+        <button id="web-stop-btn" class="btn btn-stop" disabled>Stop</button>
+        <div id="web-status" class="status">Ready</div>
+        <div class="transcript-container">
+          <h3>Transcript:</h3>
+          <div id="web-transcript" class="transcript"></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <h2>macOS Native API</h2>
+        <button id="native-start-btn" class="btn btn-start">Start Native Speech</button>
+        <button id="native-stop-btn" class="btn btn-stop" disabled>Stop</button>
+        <div id="native-status" class="status">Ready</div>
+        <div class="transcript-container">
+          <h3>Transcript:</h3>
+          <div id="native-transcript" class="transcript"></div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
