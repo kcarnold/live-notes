@@ -1,8 +1,9 @@
 # To set up
 
-- Copy `template.env` to `.env`
-- Get a [y-sweet account](https://jamsocket.com/) (free is fine). Put the API key it gives you in `.env`.
-- Get a Gemini API key. Likewise, it goes in `.env`.
+- Copy `template-.env` to `.env`
+- Get a [y-sweet account](https://jamsocket.com/) (free is fine). Put the connection string in `.env` as `YSWEET_CONNECTION_STRING`.
+- Get a Gemini API key and add it to `.env` as `GEMINI_API_KEY`.
+- Get an ElevenLabs API key and add it to `.env` as `ELEVENLABS_API_KEY`.
 - Run `npm install` to install packages.
 
 ## To run
@@ -19,63 +20,45 @@ Frontend:
 npm run dev
 ```
 
+## Testing & Building
+
+```bash
+# Run tests
+npm test
+
+# Lint code
+npm run lint
+
+# Build for production
+npm run build
+
+# Start production server (serves built files)
+npm start
+```
+
 ## Deployment
 
-```
-docker-compose build
-docker-compose up -d
-```
+```bash
+# Build and run with Docker Compose
+docker compose build
+docker compose up -d
 
+# View logs
+docker compose logs -f
 
-
-
-# React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+# Stop
+docker compose down
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+**Note**: The application uses `compose.yaml`. Environment variables are loaded from `.env` automatically.
 
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
+## Project Details
 
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
-```
+This is a live translation application for presentations/talks. It provides:
+- Real-time speech transcription (Web Speech API)
+- AI-powered translation (Google Gemini)
+- Text-to-speech output (ElevenLabs)
+- Collaborative editing (Y-Sweet/Yjs)
+- Multiple layout configurations
+
+See [CLAUDE.md](CLAUDE.md) for detailed architecture and development information.

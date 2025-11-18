@@ -29,7 +29,14 @@ Required environment variables (`.env`):
 - `YSWEET_CONNECTION_STRING` - Y-Sweet connection string from jamsocket.com
 - `GEMINI_API_KEY` - Google Gemini API key
 - `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
-- `TTS_MAX_CONCURRENT` - (Optional) Max concurrent TTS requests (default: 2)
+
+Optional environment variables:
+- `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
+- `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
+- `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
+- `POSTHOG_CLI_TOKEN` - PostHog CLI token (for sourcemap uploads during Docker build)
+- `POSTHOG_CLI_ENV_ID` - PostHog environment ID (for sourcemap uploads)
+- `POSTHOG_CLI_HOST` - PostHog CLI host (for sourcemap uploads)
 
 ### Development
 ```bash
@@ -67,9 +74,21 @@ npm start
 
 ### Deployment
 ```bash
-docker-compose build
-docker-compose up -d
+# Build and run with Docker Compose
+docker compose build
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
 ```
+
+**Docker Notes**:
+- Environment variables are loaded from `.env` file automatically (see `compose.yaml`)
+- Audio cache is persisted in `./audio-cache` directory
+- PostHog sourcemaps are uploaded during build if `POSTHOG_CLI_TOKEN` is provided
 
 ## Architecture
 
@@ -77,7 +96,7 @@ docker-compose up -d
 
 The app uses **Yjs** for real-time collaborative state management:
 
-1. **Y-Sweet authentication** ([server.ts:62-73](server.ts#L62-L73)): Backend issues read-only or full access tokens based on editor status
+1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status
 2. **Shared Y.Doc** per session: Each session (identified by `?doc=doc-YYYY-MM-DD`) has a shared Yjs document
 3. **Key shared data structures**:
    - `transcriptDoc` (XmlFragment): Live transcription from speech
@@ -94,7 +113,7 @@ The translation system is sophisticated with caching and incremental updates:
 2. **Decomposition** ([translationUtils.ts:30-42](translationUtils.ts#L30-L42)): Each chunk is decomposed into `format` (markdown syntax), `content`, and `trailingWhitespace`
 3. **Cache lookup** ([translationUtils.ts:112-164](translationUtils.ts#L112-L164)): Check which chunks need translation using `translationCache`
 4. **Context provision**: Untranslated chunks get 3 lines of context from already-translated chunks
-5. **Batch translation** ([server.ts:76-90](server.ts#L76-L90)): Server endpoint processes batches via Gemini
+5. **Batch translation** ([server.ts:104-118](server.ts#L104-L118)): Server endpoint processes batches via Gemini
 6. **Cache update** ([translationUtils.ts:166-185](translationUtils.ts#L166-L185)): New translations are cached in the shared Y.Map
 7. **Reconstruction** ([translationUtils.ts:187-204](translationUtils.ts#L187-L204)): Final text is reassembled from cached translations with original formatting
 
@@ -235,7 +254,7 @@ The app also uses ProseMirror for collaborative rich text editing:
 
 ### Layout System
 
-The UI uses a **URL-based layout system** ([App.tsx:262-384](App.tsx#L262-L384)):
+The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395)):
 
 - Layouts are encoded in the URL path: `/transcript,sourceText|translatedOutline-French,video`
 - Format: rows separated by `|`, columns separated by `,`
