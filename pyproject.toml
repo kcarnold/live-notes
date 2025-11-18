@@ -1,0 +1,20 @@
+[project]
+name = "live-notes-proclaim"
+version = "0.1.0"
+description = "Proclaim integration for live-notes"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32.0",
+    "lxml>=5.3.0",
+    "y-py>=0.6.0",
+    "websockets>=12.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "ipython>=8.12.0",
+]

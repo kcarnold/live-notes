@@ -214,6 +214,52 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
+// Proclaim integration - in-memory state store (will be moved to Yjs in production)
+interface ProclaimState {
+  presentation: {
+    itemId: string;
+    title: string;
+    slides: string[];
+  } | null;
+  status: {
+    slideIndex: number;
+    currentSlide: string;
+    totalSlides: number;
+    title: string;
+  } | null;
+  lastUpdate: number;
+}
+
+const proclaimState = new Map<string, ProclaimState>();
+
+app.post('/api/proclaim/update', async (req, res) => {
+  const { docId, presentation, status } = req.body;
+
+  if (!docId) {
+    return res.status(400).json({ error: 'Missing docId' });
+  }
+
+  proclaimState.set(docId, {
+    presentation,
+    status,
+    lastUpdate: Date.now(),
+  });
+
+  console.log(`Proclaim update for ${docId}: slide ${status?.slideIndex + 1}/${status?.totalSlides}`);
+
+  res.json({ ok: true });
+});
+
+app.get('/api/proclaim/state/:docId', async (req, res) => {
+  const { docId } = req.params;
+  const state = proclaimState.get(docId);
+
+  if (!state) {
+    return res.status(404).json({ error: 'No state found for this document' });
+  }
+
+  res.json(state);
+});
 
 
 const PORT = process.env.PORT || 8000;
