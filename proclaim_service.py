@@ -299,7 +299,7 @@ class ProclaimYjsService:
     async def connect_to_ysweet(self):
         """Connect to Y-Sweet WebSocket"""
         token_data = await self.get_ysweet_token()
-        ws_url = token_data['url']
+        ws_url = token_data['url'] + '/' + self.doc_id
 
         logger.info(f"Connecting to Y-Sweet: {ws_url}")
 
@@ -431,7 +431,8 @@ class ProclaimYjsService:
 async def main():
     """Entry point"""
     # Get doc ID from command line or environment
-    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID', 'doc-2024-01-01')
+    # TODO: use today's date for default
+    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID', 'doc-2025-11-29')
 
     service = ProclaimYjsService(YSWEET_URL, doc_id)
     await service.run()
