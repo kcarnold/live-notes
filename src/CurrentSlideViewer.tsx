@@ -44,7 +44,7 @@ export function CurrentSlideViewer({
   return (
     <div className="flex flex-col h-full bg-black text-white overflow-hidden">
       {/* Header with title and progress */}
-      <div className="bg-gray-800 px-6 py-3 border-b border-gray-700 flex-shrink-0">
+      <div className="bg-gray-800 px-6 py-3 border-b border-gray-700 shrink-0">
         <div className="text-sm text-gray-400">
           Slide {currentIndex + 1} of {slides.length}
         </div>
@@ -106,40 +106,47 @@ export function CurrentSlideViewerContainer() {
   const statusMap = useMap('proclaimStatus');
   const presentationsMap = useMap('proclaimPresentations');
 
-  // Read current status
-  const itemId = statusMap?.get('itemId') as string | undefined;
-  const slideIndex = (statusMap?.get('slideIndex') as number) ?? 0;
-
-  // Read presentation data
-  const presentation = itemId ? presentationsMap?.get(itemId) : undefined;
-  const title = (presentation as any)?.get?.('title') as string | undefined ?? 'Unknown';
-
-  // Get slides array from presentation
-  const slidesArray = (presentation as any)?.get?.('slides');
-  const slides: string[] = [];
-  if (slidesArray && typeof slidesArray.length === 'number') {
-    for (let i = 0; i < slidesArray.length; i++) {
-      slides.push(slidesArray.get(i) as string);
+  try {
+    // Read current status
+    const itemId = statusMap.get('itemId') as string | undefined;
+    if (!itemId) {
+      throw new Error('No itemId in statusMap');
     }
-  }
+    const slideIndex = (statusMap.get('slideIndex') as number) ?? 0;
 
-  if (!itemId || !presentation) {
+    // Read presentation data
+    const presentation = presentationsMap.get(itemId);
+    const title = presentation.title as string || 'Untitled Presentation';
+
+    // Get slides array from presentation
+    const slidesArray = presentation?.slides as string[] | undefined;
+    console.log('slidesArray:', slidesArray);
+    const slides: string[] = [];
+    if (slidesArray && slidesArray.length > 0) {
+      for (let i = 0; i < slidesArray.length; i++) {
+        const slide = slidesArray.get?.(i) ?? slidesArray[i];
+        if (typeof slide === 'string') {
+          slides.push(slide);
+        }
+      }
+    }
+
     return (
-      <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-gray-500">
-          Waiting for Proclaim data...
-          <div className="text-xs mt-2">Is the Proclaim service running?</div>
-        </div>
-      </div>
+      <CurrentSlideViewer
+        title={title}
+        slides={slides}
+        currentIndex={slideIndex}
+        context={1}
+      />
     );
+  } catch (error) {
+      return (
+        <div className="flex items-center justify-center h-full bg-gray-50">
+          <div className="text-gray-500">
+            Waiting for Proclaim data...
+            <div className="text-xs mt-2">Is the Proclaim service running?</div>
+          </div>
+        </div>
+      );
   }
-
-  return (
-    <CurrentSlideViewer
-      title={title}
-      slides={slides}
-      currentIndex={slideIndex}
-      context={1}
-    />
-  );
 }
