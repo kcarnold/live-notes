@@ -21,7 +21,9 @@ import sqlite3
 from lxml import etree
 
 from pycrdt import Doc, Map, Array
+from httpx_ws import aconnect_ws
 from pycrdt import Provider
+from pycrdt.websocket.websocket import HttpxWebsocket
 
 import aiohttp
 
@@ -282,9 +284,6 @@ class ProclaimYjsService:
         self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
         self.status_map = self.ydoc.get('proclaimStatus', type=Map)
 
-        # WebSocket client for Y-Sweet sync
-        self.websocket_client: Optional[AsyncWebsocketClient] = None
-
         # State tracking
         self.last_item_id = None
         self.last_slide_index = None
@@ -299,17 +298,6 @@ class ProclaimYjsService:
                 response.raise_for_status()
                 return await response.json()
 
-    async def connect_to_ysweet(self):
-        """Connect to Y-Sweet WebSocket using AsyncWebsocketClient"""
-        token_data = await self.get_ysweet_token()
-        ws_url = token_data['url'] + '/' + self.doc_id
-
-        logger.info(f"Connecting to Y-Sweet: {ws_url}")
-
-        # Create the WebSocket client - it automatically handles syncing
-        self.websocket_client = AsyncWebsocketClient(ws_url, self.ydoc)
-
-        logger.info("Connected to Y-Sweet")
 
     def update_presentation_in_yjs(self, presentation_data: Dict[str, Any]):
         """Store full presentation data in Yjs"""
@@ -385,23 +373,32 @@ class ProclaimYjsService:
             return
 
         try:
-            # Connect to Y-Sweet
-            await self.connect_to_ysweet()
-        except Exception as e:
-            logger.error(f"Failed to connect to Y-Sweet: {e}")
-            return
+            # Get Y-Sweet token and build WebSocket URL
+            token_data = await self.get_ysweet_token()
+            ws_url = token_data['url'] + '/' + self.doc_id
+            logger.info(f"Connecting to Y-Sweet: {ws_url}")
 
-        # Main loop
-        while True:
-            try:
-                await self.poll_once()
-                await asyncio.sleep(POLL_INTERVAL)
-            except KeyboardInterrupt:
-                logger.info("Shutting down...")
-                break
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}", exc_info=True)
-                await asyncio.sleep(POLL_INTERVAL)
+            # Connect to Y-Sweet with WebsocketProvider
+            async with (
+                aconnect_ws(ws_url) as websocket,
+                Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
+            ):
+                logger.info("Connected to Y-Sweet")
+
+                # Main polling loop
+                while True:
+                    try:
+                        await self.poll_once()
+                        await asyncio.sleep(POLL_INTERVAL)
+                    except KeyboardInterrupt:
+                        logger.info("Shutting down...")
+                        break
+                    except Exception as e:
+                        logger.error(f"Error in polling loop: {e}", exc_info=True)
+                        await asyncio.sleep(POLL_INTERVAL)
+
+        except Exception as e:
+            logger.error(f"Failed to connect to Y-Sweet: {e}", exc_info=True)
 
 
 async def main():
