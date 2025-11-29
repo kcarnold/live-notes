@@ -160,7 +160,7 @@ class ProclaimClient:
         """
         sections = {}
         current_section_label = None
-        section_types = {'Verse', 'Chorus', 'Pre-chorus', 'Bridge', 'Tag', 'Title', 'Interlude'}
+        section_types = {'Verse', 'Chorus', 'Pre-chorus', 'Bridge', 'Tag', 'Title', 'Interlude', 'Ending'}
         lines = [line.strip() for line in text.splitlines()]
 
         for line in lines:
@@ -225,6 +225,8 @@ class ProclaimClient:
                 label = f"Tag {trailing_number or '1'}"
             elif lower_token == 'i':
                 label = f"Interlude {trailing_number or '1'}"
+            elif lower_token == 'ending':
+                label = f"Ending {trailing_number or '1'}"
             else:
                 label = token
 
@@ -260,10 +262,22 @@ class ProclaimClient:
             sections = self.split_into_sections(lyrics_text)
             order_str = content.get('CustomOrderSequence', '')
             slides = self.get_slides_in_order(sections, order_str)
+            # Prepend the title slide
+            if title := content.get('SongDisplayTitle', None):
+                logger.info(f"Adding title slide: {title}")
+                slides.insert(0, title)
+            else:
+                logger.info("No title found; skipping title slide.")
+                logger.debug({
+                    field: content.get(field)
+                    for field in ['SongDisplayTitle', "_textfield:Song Title", "TitleSlide"]
+                    if field in content
+                })
+                #print(content.keys())
 
             return {
                 'itemId': item_id,
-                'title': content.get('Title', 'Unknown'),
+                'title': content.get('SongDisplayTitle', 'Unknown'),
                 'slides': slides,
             }
         except Exception as e:
@@ -372,33 +386,41 @@ class ProclaimYjsService:
             logger.error(f"Failed to connect to Proclaim: {e}")
             return
 
-        try:
-            # Get Y-Sweet token and build WebSocket URL
-            token_data = await self.get_ysweet_token()
-            ws_url = token_data['url'] + '/' + self.doc_id
-            logger.info(f"Connecting to Y-Sweet: {ws_url}")
+        while True:
+            try:
+                # Get Y-Sweet token and build WebSocket URL
+                token_data = await self.get_ysweet_token()
+                ws_url = token_data['url'] + '/' + self.doc_id
+                logger.info(f"Connecting to Y-Sweet: {ws_url}")
 
-            # Connect to Y-Sweet with WebsocketProvider
-            async with (
-                aconnect_ws(ws_url) as websocket,
-                Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
-            ):
-                logger.info("Connected to Y-Sweet")
+                # Connect to Y-Sweet with WebsocketProvider
+                async with (
+                    aconnect_ws(ws_url) as websocket,
+                    Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
+                ):
+                    logger.info("Connected to Y-Sweet")
 
-                # Main polling loop
-                while True:
-                    try:
-                        await self.poll_once()
-                        await asyncio.sleep(POLL_INTERVAL)
-                    except KeyboardInterrupt:
-                        logger.info("Shutting down...")
-                        break
-                    except Exception as e:
-                        logger.error(f"Error in polling loop: {e}", exc_info=True)
-                        await asyncio.sleep(POLL_INTERVAL)
+                    # Main polling loop
+                    while True:
+                        try:
+                            await self.poll_once()
+                            await asyncio.sleep(POLL_INTERVAL)
+                        except KeyboardInterrupt:
+                            logger.info("Shutting down...")
+                            return
+                        except Exception as e:
+                            logger.error(f"Error in polling loop: {e}", exc_info=True)
+                            await asyncio.sleep(POLL_INTERVAL)
 
-        except Exception as e:
-            logger.error(f"Failed to connect to Y-Sweet: {e}", exc_info=True)
+            except KeyboardInterrupt:
+                logger.info("Shutting down...")
+                return
+            except BaseException as e:
+                # Handle websocket disconnections gracefully
+                # This includes LocalProtocolError wrapped in ExceptionGroup
+                logger.warning(f"Y-Sweet connection lost: {e}")
+                logger.info(f"Reconnecting to Y-Sweet in {POLL_INTERVAL}s...")
+                await asyncio.sleep(POLL_INTERVAL)
 
 
 async def main():
