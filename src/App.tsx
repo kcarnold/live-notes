@@ -19,7 +19,7 @@ import SlidesPlayer from "./SlidesPlayer";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import ProseMirrorEditor from "./ProseMirrorEditor";
 import { PostHogErrorBoundary } from "posthog-js/react";
-import { CurrentSlideViewer } from "./CurrentSlideViewer";
+import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -263,7 +263,7 @@ function HomePage() {
 }
 
 // Layout page: render the selected layout from URL
-function LayoutPage({ layout: initialLayout, docId }: { layout: string; docId: string }) {
+function LayoutPage({ layout: initialLayout }: { layout: string }) {
   const connectionStatus = useConnectionStatus();
   const ydoc = useYDoc();
   // @ts-expect-error ts doesn't like patching stuff onto window
@@ -318,7 +318,7 @@ function LayoutPage({ layout: initialLayout, docId }: { layout: string; docId: s
     }
 
     if (componentStr === 'currentSlide') {
-      return <CurrentSlideViewer key={key} docId={docId} />;
+      return <CurrentSlideViewerContainer key={key} />;
     }
 
     if (componentStr.startsWith('translatedOutline-')) {
@@ -440,7 +440,7 @@ const App = () => {
     // Remove leading slash and use as layout string
     // Note: this will be validated inside LayoutPage
     const layout = pathname.substring(1);
-    pageComponent = <LayoutPage layout={layout} docId={docId} />;
+    pageComponent = <LayoutPage layout={layout} />;
   }
 
   return (

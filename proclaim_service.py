@@ -5,20 +5,24 @@ Proclaim Service - Syncs Proclaim presentation data to Yjs
 This service:
 1. Polls Proclaim API for current presentation and slide status
 2. Parses presentation content from the Proclaim database
-3. Updates Yjs shared state with presentation data
+3. Updates Yjs shared state with presentation data (via Y-Sweet)
 4. Watches for changes and updates clients in real-time
 """
 
 import os
 import sys
-import time
 import json
 import logging
+import asyncio
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 import requests
 import sqlite3
 from lxml import etree
+
+import y_py as Y
+import websockets
+import aiohttp
 
 # Configure logging
 logging.basicConfig(
@@ -258,74 +262,104 @@ class ProclaimClient:
                 'itemId': item_id,
                 'title': content.get('Title', 'Unknown'),
                 'slides': slides,
-                'sections': sections,
             }
         except Exception as e:
             logger.error(f"Error parsing presentation {item_id}: {e}")
             return None
 
 
-class ProclaimService:
-    """Service that syncs Proclaim data to Yjs"""
+class ProclaimYjsService:
+    """Service that syncs Proclaim data to Yjs via Y-Sweet"""
 
     def __init__(self, ysweet_url: str, doc_id: str):
         self.client = ProclaimClient()
         self.ysweet_url = ysweet_url
         self.doc_id = doc_id
 
+        # Yjs state
+        self.ydoc = Y.YDoc()
+        self.presentations_map = self.ydoc.get_map('proclaimPresentations')
+        self.status_map = self.ydoc.get_map('proclaimStatus')
+
         # State tracking
-        self.current_presentation = None
-        self.current_status = None
         self.last_item_id = None
         self.last_slide_index = None
+        self.ws = None
 
-    def get_ysweet_token(self, is_editor: bool = True) -> Dict[str, Any]:
+    async def get_ysweet_token(self) -> Dict[str, Any]:
         """Get a Y-Sweet token for the document"""
-        response = requests.post(
-            f"{self.ysweet_url}/api/ys-auth",
-            json={"docId": self.doc_id, "isEditor": is_editor}
-        )
-        response.raise_for_status()
-        return response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self.ysweet_url}/api/ys-auth",
+                json={"docId": self.doc_id, "isEditor": True}
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
 
-    def update_yjs_state(self, presentation_data: Dict[str, Any], status: Dict[str, Any]):
-        """
-        Update state by POSTing to Express server
+    async def connect_to_ysweet(self):
+        """Connect to Y-Sweet WebSocket"""
+        token_data = await self.get_ysweet_token()
+        ws_url = token_data['url']
 
-        In a production version, we'd use y-py with WebSocket connection to directly
-        update Yjs. For this proof-of-concept, we POST to an Express endpoint.
-        """
-        slide_index = status.get('status', {}).get('slideIndex', 0)
-        current_slide = presentation_data['slides'][slide_index] if slide_index < len(presentation_data['slides']) else ''
+        logger.info(f"Connecting to Y-Sweet: {ws_url}")
 
-        logger.info(f"Current slide ({slide_index + 1}/{len(presentation_data['slides'])}): {current_slide[:50]}...")
+        self.ws = await websockets.connect(ws_url)
 
-        # Prepare state
-        self.current_presentation = presentation_data
-        self.current_status = {
-            'slideIndex': slide_index,
-            'currentSlide': current_slide,
-            'totalSlides': len(presentation_data['slides']),
-            'title': presentation_data['title'],
-        }
+        # Start sync task
+        asyncio.create_task(self.sync_loop())
 
-        # POST to Express server
+        logger.info("Connected to Y-Sweet")
+
+    async def sync_loop(self):
+        """Handle Y-Sweet WebSocket sync"""
         try:
-            response = requests.post(
-                f"{self.ysweet_url}/api/proclaim/update",
-                json={
-                    'docId': self.doc_id,
-                    'presentation': presentation_data,
-                    'status': self.current_status,
-                },
-                timeout=5.0
-            )
-            response.raise_for_status()
-            logger.debug("Successfully updated Express server")
-        except requests.RequestException as e:
-            logger.error(f"Failed to update Express server: {e}")
+            while True:
+                message = await self.ws.recv()
+                # Apply updates from server
+                if isinstance(message, bytes):
+                    Y.apply_update(self.ydoc, message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.error("Y-Sweet connection closed")
+        except Exception as e:
+            logger.error(f"Error in sync loop: {e}")
 
-    def poll_once(self):
+    def update_presentation_in_yjs(self, presentation_data: Dict[str, Any]):
+        """Store full presentation data in Yjs"""
+        item_id = presentation_data['itemId']
+
+        # Create a nested map for this presentation
+        with self.ydoc.begin_transaction() as txn:
+            # Get or create presentation map
+            pres_map = Y.YMap()
+            pres_map.set(txn, 'title', presentation_data['title'])
+            pres_map.set(txn, 'itemId', item_id)
+
+            # Store slides as array
+            slides_array = Y.YArray()
+            for slide in presentation_data['slides']:
+                slides_array.append(txn, slide)
+            pres_map.set(txn, 'slides', slides_array)
+
+            # Store in presentations map
+            self.presentations_map.set(txn, item_id, pres_map)
+
+        logger.info(f"Stored presentation {item_id} ({presentation_data['title']}) with {len(presentation_data['slides'])} slides")
+
+    def update_status_in_yjs(self, item_id: str, slide_index: int):
+        """Update current status in Yjs"""
+        with self.ydoc.begin_transaction() as txn:
+            self.status_map.set(txn, 'itemId', item_id)
+            self.status_map.set(txn, 'slideIndex', slide_index)
+
+        logger.info(f"Updated status: {item_id} slide {slide_index}")
+
+    async def send_update_to_ysweet(self):
+        """Send Yjs updates to Y-Sweet"""
+        if self.ws:
+            update = Y.encode_state_as_update(self.ydoc)
+            await self.ws.send(update)
+
+    async def poll_once(self):
         """Poll Proclaim once and update state if changed"""
         try:
             # Get current status
@@ -339,23 +373,27 @@ class ProclaimService:
                 presentation_data = self.client.parse_presentation(item_id)
 
                 if presentation_data:
-                    self.update_yjs_state(presentation_data, status)
+                    self.update_presentation_in_yjs(presentation_data)
+                    self.update_status_in_yjs(item_id, slide_index)
+                    await self.send_update_to_ysweet()
+
                     self.last_item_id = item_id
                     self.last_slide_index = slide_index
 
             # Check if slide changed
             elif slide_index != self.last_slide_index:
                 logger.info(f"Slide changed to {slide_index}")
-                if self.current_presentation:
-                    self.update_yjs_state(self.current_presentation, status)
-                    self.last_slide_index = slide_index
+                self.update_status_in_yjs(item_id, slide_index)
+                await self.send_update_to_ysweet()
+
+                self.last_slide_index = slide_index
 
         except requests.RequestException as e:
             logger.error(f"Error polling Proclaim: {e}")
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
 
-    def run(self):
+    async def run(self):
         """Main service loop"""
         logger.info(f"Starting Proclaim service for doc: {self.doc_id}")
         logger.info(f"Proclaim URL: {self.client.base_url}")
@@ -363,34 +401,41 @@ class ProclaimService:
         logger.info(f"Poll interval: {POLL_INTERVAL}s")
 
         try:
-            # Get session ID on startup
+            # Connect to Proclaim
             self.client.get_session_id()
             logger.info(f"Connected to Proclaim session: {self.client.session_id}")
         except Exception as e:
             logger.error(f"Failed to connect to Proclaim: {e}")
             return
 
+        try:
+            # Connect to Y-Sweet
+            await self.connect_to_ysweet()
+        except Exception as e:
+            logger.error(f"Failed to connect to Y-Sweet: {e}")
+            return
+
         # Main loop
         while True:
             try:
-                self.poll_once()
-                time.sleep(POLL_INTERVAL)
+                await self.poll_once()
+                await asyncio.sleep(POLL_INTERVAL)
             except KeyboardInterrupt:
                 logger.info("Shutting down...")
                 break
             except Exception as e:
                 logger.error(f"Error in main loop: {e}", exc_info=True)
-                time.sleep(POLL_INTERVAL)
+                await asyncio.sleep(POLL_INTERVAL)
 
 
-def main():
+async def main():
     """Entry point"""
     # Get doc ID from command line or environment
     doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID', 'doc-2024-01-01')
 
-    service = ProclaimService(YSWEET_URL, doc_id)
-    service.run()
+    service = ProclaimYjsService(YSWEET_URL, doc_id)
+    await service.run()
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

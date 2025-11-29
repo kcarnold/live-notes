@@ -1,24 +1,25 @@
 # Proclaim Integration
 
-This integration syncs current slide text from Proclaim to the live-notes application.
+This integration syncs current slide text from Proclaim to the live-notes application in real-time.
 
 ## Architecture
 
-The integration consists of three parts:
+The integration uses **Yjs** for real-time synchronization:
 
 1. **Python Service** (`proclaim_service.py`) - Runs on the computer with Proclaim
    - Polls Proclaim API for current presentation and slide status
    - Parses presentation content from the Proclaim database
-   - POSTs updates to the Express server
+   - Updates Yjs shared state via Y-Sweet WebSocket connection
 
-2. **Express Endpoints** (in `server.ts`)
-   - `/api/proclaim/update` - Receives updates from Python service
-   - `/api/proclaim/state/:docId` - Serves current state to clients
+2. **Yjs Shared State**
+   - `proclaimPresentations` (Y.Map) - Maps itemId → presentation data
+     - Each presentation contains: `{title: string, itemId: string, slides: Y.Array<string>}`
+   - `proclaimStatus` (Y.Map) - Current status: `{itemId: string, slideIndex: number}`
 
-3. **React Component** (`CurrentSlideViewer.tsx`)
-   - Displays current slide text in the browser
-   - Polls the Express endpoint for updates
-   - Renders slide text with formatting
+3. **React Components** (`CurrentSlideViewer.tsx`)
+   - **Container**: Reads from Yjs and extracts presentation data
+   - **Pure component**: Displays current slide with context (prev/next slides)
+   - Real-time updates via Yjs (no polling needed)
 
 ## Setup
 
@@ -62,34 +63,61 @@ http://localhost:8000/translatedOutline-French,currentSlide
 
 ## How It Works
 
-1. **Proclaim Service** polls Proclaim API every second:
-   - Fetches `/onair/session` to get session ID
-   - Fetches `/onair/statusChanged` to get current slide index and item ID
+### 1. Python Service Polls Proclaim
 
-2. When presentation or slide changes:
-   - Queries Proclaim SQLite database for service item content
-   - Parses rich text XML to extract slide text
-   - Decodes the custom order sequence to get slides in correct order
-   - POSTs to Express server with presentation and status data
+Every second (configurable):
+- Fetches `/onair/session` to get session ID
+- Fetches `/onair/statusChanged` to get current slide index and item ID
 
-3. **Express Server** stores current state in memory:
-   - Updates a Map keyed by docId
-   - Serves state via `/api/proclaim/state/:docId`
+### 2. Presentation Changes → Update Yjs
 
-4. **React Component** polls Express server:
-   - Fetches state every second
-   - Renders current slide with title and progress indicator
+When a new presentation is detected:
+- Queries Proclaim SQLite database for service item content
+- Parses rich text XML to extract slide text
+- Decodes the custom order sequence to get slides in correct order
+- Stores full presentation in `proclaimPresentations` Yjs map
+- Updates `proclaimStatus` with current itemId and slideIndex
+- Sends update to Y-Sweet WebSocket
+
+### 3. Slide Changes → Update Yjs
+
+When the slide index changes:
+- Updates `proclaimStatus` in Yjs
+- Sends update to Y-Sweet WebSocket
+
+### 4. Browser Auto-Updates
+
+React component:
+- Subscribes to Yjs changes via `useMap()`
+- Extracts current presentation and slide index
+- Renders current slide with context (previous and next slides)
+- Updates automatically when Yjs changes (no polling!)
+
+## UI Features
+
+The current slide viewer shows:
+- **Header**: Title and progress (slide X of Y)
+- **Current slide**: Large, highlighted with blue border
+- **Context slides**: Previous and next slides (dimmed, smaller text)
+- **Smooth transitions**: CSS animations when slides change
+
+## Data Flow
+
+```
+Proclaim API/DB
+    ↓ (poll every 1s)
+Python Service
+    ↓ (y-py WebSocket)
+Y-Sweet Server
+    ↓ (Yjs sync)
+React Component
+    ↓ (render)
+Browser Display
+```
+
+No HTTP polling from browser → instant updates!
 
 ## Future Enhancements
-
-### Proper Yjs Integration
-
-Currently, the integration uses in-memory state in Express. For production:
-
-1. Use `y-py` (Python Yjs bindings) in the Proclaim service
-2. Connect to Y-Sweet WebSocket server
-3. Update a shared Y.Array with presentation slides
-4. React component reads directly from Yjs (real-time updates)
 
 ### Auto-Update Mechanism
 
@@ -122,9 +150,6 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 ```
-
-**Option 3: Watch for changes**
-Use a tool like `watchexec` or `entr` to restart on git updates.
 
 ### Speech Transcription Automation
 
@@ -192,6 +217,19 @@ sqlite3 ~/Library/Application\ Support/Proclaim/Data/*/PresentationManager/Prese
 SELECT * FROM ServiceItems LIMIT 5;
 ```
 
+Inspect Yjs state in browser console:
+```javascript
+// Access Yjs doc (exposed in App.tsx for debugging)
+const proclaimPresentations = window.ydoc.getMap('proclaimPresentations')
+const proclaimStatus = window.ydoc.getMap('proclaimStatus')
+
+// See current status
+proclaimStatus.toJSON()
+
+// See all presentations
+proclaimPresentations.toJSON()
+```
+
 ## Troubleshooting
 
 **Service won't connect to Proclaim:**
@@ -199,10 +237,15 @@ SELECT * FROM ServiceItems LIMIT 5;
 - Verify Proclaim API is accessible: `curl http://localhost:52195/onair/session`
 - Check firewall settings
 
+**Service won't connect to Y-Sweet:**
+- Check Express server is running: `curl http://localhost:8000/api/ys-auth -X POST -H "Content-Type: application/json" -d '{"docId": "test", "isEditor": true}'`
+- Check Y-Sweet connection string in `.env`
+- Check network connectivity
+
 **No slides appearing in browser:**
-- Check Express server logs for incoming updates
-- Verify browser is polling the correct docId
-- Check network tab for `/api/proclaim/state/:docId` requests
+- Check browser console for Yjs connection errors
+- Verify Python service is connected: check logs for "Connected to Y-Sweet"
+- Inspect Yjs state in browser console (see Debugging section)
 
 **Database not found:**
 - Verify Proclaim data directory exists
@@ -213,3 +256,8 @@ SELECT * FROM ServiceItems LIMIT 5;
 - Check `CustomOrderSequence` in Proclaim
 - Verify the order parsing logic handles your presentation format
 - Check service logs for warnings about missing labels
+
+**WebSocket connection issues:**
+- Check Y-Sweet server logs
+- Verify no proxy/firewall is blocking WebSocket connections
+- Try increasing POLL_INTERVAL to reduce load

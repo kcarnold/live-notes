@@ -1,131 +1,145 @@
-import { useEffect, useState } from 'react';
+import { useMap } from '@y-sweet/react';
 
-interface ProclaimStatus {
-  slideIndex: number;
-  currentSlide: string;
-  totalSlides: number;
-  title: string;
-}
-
-interface ProclaimPresentation {
-  itemId: string;
-  title: string;
-  slides: string[];
-}
-
-interface ProclaimState {
-  presentation: ProclaimPresentation | null;
-  status: ProclaimStatus | null;
-  lastUpdate: number;
+interface Slide {
+  text: string;
+  isActive: boolean;
 }
 
 interface CurrentSlideViewerProps {
-  docId: string;
+  title: string;
+  slides: string[];
+  currentIndex: number;
+  context?: number; // How many slides before/after to show (default: 1)
 }
 
 /**
- * Component that displays the current slide from Proclaim
- *
- * Polls the Express server for the latest slide data
+ * Pure component that displays current slide with context (prev/next slides)
  */
-export function CurrentSlideViewer({ docId }: CurrentSlideViewerProps) {
-  const [state, setState] = useState<ProclaimState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+export function CurrentSlideViewer({
+  title,
+  slides,
+  currentIndex,
+  context = 1
+}: CurrentSlideViewerProps) {
+  // Build array of slides to display with context
+  const startIdx = Math.max(0, currentIndex - context);
+  const endIdx = Math.min(slides.length - 1, currentIndex + context);
 
-  useEffect(() => {
-    let mounted = true;
+  const visibleSlides: Slide[] = [];
+  for (let i = startIdx; i <= endIdx; i++) {
+    visibleSlides.push({
+      text: slides[i],
+      isActive: i === currentIndex,
+    });
+  }
 
-    const fetchState = async () => {
-      try {
-        const response = await fetch(`/api/proclaim/state/${docId}`);
-
-        if (!response.ok) {
-          if (response.status === 404) {
-            setError('No Proclaim data available. Is the Proclaim service running?');
-          } else {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          return;
-        }
-
-        const data = await response.json();
-        if (mounted) {
-          setState(data);
-          setError(null);
-          setIsLoading(false);
-        }
-      } catch (err) {
-        console.error('Error fetching Proclaim state:', err);
-        if (mounted) {
-          setError('Failed to fetch Proclaim data');
-        }
-      }
-    };
-
-    // Initial fetch
-    fetchState();
-
-    // Poll every second
-    const interval = setInterval(fetchState, 1000);
-
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, [docId]);
-
-  if (isLoading) {
+  if (slides.length === 0) {
     return (
       <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-gray-500">Loading Proclaim data...</div>
+        <div className="text-gray-500">No slides available</div>
       </div>
     );
   }
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-red-500">{error}</div>
-      </div>
-    );
-  }
-
-  if (!state || !state.status) {
-    return (
-      <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-gray-500">No slide data available</div>
-      </div>
-    );
-  }
-
-  const { status } = state;
 
   return (
-    <div className="flex flex-col h-full bg-black text-white">
+    <div className="flex flex-col h-full bg-black text-white overflow-hidden">
       {/* Header with title and progress */}
-      <div className="bg-gray-800 px-6 py-3 border-b border-gray-700">
+      <div className="bg-gray-800 px-6 py-3 border-b border-gray-700 flex-shrink-0">
         <div className="text-sm text-gray-400">
-          Slide {status.slideIndex + 1} of {status.totalSlides}
+          Slide {currentIndex + 1} of {slides.length}
         </div>
-        <div className="text-lg font-semibold">{status.title}</div>
+        <div className="text-lg font-semibold">{title}</div>
       </div>
 
-      {/* Current slide content */}
-      <div className="flex-1 flex items-center justify-center p-8">
-        <div className="text-center">
-          {status.currentSlide.split('\n').map((line, index) => (
-            <div key={index} className="text-4xl leading-relaxed font-light">
-              {line || '\u00A0'} {/* Non-breaking space for empty lines */}
+      {/* Slides with context */}
+      <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+        {visibleSlides.map((slide, idx) => (
+          <div
+            key={startIdx + idx}
+            className={`transition-all duration-300 ${
+              slide.isActive
+                ? 'opacity-100 scale-100'
+                : 'opacity-40 scale-95'
+            }`}
+          >
+            {slide.isActive && (
+              <div className="text-xs text-blue-400 font-semibold mb-2 uppercase tracking-wide">
+                Current Slide
+              </div>
+            )}
+            <div
+              className={`rounded-lg p-6 ${
+                slide.isActive
+                  ? 'bg-gray-800 border-2 border-blue-500'
+                  : 'bg-gray-900 border border-gray-700'
+              }`}
+            >
+              <div className="text-center space-y-2">
+                {slide.text.split('\n').map((line, lineIdx) => (
+                  <div
+                    key={lineIdx}
+                    className={`leading-relaxed ${
+                      slide.isActive ? 'text-3xl font-light' : 'text-xl font-light'
+                    }`}
+                  >
+                    {line || '\u00A0'}
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Footer with update timestamp */}
-      <div className="bg-gray-800 px-6 py-2 border-t border-gray-700 text-xs text-gray-500">
-        Last update: {new Date(state.lastUpdate).toLocaleTimeString()}
+            {!slide.isActive && (
+              <div className="text-xs text-gray-500 mt-1 text-center">
+                {startIdx + idx < currentIndex ? 'Previous' : 'Next'}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * Container component that reads from Yjs and passes data to pure component
+ */
+export function CurrentSlideViewerContainer() {
+  const statusMap = useMap('proclaimStatus');
+  const presentationsMap = useMap('proclaimPresentations');
+
+  // Read current status
+  const itemId = statusMap?.get('itemId') as string | undefined;
+  const slideIndex = (statusMap?.get('slideIndex') as number) ?? 0;
+
+  // Read presentation data
+  const presentation = itemId ? presentationsMap?.get(itemId) : undefined;
+  const title = (presentation as any)?.get?.('title') as string | undefined ?? 'Unknown';
+
+  // Get slides array from presentation
+  const slidesArray = (presentation as any)?.get?.('slides');
+  const slides: string[] = [];
+  if (slidesArray && typeof slidesArray.length === 'number') {
+    for (let i = 0; i < slidesArray.length; i++) {
+      slides.push(slidesArray.get(i) as string);
+    }
+  }
+
+  if (!itemId || !presentation) {
+    return (
+      <div className="flex items-center justify-center h-full bg-gray-50">
+        <div className="text-gray-500">
+          Waiting for Proclaim data...
+          <div className="text-xs mt-2">Is the Proclaim service running?</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <CurrentSlideViewer
+      title={title}
+      slides={slides}
+      currentIndex={slideIndex}
+      context={1}
+    />
   );
 }
