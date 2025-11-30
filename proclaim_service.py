@@ -273,62 +273,6 @@ class ProclaimClient:
 
         return slides
 
-    def parse_presentation(self, item_id: str) -> Optional[Dict[str, Any]]:
-        """Parse a presentation item and return structured data."""
-        # Remove hyphens from GUID
-        clean_id = item_id.replace('-', '')
-
-        service_item = self.get_service_item(clean_id)
-        if not service_item:
-            logger.warning(f"Service item {item_id} not found")
-            return None
-
-        item_title = service_item.get('Title', 'Unknown')
-
-        # Check if this is a skipped item type - show as blank instead
-        if item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
-            logger.info(f"Showing blank item: {item_title}")
-            return {
-                'itemId': item_id,
-                'title': item_title,
-                'slides': [''],
-            }
-
-        try:
-            content = json.loads(service_item['Content'])
-
-            # Extract lyrics if present
-            lyrics_xml = content.get('_richtextfield:Lyrics', '')
-            if not lyrics_xml:
-                logger.warning(f"No lyrics found for item {item_id}")
-                return None
-
-            lyrics_text = self.decode_richtext_xml(lyrics_xml)
-            sections = self.split_into_sections(lyrics_text)
-            order_str = content.get('CustomOrderSequence', '')
-            slides = self.get_slides_in_order(sections, order_str)
-            # Prepend the title slide
-            if title := content.get('SongDisplayTitle', None):
-                logger.info(f"Adding title slide: {title}")
-                slides.insert(0, title)
-            else:
-                logger.info("No title found; skipping title slide.")
-                logger.debug({
-                    field: content.get(field)
-                    for field in ['SongDisplayTitle', "_textfield:Song Title", "TitleSlide"]
-                    if field in content
-                })
-                #print(content.keys())
-
-            return {
-                'itemId': item_id,
-                'title': item_title,
-                'slides': slides,
-            }
-        except Exception as e:
-            logger.error(f"Error parsing presentation {item_id}: {e}")
-            return None
-
     def parse_item_translation(self, item_id: str, translation_screen_idx: int) -> Optional[Dict[str, Any]]:
         """Extract translated slides for any item type."""
         service_item = self.get_service_item(item_id.replace('-', ''))
@@ -419,8 +363,6 @@ class ProclaimYjsService:
         """Store full presentation data in Yjs"""
         item_id = presentation_data['itemId']
 
-        # Create a nested map for this presentation
-        # pycrdt automatically converts dicts to Maps and lists to Arrays when assigned
         with self.ydoc.transaction():
             self.presentations_map[item_id] = {
                 'title': presentation_data['title'],
@@ -497,6 +439,15 @@ class ProclaimYjsService:
         logger.info(f"Poll interval: {POLL_INTERVAL}s")
 
         try:
+            # Get Y-Sweet token and build WebSocket URL
+            token_data = await self.get_ysweet_token()
+            ws_url = token_data['url'] + '/' + self.doc_id
+            logger.info(f"Connecting to Y-Sweet: {ws_url}")
+        except Exception as e:
+            logger.error(f"Failed to get Y-Sweet token: {e}")
+            return
+        
+        try:
             # Connect to Proclaim
             await self.proclaim_client.get_session_id()
             logger.info(f"Connected to Proclaim session: {self.proclaim_client.session_id}")
@@ -504,45 +455,26 @@ class ProclaimYjsService:
             logger.error(f"Failed to connect to Proclaim: {e}")
             return
 
-        while True:
-            try:
-                # Get Y-Sweet token and build WebSocket URL
-                token_data = await self.get_ysweet_token()
-                ws_url = token_data['url'] + '/' + self.doc_id
-                logger.info(f"Connecting to Y-Sweet: {ws_url}")
+        # Connect to Y-Sweet with WebsocketProvider
+        async with (
+            aconnect_ws(ws_url) as websocket,
+            Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
+        ):
+            logger.info("Connected to Y-Sweet")
 
-                # Connect to Y-Sweet with WebsocketProvider
-                async with (
-                    aconnect_ws(ws_url) as websocket,
-                    Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
-                ):
-                    logger.info("Connected to Y-Sweet")
-
-                    # Main polling loop
-                    while True:
-                        try:
-                            await self.poll_once()
-                            await anyio.sleep(POLL_INTERVAL)
-                        except Exception as e:
-                            logger.error(f"Error in polling loop: {e}", exc_info=True)
-                            await anyio.sleep(POLL_INTERVAL)
-            except anyio.get_cancelled_exc_class():
-                # Re-raise cancellation to exit cleanly
-                print("Re-raising cancellation...")
-                raise
-
-            except BaseException as e:
-                # Handle websocket disconnections gracefully
-                # This includes LocalProtocolError wrapped in ExceptionGroup
-                logger.warning(f"Y-Sweet connection lost: {e}")
-                logger.info(f"Reconnecting to Y-Sweet in {POLL_INTERVAL}s...")
-                await anyio.sleep(POLL_INTERVAL)
-
+            # Main polling loop
+            while True:
+                try:
+                    await self.poll_once()
+                    await anyio.sleep(POLL_INTERVAL)
+                except Exception as e:
+                    logger.error(f"Error in polling loop: {e}", exc_info=True)
+                    await anyio.sleep(POLL_INTERVAL)
 
 async def signal_handler(cancel_scope: anyio.CancelScope):
     with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
         async for signum in signals:
-            signal_name = signal.strsignal(signum)
+            signal_name = signal.strsignal(signum) or str(signum)
             logger.info(f"Received {signal_name}, shutting down...")
             cancel_scope.cancel()
             return
@@ -555,7 +487,6 @@ async def main():
 
     service = ProclaimYjsService(YSWEET_URL, doc_id)
 
-    # Set up signal handler for SIGINT (Ctrl+C)
     async with anyio.create_task_group() as tg:
         tg.start_soon(service.run)
         tg.start_soon(signal_handler, tg.cancel_scope)
