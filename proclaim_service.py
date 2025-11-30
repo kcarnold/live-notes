@@ -16,6 +16,7 @@ import logging
 import asyncio
 from typing import Optional, Dict, Any, List
 from pathlib import Path
+from datetime import date
 import requests
 import sqlite3
 from lxml import etree
@@ -423,11 +424,17 @@ class ProclaimYjsService:
                 await asyncio.sleep(POLL_INTERVAL)
 
 
+def get_today_local():
+    """Get today's date in local timezone as YYYY-MM-DD format"""
+    today = date.today()
+    return f"{today.year}-{today.month:02d}-{today.day:02d}"
+
+
 async def main():
     """Entry point"""
     # Get doc ID from command line or environment
-    # TODO: use today's date for default
-    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID', 'doc-2025-11-29')
+    # Default doc id is `doc-${date}`, where date is today's date
+    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID', f'doc-{date.today().isoformat()}')
 
     service = ProclaimYjsService(YSWEET_URL, doc_id)
     await service.run()
