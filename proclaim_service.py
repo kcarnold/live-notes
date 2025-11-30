@@ -36,7 +36,7 @@ logger = logging.getLogger('proclaim-service')
 
 # Configuration
 PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://localhost:52195')
-YSWEET_URL = os.getenv('YSWEET_URL', 'http://localhost:8000')
+YSWEET_URL = os.getenv('YSWEET_URL', 'http://dev8.kenarnold.org')
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '1.0'))  # seconds
 
 
@@ -115,6 +115,29 @@ class ProclaimClient:
                 return None
             return dict(zip([col[0] for col in cursor.description], row))
 
+    def get_presentation(self, presentation_id: str) -> Optional[Dict[str, Any]]:
+        """Get presentation data from the database."""
+        if not self.db_path:
+            self.find_presentation_db()
+
+        assert self.db_path is not None
+
+        # strip hyphens from presentation_id
+        presentation_id = presentation_id.replace('-', '')
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT PresentationId, Content FROM Presentations WHERE PresentationId = ?",
+                          (presentation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+
+            return {
+                'id': row[0],
+                'content': json.loads(row[1])
+            }
+
     @staticmethod
     def decode_richtext_xml(xml: str) -> str:
         """
@@ -133,6 +156,21 @@ class ProclaimClient:
                 result += run.attrib['Text'] + ' '
             result += '\n'
         return result
+
+    @staticmethod
+    def get_translation_screen_idx(presentation_content: dict) -> Optional[int]:
+        """Get the index of the translation screen from VirtualScreens."""
+        virtual_screens = json.loads(presentation_content.get('VirtualScreens', '[]'))
+
+        # Filter to slide screens only
+        slide_screens = [s for s in virtual_screens if s['outputKind'] in ['Slides', 'SlidesAlternateContent']]
+
+        # Find translation screen (French or Haitian)
+        for idx, screen in enumerate(slide_screens):
+            if any(lang in screen['name'] for lang in ['French', 'Haitian']):
+                return idx
+
+        return None
 
     @staticmethod
     def split_into_slides(text: str) -> List[str]:
@@ -286,6 +324,52 @@ class ProclaimClient:
             logger.error(f"Error parsing presentation {item_id}: {e}")
             return None
 
+    def parse_item_translation(self, item_id: str, translation_screen_idx: int) -> Optional[Dict[str, Any]]:
+        """Extract translated slides for any item type."""
+        service_item = self.get_service_item(item_id.replace('-', ''))
+        if not service_item:
+            logger.warning(f"Service item {item_id} not found")
+            return None
+
+        try:
+            content = json.loads(service_item['Content'])
+            item_kind = service_item.get('ServiceItemKind', 'Unknown')
+
+            # All item types use the same translation field pattern
+            # Note: Using -1 offset to match validate_proclaim.py
+            translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
+
+            if translation_key not in content:
+                logger.warning(f"No translation found for {item_id} (key: {translation_key})")
+                return None
+
+            # Decode translation XML
+            translation_xml = content[translation_key]
+            translation_text = self.decode_richtext_xml(translation_xml)
+
+            # Handle songs specially: they need section parsing and custom ordering
+            if item_kind == 'SongLyrics':
+                sections = self.split_into_sections(translation_text)
+                order_str = content.get('CustomOrderSequence', '')
+                slides = self.get_slides_in_order(sections, order_str)
+
+                # Add title slide if present
+                if title := content.get('SongDisplayTitle'):
+                    slides.insert(0, title)
+            else:
+                # Content and BiblePassage: just split into slides
+                slides = self.split_into_slides(translation_text)
+
+            return {
+                'itemId': item_id,
+                'title': service_item.get('Title', 'Unknown'),
+                'slides': slides,
+                'itemKind': item_kind,
+            }
+        except Exception as e:
+            logger.error(f"Error parsing translation for {item_id}: {e}")
+            return None
+
 
 class ProclaimYjsService:
     """Service that syncs Proclaim data to Yjs via Y-Sweet"""
@@ -346,25 +430,41 @@ class ProclaimYjsService:
             status = await self.proclaim_client.get_status()
             item_id = status.get('status', {}).get('itemId')
             slide_index = status.get('status', {}).get('slideIndex', 0)
+            presentation_id = status.get('presentationId')
 
             # Check if presentation changed
             if item_id != self.last_item_id:
-                logger.info(f"Presentation changed to {item_id}")
-                presentation_data = self.proclaim_client.parse_presentation(item_id)
+                logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
 
-                if presentation_data:
-                    self.update_presentation_in_yjs(presentation_data)
-                    self.update_status_in_yjs(item_id, slide_index)
-                    # AsyncWebsocketClient automatically syncs updates
+                # Get presentation data to extract translation screen index
+                if presentation_id:
+                    pres_data = self.proclaim_client.get_presentation(presentation_id)
+                    if pres_data:
+                        translation_screen_idx = self.proclaim_client.get_translation_screen_idx(pres_data['content'])
 
-                    self.last_item_id = item_id
-                    self.last_slide_index = slide_index
+                        if translation_screen_idx is not None:
+                            # Parse the item with translation
+                            item_data = self.proclaim_client.parse_item_translation(item_id, translation_screen_idx)
+
+                            if item_data:
+                                self.update_presentation_in_yjs(item_data)
+                                self.update_status_in_yjs(item_id, slide_index)
+                                # Provider automatically syncs updates
+
+                                self.last_item_id = item_id
+                                self.last_slide_index = slide_index
+                        else:
+                            logger.warning(f"No translation screen found in presentation {presentation_id}")
+                    else:
+                        logger.warning(f"Presentation {presentation_id} not found in database")
+                else:
+                    logger.warning("No presentation ID in status response")
 
             # Check if slide changed
             elif slide_index != self.last_slide_index:
                 logger.info(f"Slide changed to {slide_index}")
                 self.update_status_in_yjs(item_id, slide_index)
-                # AsyncWebsocketClient automatically syncs updates
+                # Provider automatically syncs updates
 
                 self.last_slide_index = slide_index
 
