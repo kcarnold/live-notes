@@ -49,8 +49,28 @@ class ProclaimClient:
     def __init__(self, base_url: str = PROCLAIM_BASE_URL):
         self.base_url = base_url
         self.session_id: Optional[str] = None
-        self.db_path: Optional[str] = None
+        self.db_path: str = self._find_presentation_db()
         self.http_client = httpx.AsyncClient()
+
+    @staticmethod
+    def _find_presentation_db() -> str :
+        """Find the most recently modified Proclaim presentation database file."""
+        # Find the Proclaim data directory based on OS
+        if (path := Path.home() / 'Library' / 'Application Support' / 'Proclaim' / 'Data').exists():
+            proclaim_root = path
+        elif (path := Path.home() / 'AppData' / 'Local' / 'Proclaim' / 'Data').exists():
+            proclaim_root = path
+        else:
+            raise FileNotFoundError('Proclaim data directory not found.')
+
+        # Find all PresentationManager.db files under it
+        db_files = list(proclaim_root.glob('*/PresentationManager/PresentationManager.db'))
+        if not db_files:
+            raise FileNotFoundError('No PresentationManager.db files found.')
+
+        # Return the most recently modified one
+        return str(max(db_files, key=lambda p: p.stat().st_mtime))
+
 
     async def get_session_id(self, timeout: float = 2.0) -> str:
         """Request /onair/session and return the session id."""
@@ -84,32 +104,8 @@ class ProclaimClient:
         r.raise_for_status()
         return r.json()
 
-    def find_presentation_db(self) -> str:
-        """Find the most recently modified Proclaim presentation database file."""
-        # Find the Proclaim data directory based on OS
-        if (path := Path.home() / 'Library' / 'Application Support' / 'Proclaim' / 'Data').exists():
-            proclaim_root = path
-        elif (path := Path.home() / 'AppData' / 'Local' / 'Proclaim' / 'Data').exists():
-            proclaim_root = path
-        else:
-            raise FileNotFoundError('Proclaim data directory not found.')
-
-        # Find all PresentationManager.db files under it
-        db_files = list(proclaim_root.glob('*/PresentationManager/PresentationManager.db'))
-        if not db_files:
-            raise FileNotFoundError('No PresentationManager.db files found.')
-
-        # Return the most recently modified one
-        self.db_path = str(max(db_files, key=lambda p: p.stat().st_mtime))
-        return self.db_path
-
     def get_service_item(self, item_id: str) -> Optional[Dict[str, Any]]:
         """Get a service item by its ID from the Proclaim database."""
-        if not self.db_path:
-            self.find_presentation_db()
-
-        assert self.db_path is not None
-
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM ServiceItems WHERE ServiceItemId = ?", (item_id,))
@@ -120,11 +116,6 @@ class ProclaimClient:
 
     def get_presentation(self, presentation_id: str) -> Optional[Dict[str, Any]]:
         """Get presentation data from the database."""
-        if not self.db_path:
-            self.find_presentation_db()
-
-        assert self.db_path is not None
-
         # strip hyphens from presentation_id
         presentation_id = presentation_id.replace('-', '')
 
