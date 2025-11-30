@@ -34,6 +34,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger('proclaim-service')
 
+# Suppress INFO logging from httpx
+logging.getLogger('httpx').setLevel(logging.WARNING)
+
 # Configuration
 PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://localhost:52195')
 YSWEET_URL = os.getenv('YSWEET_URL', 'http://dev8.kenarnold.org')
@@ -289,6 +292,17 @@ class ProclaimClient:
             logger.warning(f"Service item {item_id} not found")
             return None
 
+        item_title = service_item.get('Title', 'Unknown')
+
+        # Check if this is a skipped item type - show as blank instead
+        if item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
+            logger.info(f"Showing blank item: {item_title}")
+            return {
+                'itemId': item_id,
+                'title': item_title,
+                'slides': [''],
+            }
+
         try:
             content = json.loads(service_item['Content'])
 
@@ -317,7 +331,7 @@ class ProclaimClient:
 
             return {
                 'itemId': item_id,
-                'title': content.get('SongDisplayTitle', 'Unknown'),
+                'title': item_title,
                 'slides': slides,
             }
         except Exception as e:
@@ -334,6 +348,17 @@ class ProclaimClient:
         try:
             content = json.loads(service_item['Content'])
             item_kind = service_item.get('ServiceItemKind', 'Unknown')
+            item_title = service_item.get('Title', 'Unknown')
+
+            # Check if this is a skipped item type - show as blank instead
+            if item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
+                logger.info(f"Showing blank item: {item_title}")
+                return {
+                    'itemId': item_id,
+                    'title': item_title,
+                    'slides': [''],
+                    'itemKind': item_kind,
+                }
 
             # All item types use the same translation field pattern
             # Note: Using -1 offset to match validate_proclaim.py
@@ -362,7 +387,7 @@ class ProclaimClient:
 
             return {
                 'itemId': item_id,
-                'title': service_item.get('Title', 'Unknown'),
+                'title': item_title,
                 'slides': slides,
                 'itemKind': item_kind,
             }
