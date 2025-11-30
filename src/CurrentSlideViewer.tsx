@@ -9,7 +9,7 @@ interface CurrentSlideViewerProps {
   title: string;
   slides: string[];
   currentIndex: number;
-  context?: number; // How many slides before/after to show (default: 1)
+  context?: number; // How many slides before/after to show (default: 0)
 }
 
 /**
@@ -19,7 +19,7 @@ export function CurrentSlideViewer({
   title,
   slides,
   currentIndex,
-  context = 1
+  context = 0
 }: CurrentSlideViewerProps) {
   // Build array of slides to display with context
   const startIdx = Math.max(0, currentIndex - context);
@@ -62,11 +62,6 @@ export function CurrentSlideViewer({
                 : 'opacity-40 scale-95'
             }`}
           >
-            {slide.isActive && (
-              <div className="text-xs text-blue-400 font-semibold mb-2 uppercase tracking-wide">
-                Current Slide
-              </div>
-            )}
             <div
               className={`rounded-lg p-6 ${
                 slide.isActive
@@ -120,7 +115,6 @@ export function CurrentSlideViewerContainer() {
 
     // Get slides array from presentation
     const slidesArray = presentation?.slides as string[] | undefined;
-    console.log('slidesArray:', slidesArray);
     const slides: string[] = [];
     if (slidesArray && slidesArray.length > 0) {
       for (let i = 0; i < slidesArray.length; i++) {
@@ -136,10 +130,10 @@ export function CurrentSlideViewerContainer() {
         title={title}
         slides={slides}
         currentIndex={slideIndex}
-        context={1}
+        context={0}
       />
     );
-  } catch (error) {
+  } catch {
       return (
         <div className="flex items-center justify-center h-full bg-gray-50">
           <div className="text-gray-500">
