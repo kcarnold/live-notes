@@ -18,7 +18,7 @@ import anyio
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from datetime import date
-import requests
+import httpx
 import sqlite3
 from lxml import etree
 
@@ -26,8 +26,6 @@ from pycrdt import Doc, Map, Array
 from httpx_ws import aconnect_ws
 from pycrdt import Provider
 from pycrdt.websocket.websocket import HttpxWebsocket
-
-import aiohttp
 
 # Configure logging
 logging.basicConfig(
@@ -49,38 +47,38 @@ class ProclaimClient:
         self.base_url = base_url
         self.session_id: Optional[str] = None
         self.db_path: Optional[str] = None
+        self.http_client = httpx.AsyncClient()
 
-    def get_session_id(self, timeout: float = 2.0) -> str:
+    async def get_session_id(self, timeout: float = 2.0) -> str:
         """Request /onair/session and return the session id."""
         url = f"{self.base_url}/onair/session"
-        r = requests.get(url, timeout=timeout)
+        r = await self.http_client.get(url, timeout=timeout)
         r.raise_for_status()
-        r.encoding = 'utf-8-sig'  # Handle BOM if present
-        self.session_id = r.text
+        self.session_id = r.content.decode('utf-8-sig')
         return self.session_id
 
-    def get_onair_presentation(self, timeout: float = 5.0) -> Dict[str, Any]:
+    async def get_onair_presentation(self, timeout: float = 5.0) -> Dict[str, Any]:
         """Fetch /presentations/onair with the OnAirSessionId header."""
         if not self.session_id:
-            self.get_session_id()
+            await self.get_session_id()
+        assert self.session_id is not None
 
         url = f"{self.base_url}/presentations/onair"
         headers = {'OnAirSessionId': self.session_id}
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = await self.http_client.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
-        r.encoding = 'utf-8-sig'
         return r.json()
 
-    def get_status(self, timeout: float = 5.0) -> Dict[str, Any]:
+    async def get_status(self, timeout: float = 5.0) -> Dict[str, Any]:
         """Fetch /onair/statusChanged with the OnAirSessionId header."""
         if not self.session_id:
-            self.get_session_id()
+            await self.get_session_id()
+        assert self.session_id is not None
 
         url = f"{self.base_url}/onair/statusChanged"
         headers = {'OnAirSessionId': self.session_id}
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = await self.http_client.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
-        r.encoding = 'utf-8-sig'
         return r.json()
 
     def find_presentation_db(self) -> str:
@@ -308,13 +306,13 @@ class ProclaimYjsService:
 
     async def get_ysweet_token(self) -> Dict[str, Any]:
         """Get a Y-Sweet token for the document"""
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
                 f"{self.ysweet_url}/api/ys-auth",
                 json={"docId": self.doc_id, "isEditor": True}
-            ) as response:
-                response.raise_for_status()
-                return await response.json()
+            )
+            response.raise_for_status()
+            return response.json()
 
 
     def update_presentation_in_yjs(self, presentation_data: Dict[str, Any]):
@@ -345,7 +343,7 @@ class ProclaimYjsService:
         """Poll Proclaim once and update state if changed"""
         try:
             # Get current status
-            status = self.proclaim_client.get_status()
+            status = await self.proclaim_client.get_status()
             item_id = status.get('status', {}).get('itemId')
             slide_index = status.get('status', {}).get('slideIndex', 0)
 
@@ -370,7 +368,7 @@ class ProclaimYjsService:
 
                 self.last_slide_index = slide_index
 
-        except requests.RequestException as e:
+        except httpx.HTTPError as e:
             logger.error(f"Error polling Proclaim: {e}")
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
@@ -384,7 +382,7 @@ class ProclaimYjsService:
 
         try:
             # Connect to Proclaim
-            self.proclaim_client.get_session_id()
+            await self.proclaim_client.get_session_id()
             logger.info(f"Connected to Proclaim session: {self.proclaim_client.session_id}")
         except Exception as e:
             logger.error(f"Failed to connect to Proclaim: {e}")
@@ -412,11 +410,12 @@ class ProclaimYjsService:
                         except Exception as e:
                             logger.error(f"Error in polling loop: {e}", exc_info=True)
                             await anyio.sleep(POLL_INTERVAL)
+            except anyio.get_cancelled_exc_class():
+                # Re-raise cancellation to exit cleanly
+                print("Re-raising cancellation...")
+                raise
 
             except BaseException as e:
-                # Re-raise cancellation (from signal handler) to stop cleanly
-                if isinstance(e, anyio.get_cancelled_exc_class()):
-                    raise
                 # Handle websocket disconnections gracefully
                 # This includes LocalProtocolError wrapped in ExceptionGroup
                 logger.warning(f"Y-Sweet connection lost: {e}")
@@ -424,11 +423,13 @@ class ProclaimYjsService:
                 await anyio.sleep(POLL_INTERVAL)
 
 
-def get_today_local():
-    """Get today's date in local timezone as YYYY-MM-DD format"""
-    today = date.today()
-    return f"{today.year}-{today.month:02d}-{today.day:02d}"
-
+async def signal_handler(cancel_scope: anyio.CancelScope):
+    with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
+        async for signum in signals:
+            signal_name = signal.strsignal(signum)
+            logger.info(f"Received {signal_name}, shutting down...")
+            cancel_scope.cancel()
+            return
 
 async def main():
     """Entry point with signal handling"""
@@ -439,16 +440,9 @@ async def main():
     service = ProclaimYjsService(YSWEET_URL, doc_id)
 
     # Set up signal handler for SIGINT (Ctrl+C)
-    with anyio.open_signal_receiver(signal.SIGINT) as signals:
-        with anyio.CancelScope() as cancel_scope:
-            async def signal_handler():
-                async for _ in signals:
-                    logger.info("Received SIGINT, shutting down...")
-                    cancel_scope.cancel()
-
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(service.run)
-                tg.start_soon(signal_handler)
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(service.run)
+        tg.start_soon(signal_handler, tg.cancel_scope)
 
 
 if __name__ == '__main__':
