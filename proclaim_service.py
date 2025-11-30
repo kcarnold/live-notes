@@ -13,7 +13,8 @@ import os
 import sys
 import json
 import logging
-import asyncio
+import signal
+import anyio
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from datetime import date
@@ -105,6 +106,8 @@ class ProclaimClient:
         """Get a service item by its ID from the Proclaim database."""
         if not self.db_path:
             self.find_presentation_db()
+
+        assert self.db_path is not None
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -405,23 +408,20 @@ class ProclaimYjsService:
                     while True:
                         try:
                             await self.poll_once()
-                            await asyncio.sleep(POLL_INTERVAL)
-                        except KeyboardInterrupt:
-                            logger.info("Shutting down...")
-                            return
+                            await anyio.sleep(POLL_INTERVAL)
                         except Exception as e:
                             logger.error(f"Error in polling loop: {e}", exc_info=True)
-                            await asyncio.sleep(POLL_INTERVAL)
+                            await anyio.sleep(POLL_INTERVAL)
 
-            except KeyboardInterrupt:
-                logger.info("Shutting down...")
-                return
             except BaseException as e:
+                # Re-raise cancellation (from signal handler) to stop cleanly
+                if isinstance(e, anyio.get_cancelled_exc_class()):
+                    raise
                 # Handle websocket disconnections gracefully
                 # This includes LocalProtocolError wrapped in ExceptionGroup
                 logger.warning(f"Y-Sweet connection lost: {e}")
                 logger.info(f"Reconnecting to Y-Sweet in {POLL_INTERVAL}s...")
-                await asyncio.sleep(POLL_INTERVAL)
+                await anyio.sleep(POLL_INTERVAL)
 
 
 def get_today_local():
@@ -431,14 +431,25 @@ def get_today_local():
 
 
 async def main():
-    """Entry point"""
+    """Entry point with signal handling"""
     # Get doc ID from command line or environment
     # Default doc id is `doc-${date}`, where date is today's date
     doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID', f'doc-{date.today().isoformat()}')
 
     service = ProclaimYjsService(YSWEET_URL, doc_id)
-    await service.run()
+
+    # Set up signal handler for SIGINT (Ctrl+C)
+    with anyio.open_signal_receiver(signal.SIGINT) as signals:
+        with anyio.CancelScope() as cancel_scope:
+            async def signal_handler():
+                async for _ in signals:
+                    logger.info("Received SIGINT, shutting down...")
+                    cancel_scope.cancel()
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(service.run)
+                tg.start_soon(signal_handler)
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    anyio.run(main)
