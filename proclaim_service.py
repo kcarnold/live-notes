@@ -194,10 +194,11 @@ class ProclaimClient:
         """
         sections = {}
         current_section_label = None
-        section_types = {'Verse', 'Chorus', 'Pre-chorus', 'Bridge', 'Tag', 'Title', 'Interlude', 'Ending'}
+        section_types = {'verse', 'chorus', 'pre-chorus', 'bridge', 'tag', 'title', 'interlude', 'ending'}
         lines = [line.strip() for line in text.splitlines()]
 
-        for line in lines:
+        for line_orig in lines:
+            line = line_orig.lower()
             # Is this a section header?
             if any(line.startswith(st) for st in section_types):
                 # If it doesn't have a number, call it #1
@@ -207,7 +208,7 @@ class ProclaimClient:
             elif line.startswith('{') and line.endswith('}'):
                 current_section_label = line[1:-1].strip()
             else:
-                sections.setdefault(current_section_label, []).append(line)
+                sections.setdefault(current_section_label, []).append(line_orig)
 
         return {
             label: ProclaimClient.split_into_slides('\n'.join(lines))
@@ -249,7 +250,7 @@ class ProclaimClient:
             elif lower_token == 'b':
                 # Check if "Bridge" with that number exists
                 possible_label = f"Bridge {trailing_number or '1'}"
-                if possible_label in slide_sections:
+                if possible_label.lower() in slide_sections:
                     label = possible_label
                 else:
                     label = "Blank"
@@ -266,8 +267,8 @@ class ProclaimClient:
 
             if label == 'Blank':
                 slides.append('')
-            elif label in slide_sections:
-                slides.extend(slide_sections[label])
+            elif label.lower() in slide_sections:
+                slides.extend(slide_sections[label.lower()])
             else:
                 logger.warning(f"Label '{label}' ({token}) not found in slide sections.")
 
@@ -386,6 +387,9 @@ class ProclaimYjsService:
         try:
             # Get current status
             status = await self.proclaim_client.get_status()
+            if not status:
+                logger.warning("No status returned from Proclaim")
+                return
             item_id = status.get('status', {}).get('itemId')
             slide_index = status.get('status', {}).get('slideIndex', 0)
             presentation_id = status.get('presentationId')
