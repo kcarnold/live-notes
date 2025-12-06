@@ -287,7 +287,7 @@ class ProclaimClient:
             item_title = service_item.get('Title', 'Unknown')
 
             # Check if this is a skipped item type - show as blank instead
-            if item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
+            if item_kind in ["ImageSlideshow"] or item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
                 logger.info(f"Showing blank item: {item_title}")
                 return {
                     'itemId': item_id,
