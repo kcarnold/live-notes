@@ -382,6 +382,32 @@ class ProclaimYjsService:
         logger.info(f"Updated status: {item_id} slide {slide_index}")
 
 
+    def _handle_item_change(self, item_id: str, slide_index: int, presentation_id: Optional[str]) -> bool:
+        """Handle an item change. Returns True if state was updated."""
+        if not presentation_id:
+            logger.warning("No presentation ID in status response")
+            return False
+
+        pres_data = self.proclaim_client.get_presentation(presentation_id)
+        if not pres_data:
+            logger.warning(f"Presentation {presentation_id} not found in database")
+            return False
+
+        translation_screen_idx = self.proclaim_client.get_translation_screen_idx(pres_data['content'])
+        if translation_screen_idx is None:
+            logger.warning(f"No translation screen found in presentation {presentation_id}")
+            return False
+
+        item_data = self.proclaim_client.parse_item_translation(item_id, translation_screen_idx)
+        if not item_data:
+            return False
+
+        self.update_presentation_in_yjs(item_data)
+        self.update_status_in_yjs(item_id, slide_index)
+        self.last_item_id = item_id
+        self.last_slide_index = slide_index
+        return True
+
     async def poll_once(self):
         """Poll Proclaim once and update state if changed"""
         try:
@@ -390,6 +416,7 @@ class ProclaimYjsService:
             if not status:
                 logger.warning("No status returned from Proclaim")
                 return
+
             item_id = status.get('status', {}).get('itemId')
             slide_index = status.get('status', {}).get('slideIndex', 0)
             presentation_id = status.get('presentationId')
@@ -397,37 +424,13 @@ class ProclaimYjsService:
             # Check if presentation changed
             if item_id != self.last_item_id:
                 logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
-
-                # Get presentation data to extract translation screen index
-                if presentation_id:
-                    pres_data = self.proclaim_client.get_presentation(presentation_id)
-                    if pres_data:
-                        translation_screen_idx = self.proclaim_client.get_translation_screen_idx(pres_data['content'])
-
-                        if translation_screen_idx is not None:
-                            # Parse the item with translation
-                            item_data = self.proclaim_client.parse_item_translation(item_id, translation_screen_idx)
-
-                            if item_data:
-                                self.update_presentation_in_yjs(item_data)
-                                self.update_status_in_yjs(item_id, slide_index)
-                                # Provider automatically syncs updates
-
-                                self.last_item_id = item_id
-                                self.last_slide_index = slide_index
-                        else:
-                            logger.warning(f"No translation screen found in presentation {presentation_id}")
-                    else:
-                        logger.warning(f"Presentation {presentation_id} not found in database")
-                else:
-                    logger.warning("No presentation ID in status response")
+                self._handle_item_change(item_id, slide_index, presentation_id)
+                return
 
             # Check if slide changed
-            elif slide_index != self.last_slide_index:
+            if slide_index != self.last_slide_index:
                 logger.info(f"Slide changed to {slide_index}")
                 self.update_status_in_yjs(item_id, slide_index)
-                # Provider automatically syncs updates
-
                 self.last_slide_index = slide_index
 
         except httpx.HTTPError as e:
