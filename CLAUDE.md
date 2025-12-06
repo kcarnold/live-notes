@@ -10,6 +10,7 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Speech transcription**: Web Speech API (browser-native) for live speech-to-text
 - **Translation**: Google Gemini for AI-powered translation
 - **Text-to-Speech**: Google Cloud Text-to-Speech (Chirp 3 HD) for audio playback of translations
+- **Proclaim integration**: Python service syncing Proclaim presentation slides to Yjs
 - **Rich text editing**: ProseMirror for collaborative markdown editing
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
@@ -45,6 +46,10 @@ npm run dev:server
 
 # Run frontend dev server (in separate terminal)
 npm run dev
+
+# OPTIONAL: Run Proclaim integration service (in separate terminal, requires Proclaim running)
+# See PROCLAIM_INTEGRATION.md for full setup instructions
+uv run proclaim_service.py
 ```
 
 ### Testing & Building
@@ -104,6 +109,8 @@ The app uses **Yjs** for real-time collaborative state management:
    - `translatedText-{language}` (Y.Text): Translated output for each language
    - `meta` (Y.Map): Metadata like video visibility settings
    - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
+   - `proclaimPresentations` (Y.Map): Maps itemId → presentation data (title, slides)
+   - `proclaimStatus` (Y.Map): Current Proclaim status (itemId, slideIndex)
 
 ### Translation Pipeline
 
@@ -251,15 +258,57 @@ The app also uses ProseMirror for collaborative rich text editing:
   - `Tab/Shift-Tab`: List item indent/outdent
   - `Mod-Enter`: Trigger translation
 
+### Proclaim Integration
+
+The app integrates with **Proclaim** (church presentation software) to display current slide content in real-time. See [PROCLAIM_INTEGRATION.md](PROCLAIM_INTEGRATION.md) for full documentation.
+
+#### Architecture
+
+The integration uses a **Python service** ([proclaim_service.py](proclaim_service.py)) that:
+
+1. **Polls Proclaim API** (every 1 second) for current presentation and slide status
+2. **Parses presentation content** from Proclaim's SQLite database
+3. **Extracts translated slides** from rich text XML (supports songs, Bible passages, content slides)
+4. **Updates Yjs** via Y-Sweet WebSocket connection with presentation data and current status
+
+#### Data Flow
+
+```
+Proclaim API/DB → Python Service → Y-Sweet → React Components
+```
+
+The Python service syncs to two Yjs data structures:
+- `proclaimPresentations` (Y.Map): Maps itemId → `{title, itemId, slides: string[]}`
+- `proclaimStatus` (Y.Map): Current status `{itemId, slideIndex}`
+
+#### React Components
+
+- **CurrentSlideViewer** ([CurrentSlideViewer.tsx:18-95](CurrentSlideViewer.tsx#L18-L95)): Pure component displaying current slide with optional context (previous/next slides)
+- **CurrentSlideViewerContainer** ([CurrentSlideViewer.tsx:100-146](CurrentSlideViewer.tsx#L100-L146)): Yjs connector that reads presentation data and passes to pure component
+
+The viewer shows:
+- Header with presentation title and progress (slide X of Y)
+- Current slide (large text, blue border highlight)
+- Optional context slides (dimmed, smaller)
+- Smooth CSS transitions when slides change
+
+#### Key Features
+
+- **Real-time updates**: No browser polling needed - updates instantly via Yjs
+- **Intelligent parsing**: Handles song sections, custom order sequences, Bible passages
+- **Translation support**: Extracts slides from translation screens (French, Haitian)
+- **Skipped items**: Shows blank for image slideshows and certain slide types
+
 ### Layout System
 
 The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395)):
 
 - Layouts are encoded in the URL path: `/transcript,sourceText|translatedOutline-French,video`
 - Format: rows separated by `|`, columns separated by `,`
-- Components: `transcript`, `sourceText`, `translatedOutline-{language}`, `video`
+- Components: `transcript`, `sourceText`, `translatedOutline-{language}`, `video`, `currentSlide`
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
+- Example with Proclaim: `/translatedOutline-French,currentSlide` shows translation and current slide side-by-side
 
 ### Editor vs Viewer Mode
 
@@ -282,6 +331,7 @@ The app has two modes determined by URL hash (`#editor`):
 ### Backend
 - [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
 - [nlp.ts](nlp.ts) - Gemini API integration for translation
+- [proclaim_service.py](proclaim_service.py) - Python service that syncs Proclaim presentation data to Yjs
 
 ### Frontend Core
 - [App.tsx](src/App.tsx) - Main React app with routing and layout system
@@ -296,6 +346,7 @@ The app has two modes determined by URL hash (`#editor`):
 - [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - Web Speech API integration for live transcription
 - [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer with TTS controls and auto-play logic
 - [TranslatedTextViewerContainer.tsx](src/TranslatedTextViewerContainer.tsx) - Yjs connector for TranslatedTextViewer
+- [CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx) - Proclaim slide viewer with pure component and Yjs container
 
 ### TTS System
 - [useTTS.ts](src/useTTS.ts) - Low-level TTS hook managing audio playback lifecycle

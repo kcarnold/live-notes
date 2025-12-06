@@ -19,6 +19,7 @@ import SlidesPlayer from "./SlidesPlayer";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import ProseMirrorEditor from "./ProseMirrorEditor";
 import { PostHogErrorBoundary } from "posthog-js/react";
+import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -315,7 +316,11 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
     if (componentStr === 'video') {
       return <VideoComponent key={key} isEditor={isEditor} />;
     }
-    
+
+    if (componentStr === 'currentSlide') {
+      return <CurrentSlideViewerContainer key={key} />;
+    }
+
     if (componentStr.startsWith('translatedOutline-')) {
       const language = componentStr.substring('translatedOutline-'.length);
       // Validate language, default to first language if invalid
@@ -338,7 +343,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
 
   // Validate that all components in the layout are valid
   const isValidComponent = (componentStr: string): boolean => {
-    if (['transcript', 'sourceText', 'video'].includes(componentStr)) {
+    if (['transcript', 'sourceText', 'video', 'currentSlide'].includes(componentStr)) {
       return true;
     }
     

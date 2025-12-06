@@ -4,12 +4,14 @@ const componentColors: Record<string, string> = {
   sourceText: "bg-yellow-200 dark:bg-yellow-600",
   translatedOutline: "bg-purple-200 dark:bg-purple-700",
   video: "bg-blue-200 dark:bg-blue-700",
+  currentSlide: "bg-indigo-200 dark:bg-indigo-700",
 };
 const humanLabels: Record<string, string> = {
   transcript: "Transcript",
   sourceText: "Source Text",
   translatedOutline: "Translated Text",
   video: "Video",
+  currentSlide: "Current Slide",
 };
 
 
