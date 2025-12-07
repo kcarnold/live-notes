@@ -43,16 +43,8 @@ export function CurrentSlideViewer({
 
   return (
     <div className="flex flex-col h-full bg-black text-white overflow-hidden">
-      {/* Header with title and progress */}
-      <div className="bg-gray-800 px-6 py-3 border-b border-gray-700 shrink-0">
-        <div className="text-sm text-gray-400">
-          Slide {currentIndex + 1} of {slides.length}
-        </div>
-        <div className="text-lg font-semibold">{title}</div>
-      </div>
-
       {/* Slides with context */}
-      <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+      <div className="flex-1 overflow-y-auto px-8 py-3 space-y-3">
         {visibleSlides.map((slide, idx) => (
           <div
             key={startIdx + idx}
@@ -63,18 +55,14 @@ export function CurrentSlideViewer({
             }`}
           >
             <div
-              className={`rounded-lg p-6 ${
-                slide.isActive
-                  ? 'bg-gray-800 border-2 border-blue-500'
-                  : 'bg-gray-900 border border-gray-700'
-              }`}
+              className={`p-1`}
             >
               <div className="text-center space-y-2">
                 {slide.text.split('\n').map((line, lineIdx) => (
                   <div
                     key={lineIdx}
-                    className={`leading-relaxed ${
-                      slide.isActive ? 'text-3xl font-light' : 'text-xl font-light'
+                    className={`leading-normal ${
+                      slide.isActive ? 'text-2xl' : 'text-xl font-light'
                     }`}
                   >
                     {line || '\u00A0'}
