@@ -16,7 +16,6 @@ interface CurrentSlideViewerProps {
  * Pure component that displays current slide with context (prev/next slides)
  */
 export function CurrentSlideViewer({
-  title,
   slides,
   currentIndex,
   context = 0
