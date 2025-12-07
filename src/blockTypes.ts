@@ -197,7 +197,7 @@ export function getBlockYText(yMap: Y.Map<any>): Y.Text {
  * See https://github.com/rocicorp/fractional-indexing?tab=readme-ov-file#sorting
  */
 export function compareBlockPositions(a: Block, b: Block): number {
-  return a.position < b.position ? -1 : a.position > b.position ? 1 : 0;
+  return a.position < b.position ? -1 : a.position > b.position ? 1 : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
 /**
