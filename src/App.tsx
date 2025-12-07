@@ -196,18 +196,17 @@ const availableLayouts = [
     ]
   },
   {
-    key: 'translation-only',
-    label: 'Two Translations',
+    key: 'translation-only-2',
+    label: 'One Translation, Slide',
     layout: [
-      ["video", "translatedOutline", "translatedOutline"]
+      ["currentSlide", "translatedOutline"]
     ]
   },
   {
-    key: 'transcript-translation',
-    label: 'Transcript and Translation',
+    key: 'two-translations',
+    label: 'Two Translations',
     layout: [
-      ["transcript"],
-      ["translatedOutline", "video"]
+      ["video", "translatedOutline", "translatedOutline"]
     ]
   },
   {
