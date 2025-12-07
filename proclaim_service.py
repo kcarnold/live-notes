@@ -169,10 +169,13 @@ class ProclaimClient:
     @staticmethod
     def split_into_slides(text: str) -> List[str]:
         """Split the text into sections based on blank lines or --."""
+        explicitly_delimited = '--' in text
         sections = ['']
         for line in text.strip().split('\n'):
             line_stripped = line.strip()
-            if line_stripped == '' or line_stripped == '--':
+            # Blank lines are slide breaks *only if* not using explicit --
+            is_slide_break = (line_stripped == '' and not explicitly_delimited) or (line_stripped == '--')
+            if is_slide_break:
                 sections.append('')
             else:
                 sections[-1] += line + '\n'
