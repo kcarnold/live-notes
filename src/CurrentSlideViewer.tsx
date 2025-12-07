@@ -41,9 +41,9 @@ export function CurrentSlideViewer({
   }
 
   return (
-    <div className="flex flex-col h-full bg-black text-white overflow-hidden">
+    <div className="flex flex-col bg-black text-white overflow-hidden">
       {/* Slides with context */}
-      <div className="flex-1 overflow-y-auto px-8 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-1 py-1 space-y-3">
         {visibleSlides.map((slide, idx) => (
           <div
             key={startIdx + idx}
