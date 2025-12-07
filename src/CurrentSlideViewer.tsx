@@ -110,15 +110,18 @@ export function CurrentSlideViewerContainer() {
     const slideIndex = (statusMap.get('slideIndex') as number) ?? 0;
 
     // Read presentation data
-    const presentation = presentationsMap.get(itemId);
-    const title = presentation.title as string || 'Untitled Presentation';
+    const presentation = presentationsMap.get(itemId) as { title: string; slides: string[] } | undefined;
+    if (!presentation) {
+      throw new Error('Presentation not found');
+    }
 
-    // Get slides array from presentation
-    const slidesArray = presentation?.slides as string[] | undefined;
+    const title = presentation.title || 'Untitled Presentation';
+    const slidesArray = presentation.slides || [];
     const slides: string[] = [];
-    if (slidesArray && slidesArray.length > 0) {
+
+    if (slidesArray.length > 0) {
       for (let i = 0; i < slidesArray.length; i++) {
-        const slide = slidesArray.get?.(i) ?? slidesArray[i];
+        const slide = slidesArray[i];
         if (typeof slide === 'string') {
           slides.push(slide);
         }
