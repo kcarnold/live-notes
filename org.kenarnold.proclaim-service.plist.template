@@ -7,8 +7,9 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>{{WRAPPER_PATH}}</string>
+        <string>uv</string>
+        <string>run</string>
+        <string>{{SERVICE_SCRIPT}}</string>
     </array>
 
     <!-- Auto-restart on exit -->

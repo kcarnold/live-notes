@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLIST_TEMPLATE="$SCRIPT_DIR/org.kenarnold.proclaim-service.plist.template"
 PLIST_DEST="$HOME/Library/LaunchAgents/org.kenarnold.proclaim-service.plist"
-WRAPPER_SCRIPT="$SCRIPT_DIR/proclaim_wrapper.sh"
+SERVICE_SCRIPT="$SCRIPT_DIR/proclaim_service.py"
 SERVICE_LABEL="org.kenarnold.proclaim-service"
 
 # Get current user and paths
@@ -34,7 +34,7 @@ log_error() {
 
 generate_plist() {
     # Generate plist from template with variable substitution
-    sed "s|{{WRAPPER_PATH}}|$WRAPPER_SCRIPT|g" "$PLIST_TEMPLATE" | \
+    sed "s|{{SERVICE_SCRIPT}}|$SERVICE_SCRIPT|g" "$PLIST_TEMPLATE" | \
     sed "s|{{REPO_PATH}}|$SCRIPT_DIR|g" | \
     sed "s|{{LOG_DIR}}|$LOG_DIR|g" | \
     sed "s|{{USERNAME}}|$CURRENT_USER|g"
@@ -72,14 +72,10 @@ if [ ! -f "$PLIST_TEMPLATE" ]; then
     exit 1
 fi
 
-if [ ! -f "$WRAPPER_SCRIPT" ]; then
-    log_error "Wrapper script not found: $WRAPPER_SCRIPT"
+if [ ! -f "$SERVICE_SCRIPT" ]; then
+    log_error "Service script not found: $SERVICE_SCRIPT"
     exit 1
 fi
-
-# Make wrapper script executable
-chmod +x "$WRAPPER_SCRIPT"
-log_info "Wrapper script is executable"
 
 # Create LaunchAgents directory if needed
 mkdir -p "$HOME/Library/LaunchAgents"

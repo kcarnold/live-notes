@@ -5,8 +5,7 @@ This guide explains how to run `proclaim_service.py` as a persistent background 
 ## Overview
 
 The setup includes:
-- **Wrapper script** (`proclaim_wrapper.sh`): Simple script that runs the service and logs output
-- **Service logic** (`proclaim_service.py`): Detects date changes and exits cleanly for restart
+- **Service** (`proclaim_service.py`): Detects date changes and exits cleanly for restart
 - **Plist template** (`org.kenarnold.proclaim-service.plist.template`): Template that gets customized during installation
 - **Install script** (`install_proclaim_service.sh`): Generates the plist with your paths and user, then installs it
 - **Log directory**: Logs stored at `~/Library/Logs/proclaim-service/`
@@ -178,7 +177,8 @@ bash install_proclaim_service.sh
 To test without installing as a service:
 
 ```bash
-bash /Users/ka37/code/github.com/kcarnold/live-outline/proclaim_wrapper.sh
+cd /path/to/live-outline
+uv run proclaim_service.py
 ```
 
 This runs the service in the foreground so you can see logs directly.
