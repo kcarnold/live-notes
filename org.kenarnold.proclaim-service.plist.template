@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.kenarnold.proclaim-service</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{WRAPPER_PATH}}</string>
+    </array>
+
+    <!-- Auto-restart on exit -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Minimum time between restart attempts (prevent restart spam) -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- Environment variables from .env file -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Set PATH to include the venv if using one, or system paths -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+
+        <!-- Optional: Set YSWEET_URL if different from default -->
+        <!-- <key>YSWEET_URL</key>
+        <string>http://dev8.kenarnold.org</string> -->
+
+        <!-- Optional: Set PROCLAIM_BASE_URL if on different machine -->
+        <!-- <key>PROCLAIM_BASE_URL</key>
+        <string>http://localhost:52195</string> -->
+    </dict>
+
+    <!-- Working directory for relative paths -->
+    <key>WorkingDirectory</key>
+    <string>{{REPO_PATH}}</string>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/stderr.log</string>
+
+    <!-- Run as current user -->
+    <key>UserName</key>
+    <string>{{USERNAME}}</string>
+
+    <!-- Restart on system wake/network changes -->
+    <key>StartInterval</key>
+    <integer>0</integer>
+</dict>
+</plist>

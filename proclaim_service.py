@@ -338,10 +338,18 @@ class ProclaimClient:
 class ProclaimYjsService:
     """Service that syncs Proclaim data to Yjs via Y-Sweet"""
 
-    def __init__(self, ysweet_url: str, doc_id: str):
+    def __init__(self, ysweet_url: str, doc_id: Optional[str] = None):
         self.proclaim_client = ProclaimClient()
         self.ysweet_url = ysweet_url
-        self.doc_id = doc_id
+
+        # If no doc_id provided, use date-based doc_id
+        self.use_date_based_doc_id = doc_id is None
+        if self.use_date_based_doc_id:
+            self.doc_id = self._get_date_based_doc_id()
+            self.current_doc_date = date.today()
+        else:
+            self.doc_id = doc_id
+            self.current_doc_date = None
 
         # Yjs state
         self.ydoc = Doc()
@@ -351,6 +359,25 @@ class ProclaimYjsService:
         # State tracking
         self.last_item_id = None
         self.last_slide_index = None
+
+    @staticmethod
+    def _get_date_based_doc_id() -> str:
+        """Generate doc ID based on current date"""
+        return f'doc-{date.today().isoformat()}'
+
+    def _check_doc_id_change(self) -> bool:
+        """Check if date-based doc ID has changed. Returns True if changed."""
+        if not self.use_date_based_doc_id:
+            return False
+
+        today = date.today()
+        if today != self.current_doc_date:
+            old_doc_id = self.doc_id
+            self.doc_id = self._get_date_based_doc_id()
+            self.current_doc_date = today
+            logger.info(f"Date changed: {old_doc_id} → {self.doc_id}")
+            return True
+        return False
 
     async def get_ysweet_token(self) -> Dict[str, Any]:
         """Get a Y-Sweet token for the document"""
@@ -475,6 +502,11 @@ class ProclaimYjsService:
             # Main polling loop
             while True:
                 try:
+                    # Check if date changed (for date-based doc IDs)
+                    if self._check_doc_id_change():
+                        logger.info("Date changed, exiting for restart with new document")
+                        return
+
                     await self.poll_once()
                     await anyio.sleep(POLL_INTERVAL)
                 except Exception as e:
@@ -492,8 +524,8 @@ async def signal_handler(cancel_scope: anyio.CancelScope):
 async def main():
     """Entry point with signal handling"""
     # Get doc ID from command line or environment
-    # Default doc id is `doc-${date}`, where date is today's date
-    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID', f'doc-{date.today().isoformat()}')
+    # If neither provided, service will use date-based doc_id (default)
+    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID')
 
     service = ProclaimYjsService(YSWEET_URL, doc_id)
 
