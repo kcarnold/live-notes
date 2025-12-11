@@ -7,7 +7,7 @@ import fs from 'fs/promises';
 import pLimit from 'p-limit';
 
 import { DocumentManager } from '@y-sweet/sdk'
-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import textToSpeech from '@google-cloud/text-to-speech';
 
 import { PostHog } from 'posthog-node';
 
@@ -37,38 +37,13 @@ const geminiProvider = new GeminiProvider({
 
 const documentManager = new DocumentManager(getEnvOrCrash("YSWEET_CONNECTION_STRING"));
 
-const elevenLabsClient = new ElevenLabsClient({
-  apiKey: getEnvOrCrash('ELEVENLABS_API_KEY'),
-});
+// Initialize Google Cloud Text-to-Speech client
+// Authentication via GOOGLE_APPLICATION_CREDENTIALS environment variable
+const ttsClient = new textToSpeech.TextToSpeechClient();
 
 // TTS Configuration: Limit concurrent requests to prevent API spam
 const TTS_MAX_CONCURRENT = parseInt(process.env.TTS_MAX_CONCURRENT || '2', 10);
 const ttsLimiter = pLimit(TTS_MAX_CONCURRENT);
-
-/**
- * Call ElevenLabs TTS with retry on 429 errors
- */
-async function callTTSWithRetry(voiceId: string, options: { text: string; modelId: string }): Promise<AsyncIterable<Uint8Array>> {
-  const maxRetries = 3;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await elevenLabsClient.textToSpeech.convert(voiceId, options);
-    } catch (error: any) {
-      const is429 = error?.statusCode === 429 || error?.status === 429;
-
-      if (is429 && attempt < maxRetries) {
-        // Exponential backoff with jitter: 1s, 2s, 4s (+ random 0-1s)
-        const delay = (1000 * Math.pow(2, attempt)) + (Math.random() * 1000);
-        console.log(`TTS rate limited, retrying in ${delay.toFixed(0)}ms (attempt ${attempt + 1}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        throw error;
-      }
-    }
-  }
-  throw new Error('TTS failed after retries');
-}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,17 +95,15 @@ app.post('/api/requestTranslatedBlocks', async (req, res) => {
 // TTS request deduplication: Map of cache key -> Promise
 const ttsInFlightRequests = new Map<string, Promise<string>>();
 
-// Voice configuration per language
-const VOICE_CONFIG: Record<string, { voiceId: string; languageCode: string; model: string }> = {
+// Voice configuration per language using Google Chirp 3 HD
+const VOICE_CONFIG: Record<string, { voiceName: string; languageCode: string }> = {
   French: {
-    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
-    languageCode: 'fr',
-    model: 'eleven_multilingual_v2',
+    voiceName: 'fr-FR-Chirp3-HD-Aoede', // Female voice
+    languageCode: 'fr-FR',
   },
   Spanish: {
-    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
-    languageCode: 'es',
-    model: 'eleven_multilingual_v2',
+    voiceName: 'es-ES-Chirp3-HD-Aoede', // Female voice
+    languageCode: 'es-ES',
   },
 };
 
@@ -176,19 +149,27 @@ app.post('/api/tts', async (req, res) => {
     const ttsPromise = ttsLimiter(async () => {
       console.log(`Generating TTS for "${text.substring(0, 50)}..." in ${language}`);
 
-      // Call with retry on 429 errors
-      const audio = await callTTSWithRetry(voiceConfig.voiceId, {
-        text,
-        modelId: voiceConfig.model,
-        languageCode: voiceConfig.languageCode,
-      });
+      // Call Google Cloud Text-to-Speech
+      const request = {
+        input: { text },
+        voice: {
+          languageCode: voiceConfig.languageCode,
+          name: voiceConfig.voiceName,
+        },
+        audioConfig: {
+          audioEncoding: 'MP3' as const,
+          speakingRate: 1.0,
+        },
+      };
 
-      // Convert stream to buffer
-      const chunks: Buffer[] = [];
-      for await (const chunk of audio) {
-        chunks.push(Buffer.from(chunk));
+      const [response] = await ttsClient.synthesizeSpeech(request);
+
+      if (!response.audioContent) {
+        throw new Error('No audio content in response');
       }
-      const audioBuffer = Buffer.concat(chunks);
+
+      // Convert to Buffer (audioContent is Uint8Array)
+      const audioBuffer = Buffer.from(response.audioContent);
 
       // Write audio file
       await fs.writeFile(audioPath, audioBuffer);
