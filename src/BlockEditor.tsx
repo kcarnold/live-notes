@@ -426,7 +426,7 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
         }
       }
       // Enter: split block or create new block
-      else if (e.key === 'Enter' && !e.shiftKey) {
+      else if (e.key === 'Enter') {
         e.preventDefault();
         const beforeCursor = block.content.substring(0, cursorPos);
         const afterCursor = block.content.substring(cursorPos);
