@@ -9,11 +9,11 @@ import {
   yMapToBlock,
   updateYMap,
   serializeBlocksToMarkdown,
-  ensureMinimumBlocks,
   MAX_INDENT_LEVEL,
   getBlockYText,
   compareBlockPositions,
   addBlockToYArray,
+  getPosition,
 } from './blockTypes';
 
 const SHOW_BUTTONS = true;
@@ -221,8 +221,6 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
 
   // Initialize and observe Yjs array
   useEffect(() => {
-    // Ensure minimum blocks on mount
-    const timeout = setTimeout(() => ensureMinimumBlocks(yArray), 1000);
     // @ts-expect-error - for debugging
     window.yArray = yArray;
 
@@ -251,7 +249,6 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
     yArray.observeDeep(observer);
     return () => {
       yArray.unobserveDeep(observer);
-      clearTimeout(timeout);
     }
   }, [yArray]);
 
@@ -410,6 +407,20 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
     [yArray, updateBlock]
   );
 
+  const handleClickEmptyArea = useCallback(() => {
+    if (!editable) return;
+
+    if (sortedBlockIds.length > 0) {
+      // Focus the last block
+      setFocusedBlockId(sortedBlockIds[sortedBlockIds.length - 1]);
+    } else {
+      // Create a new block and focus it
+      const newBlock = createBlock('', 'bullet', 0, getPosition(null, null));
+      addBlockToYArray(yArray, newBlock);
+      setFocusedBlockId(newBlock.id);
+    }
+  }, [editable, sortedBlockIds, yArray]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>, block: Block) => {
       if (!editable) return;
@@ -529,26 +540,39 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   return (
     <div className="border rounded p-1 bg-white dark:bg-gray-800">
       {sortedBlockIds.length === 0 ? (
-        <div className="text-gray-400 dark:text-gray-500 italic">No blocks yet</div>
+        <div
+          className="text-gray-400 dark:text-gray-500 italic cursor-text min-h-[2rem] flex items-center"
+          onClick={handleClickEmptyArea}
+        >
+          {editable ? 'Click to start writing...' : 'No blocks yet'}
+        </div>
       ) : (
-        sortedBlockIds.map((blockId, index) => (
-          <BlockItem
-            key={blockId}
-            blockId={blockId}
-            yArray={yArray}
-            isFocused={focusedBlockId === blockId}
-            isFirst={index === 0}
-            isLast={index === sortedBlockIds.length - 1}
-            editable={editable}
-            onFocus={setFocusedBlockId}
-            onBlur={() => setFocusedBlockId(null)}
-            onKeyDown={handleKeyDown}
-            onToggleHeading={toggleHeading}
-            onMoveBlock={moveBlock}
-            onIndent={indent}
-            onDedent={dedent}
-          />
-        ))
+        <>
+          {sortedBlockIds.map((blockId, index) => (
+            <BlockItem
+              key={blockId}
+              blockId={blockId}
+              yArray={yArray}
+              isFocused={focusedBlockId === blockId}
+              isFirst={index === 0}
+              isLast={index === sortedBlockIds.length - 1}
+              editable={editable}
+              onFocus={setFocusedBlockId}
+              onBlur={() => setFocusedBlockId(null)}
+              onKeyDown={handleKeyDown}
+              onToggleHeading={toggleHeading}
+              onMoveBlock={moveBlock}
+              onIndent={indent}
+              onDedent={dedent}
+            />
+          ))}
+          {editable && (
+            <div
+              className="min-h-[2rem] cursor-text"
+              onClick={handleClickEmptyArea}
+            />
+          )}
+        </>
       )}
     </div>
   );

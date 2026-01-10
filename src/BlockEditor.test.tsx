@@ -1026,4 +1026,77 @@ describe('BlockEditor', () => {
       });
     });
   });
+
+  describe('Empty Area Click', () => {
+    it('creates a block when clicking empty area with no blocks', async () => {
+      const user = userEvent.setup();
+      render(<BlockEditor yArray={yArray} />);
+
+      expect(yArray.length).toBe(0);
+      expect(screen.getByText('Click to start writing...')).toBeInTheDocument();
+
+      await user.click(screen.getByText('Click to start writing...'));
+
+      await waitFor(() => {
+        expect(yArray.length).toBe(1);
+        expect(screen.getByRole('textbox')).toBeInTheDocument();
+      });
+    });
+
+    it('shows "No blocks yet" when editable is false and no blocks', () => {
+      render(<BlockEditor yArray={yArray} editable={false} />);
+
+      expect(screen.getByText('No blocks yet')).toBeInTheDocument();
+      expect(screen.queryByText('Click to start writing...')).not.toBeInTheDocument();
+    });
+
+    it('focuses last block when clicking area below blocks', async () => {
+      const user = userEvent.setup();
+      const positions = createSequentialPositions(2);
+      const block1 = createBlock('First', 'bullet', 0, positions[0]);
+      const block2 = createBlock('Second', 'bullet', 0, positions[1]);
+      addBlockToYArray(yArray, block1);
+      addBlockToYArray(yArray, block2);
+
+      const { container } = render(<BlockEditor yArray={yArray} />);
+
+      // Click the empty area below the blocks
+      const emptyArea = container.querySelector('.min-h-\\[2rem\\].cursor-text');
+      expect(emptyArea).toBeInTheDocument();
+
+      if (emptyArea) {
+        await user.click(emptyArea);
+      }
+
+      // Should focus the last block (Second)
+      await waitFor(() => {
+        const textarea = screen.getByRole('textbox');
+        expect(textarea).toHaveValue('Second');
+      });
+    });
+
+    it('does not create block when clicking empty area with editable=false', async () => {
+      const user = userEvent.setup();
+      render(<BlockEditor yArray={yArray} editable={false} />);
+
+      expect(yArray.length).toBe(0);
+      const noBlocksText = screen.getByText('No blocks yet');
+      await user.click(noBlocksText);
+
+      // Should still have no blocks
+      expect(yArray.length).toBe(0);
+    });
+
+    it('does not show empty area below blocks when editable=false', () => {
+      const positions = createSequentialPositions(1);
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      const { container } = render(<BlockEditor yArray={yArray} editable={false} />);
+
+      // Empty area below blocks should not exist
+      const emptyArea = container.querySelector('.min-h-\\[2rem\\].cursor-text');
+      expect(emptyArea).not.toBeInTheDocument();
+    });
+  });
 });
