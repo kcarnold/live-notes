@@ -102,7 +102,7 @@ function SourceTextComponent() {
   );
 }
 
-function TranslatedOutlineComponent({ language, onLanguageChange }: { language: string; onLanguageChange: (newLang: string) => void }) {
+function TranslatedTextComponent({ language, onLanguageChange }: { language: string; onLanguageChange: (newLang: string) => void }) {
   const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
   const fontSize = useAtomValue(fontSizeAtom);
   
@@ -327,7 +327,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
       const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
       
       return (
-        <TranslatedOutlineComponent 
+        <TranslatedTextComponent 
           key={key}
           language={validLanguage}
           onLanguageChange={(newLang) => updateComponentLanguage(rowIdx, colIdx, newLang)}
