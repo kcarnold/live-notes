@@ -45,31 +45,6 @@ const elevenLabsClient = new ElevenLabsClient({
 const TTS_MAX_CONCURRENT = parseInt(process.env.TTS_MAX_CONCURRENT || '2', 10);
 const ttsLimiter = pLimit(TTS_MAX_CONCURRENT);
 
-/**
- * Call ElevenLabs TTS with retry on 429 errors
- */
-async function callTTSWithRetry(voiceId: string, options: { text: string; modelId: string }): Promise<AsyncIterable<Uint8Array>> {
-  const maxRetries = 3;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await elevenLabsClient.textToSpeech.convert(voiceId, options);
-    } catch (error: any) {
-      const is429 = error?.statusCode === 429 || error?.status === 429;
-
-      if (is429 && attempt < maxRetries) {
-        // Exponential backoff with jitter: 1s, 2s, 4s (+ random 0-1s)
-        const delay = (1000 * Math.pow(2, attempt)) + (Math.random() * 1000);
-        console.log(`TTS rate limited, retrying in ${delay.toFixed(0)}ms (attempt ${attempt + 1}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        throw error;
-      }
-    }
-  }
-  throw new Error('TTS failed after retries');
-}
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -177,10 +152,12 @@ app.post('/api/tts', async (req, res) => {
       console.log(`Generating TTS for "${text.substring(0, 50)}..." in ${language}`);
 
       // Call with retry on 429 errors
-      const audio = await callTTSWithRetry(voiceConfig.voiceId, {
+      const audio = await elevenLabsClient.textToSpeech.convert(voiceConfig.voiceId, {
         text,
         modelId: voiceConfig.model,
         languageCode: voiceConfig.languageCode,
+      }, {
+        maxRetries: 3,
       });
 
       // Convert stream to buffer
