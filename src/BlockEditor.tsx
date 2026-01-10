@@ -16,7 +16,7 @@ import {
   addBlockToYArray,
 } from './blockTypes';
 
-const SHOW_BUTTONS = false;
+const SHOW_BUTTONS = true;
 
 interface BlockEditorProps {
   yArray: Y.Array<Y.Map<any>>;
@@ -111,50 +111,6 @@ const BlockItem = memo(function BlockItem({
       className="flex items-start gap-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-900 text-gray-900 dark:text-gray-100"
       style={{ paddingLeft: `${indentPadding}px` }}
     >
-      {/* Operation buttons - only shown when focused */}
-      {SHOW_BUTTONS && editable && isFocused && (
-        <div
-          className="flex gap-0 pt-1 flex-shrink-0"
-          onMouseDown={(e) => e.preventDefault()} // Prevent blur when clicking buttons
-        >
-          <button
-            type="button"
-            onClick={() => onMoveBlock(blockId, 'up')}
-            className="px-1 text-xs border rounded hover:bg-gray-100"
-            title="Move up (Cmd+↑)"
-            disabled={isFirst}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={() => onMoveBlock(blockId, 'down')}
-            className="px-1 text-xs border rounded hover:bg-gray-100"
-            title="Move down (Cmd+↓)"
-            disabled={isLast}
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            onClick={() => onIndent(blockId)}
-            className="px-1 text-xs border rounded hover:bg-gray-100"
-            title="Indent (Tab)"
-            disabled={block.level >= MAX_INDENT_LEVEL}
-          >
-            →
-          </button>
-          <button
-            type="button"
-            onClick={() => onDedent(blockId)}
-            className="px-1 text-xs border rounded hover:bg-gray-100"
-            title="Dedent (Shift+Tab)"
-            disabled={block.level === 0}
-          >
-            ←
-          </button>
-        </div>
-      )}
 
       {/* Prefix indicator - clickable to toggle heading (Cmd+H) */}
       <button
@@ -205,6 +161,50 @@ const BlockItem = memo(function BlockItem({
           </div>
         )}
       </div>
+      {/* Operation buttons - only shown when focused */}
+      {SHOW_BUTTONS && editable && isFocused && (
+        <div
+          className="flex gap-0 pt-1 flex-shrink-0"
+          onMouseDown={(e) => e.preventDefault()} // Prevent blur when clicking buttons
+        >
+          <button
+            type="button"
+            onClick={() => onMoveBlock(blockId, 'up')}
+            className="px-1 text-xs border rounded hover:bg-gray-100"
+            title="Move up (Cmd+↑)"
+            disabled={isFirst}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={() => onMoveBlock(blockId, 'down')}
+            className="px-1 text-xs border rounded hover:bg-gray-100"
+            title="Move down (Cmd+↓)"
+            disabled={isLast}
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            onClick={() => onIndent(blockId)}
+            className="px-1 text-xs border rounded hover:bg-gray-100"
+            title="Indent (Tab)"
+            disabled={block.level >= MAX_INDENT_LEVEL}
+          >
+            →
+          </button>
+          <button
+            type="button"
+            onClick={() => onDedent(blockId)}
+            className="px-1 text-xs border rounded hover:bg-gray-100"
+            title="Dedent (Shift+Tab)"
+            disabled={block.level === 0}
+          >
+            ←
+          </button>
+        </div>
+      )}
     </div>
   );
 });
