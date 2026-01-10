@@ -279,6 +279,144 @@ describe('BlockEditor', () => {
         expect(yArray.length).toBe(1);
       });
     });
+
+    it('dedents indented block on Backspace at start', async () => {
+      const user = userEvent.setup();
+      const block = createBlock('Test', 'bullet', 2, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
+      textarea.setSelectionRange(0, 0);
+      await user.keyboard('{Backspace}');
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('level')).toBe(1);
+      });
+    });
+
+    it('converts heading to bullet on Backspace at level 0', async () => {
+      const user = userEvent.setup();
+      const block = createBlock('Test', 'heading', 0, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
+      textarea.setSelectionRange(0, 0);
+      await user.keyboard('{Backspace}');
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('type')).toBe('bullet');
+      });
+    });
+
+    it('dedents heading before converting to bullet', async () => {
+      const user = userEvent.setup();
+      const block = createBlock('Test', 'heading', 2, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
+      textarea.setSelectionRange(0, 0);
+      await user.keyboard('{Backspace}');
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('type')).toBe('heading');
+        expect(yMap.get('level')).toBe(1);
+      });
+    });
+  });
+
+  describe('Keyboard Shortcuts - Hashtag Promotion', () => {
+    it('promotes bullet to heading on # at start', async () => {
+      const user = userEvent.setup();
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
+      textarea.setSelectionRange(0, 0);
+      await user.keyboard('#');
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('type')).toBe('heading');
+        expect(yMap.get('level')).toBe(0);
+        // Content should not include the #
+        expect((yMap.get('content') as Y.Text).toString()).toBe('Test');
+      });
+    });
+
+    it('increments heading level on # at start', async () => {
+      const user = userEvent.setup();
+      const block = createBlock('Test', 'heading', 1, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
+      textarea.setSelectionRange(0, 0);
+      await user.keyboard('#');
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('type')).toBe('heading');
+        expect(yMap.get('level')).toBe(2);
+      });
+    });
+
+    it('does not increment heading level beyond max', async () => {
+      const user = userEvent.setup();
+      const block = createBlock('Test', 'heading', 5, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
+      textarea.setSelectionRange(0, 0);
+      await user.keyboard('#');
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('level')).toBe(5);
+        // Content should not include the #
+        expect((yMap.get('content') as Y.Text).toString()).toBe('Test');
+      });
+    });
+
+    it('does not promote on # in middle of text', async () => {
+      const user = userEvent.setup();
+      const block = createBlock('Test', 'bullet', 0, positions[0]);
+      addBlockToYArray(yArray, block);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Test'));
+      const textarea: HTMLTextAreaElement = screen.getByRole('textbox');
+      // Position cursor at end
+      textarea.setSelectionRange(4, 4);
+      await user.keyboard('#');
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('type')).toBe('bullet');
+        // Content should include the #
+        expect((yMap.get('content') as Y.Text).toString()).toBe('Test#');
+      });
+    });
   });
 
   describe('Keyboard Shortcuts - Indentation', () => {

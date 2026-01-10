@@ -454,10 +454,32 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
           onTranslationTrigger();
         }
       }
-      // Backspace at start: merge with previous block
-      else if (e.key === 'Backspace' && isAtStart && block.content === '') {
+      // Backspace at start: demote (decrement level, or convert heading to bullet at level 0)
+      else if (e.key === 'Backspace' && isAtStart) {
+        if (block.level > 0) {
+          e.preventDefault();
+          dedent(block.id);
+        } else if (block.type === 'heading') {
+          e.preventDefault();
+          updateBlock(block.id, { type: 'bullet' });
+        } else if (block.content === '') {
+          // Only delete empty blocks at lowest level
+          e.preventDefault();
+          deleteBlock(block.id);
+        }
+        // Otherwise, let default backspace behavior happen (e.g., delete char before cursor)
+      }
+      // # at start: promote to heading or increment heading level
+      else if (e.key === '#' && isAtStart && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        deleteBlock(block.id);
+        if (block.type === 'bullet') {
+          // Convert bullet to heading at level 0
+          updateBlock(block.id, { type: 'heading', level: 0 });
+        } else if (block.type === 'heading' && block.level < MAX_INDENT_LEVEL) {
+          // Increment heading level
+          updateBlock(block.id, { level: block.level + 1 });
+        }
+        // At max level, do nothing (ignore the #)
       }
       // Tab: indent
       else if (e.key === 'Tab' && !e.shiftKey) {
