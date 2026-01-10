@@ -7,7 +7,7 @@ import fs from 'fs/promises';
 import pLimit from 'p-limit';
 
 import { DocumentManager } from '@y-sweet/sdk'
-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog } from 'posthog-node';
 
@@ -96,16 +96,22 @@ app.post('/api/requestTranslatedBlocks', async (req, res) => {
 const ttsInFlightRequests = new Map<string, Promise<string>>();
 
 // Voice configuration per language
-const VOICE_CONFIG: Record<string, { voiceId: string; languageCode: string; model: string }> = {
+const VOICE_CONFIG: Record<string, { voiceId: string; languageCode: string; model: string, voiceSettings?: ElevenLabs.VoiceSettings }> = {
   French: {
     voiceId: 'JBFqnCBsd6RMkjVDRZzb', // George
     languageCode: 'fr',
     model: 'eleven_multilingual_v2',
+    voiceSettings: {
+      speed: 0.9,
+    }
   },
   Spanish: {
     voiceId: 'JBFqnCBsd6RMkjVDRZzb', // George
     languageCode: 'es',
     model: 'eleven_multilingual_v2',
+    voiceSettings: {
+      speed: 0.9,
+    }
   },
 };
 
@@ -156,6 +162,7 @@ app.post('/api/tts', async (req, res) => {
         text,
         modelId: voiceConfig.model,
         languageCode: voiceConfig.languageCode,
+        voiceSettings: voiceConfig.voiceSettings,
       }, {
         maxRetries: 3,
       });
