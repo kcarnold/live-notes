@@ -304,12 +304,12 @@ The viewer shows:
 
 The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395)):
 
-- Layouts are encoded in the URL path: `/transcript,sourceText|translatedOutline-French,video`
+- Layouts are encoded in the URL path: `/transcript,sourceText|translatedText-French,video`
 - Format: rows separated by `|`, columns separated by `,`
-- Components: `transcript`, `sourceText`, `translatedOutline-{language}`, `video`, `currentSlide`
+- Components: `transcript`, `sourceText`, `translatedText-{language}`, `video`, `currentSlide`
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
-- Example with Proclaim: `/translatedOutline-French,currentSlide` shows translation and current slide side-by-side
+- Example with Proclaim: `/translatedText-French,currentSlide` shows translation and current slide side-by-side
 
 ### Editor vs Viewer Mode
 

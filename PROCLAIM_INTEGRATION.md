@@ -58,7 +58,7 @@ Navigate to a layout that includes `currentSlide`:
 
 ```
 http://localhost:8000/currentSlide
-http://localhost:8000/translatedOutline-French,currentSlide
+http://localhost:8000/translatedText-French,currentSlide
 ```
 
 ## How It Works
