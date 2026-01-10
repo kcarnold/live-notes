@@ -193,21 +193,21 @@ const availableLayouts = [
     key: 'translation-only',
     label: 'One Translation',
     layout: [
-      ["video", "translatedOutline"]
+      ["video", "translatedText"]
     ]
   },
   {
     key: 'translation-only-2',
     label: 'One Translation, Slide',
     layout: [
-      ["currentSlide", "translatedOutline"]
+      ["currentSlide", "translatedText"]
     ]
   },
   {
     key: 'two-translations',
     label: 'Two Translations',
     layout: [
-      ["video", "translatedOutline", "translatedOutline"]
+      ["video", "translatedText", "translatedText"]
     ]
   },
   {
@@ -215,7 +215,7 @@ const availableLayouts = [
     label: 'Everything',
     layout: [
       ["transcript", "sourceText"],
-      ["translatedOutline", "video"]
+      ["translatedText", "video"]
     ]
   },
 ];
@@ -230,10 +230,10 @@ function HomePage() {
       </h1>
       <div className="flex flex-col gap-6 w-full max-w-xl">
         {availableLayouts.map((layout) => {
-          // Convert layout array to human-legible string, adding default language to translatedOutline components
+          // Convert layout array to human-legible string, adding default language to translatedText components
           const layoutStr = layout.layout.map(row => 
             row.map(component => 
-              component === 'translatedOutline' ? `translatedOutline-${defaultLang}` : component
+              component === 'translatedText' ? `translatedText-${defaultLang}` : component
             ).join(",")
           ).join("|");
           return (
@@ -254,8 +254,8 @@ function HomePage() {
           );
         })}
         <div className="text-center mb-4">
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/transcript,sourceText|translatedOutline-French,video#editor">Transcriber</a> |{" "}
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedOutline-French#editor">Note-Taker</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/transcript,sourceText|translatedText-French,video#editor">Transcriber</a> |{" "}
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedText-French#editor">Note-Taker</a>
         </div>
       </div>
     </div>
@@ -273,7 +273,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
   // Track current layout in state so we can update it when URL changes
   const [layout, setLayout] = useState(initialLayout);
 
-  // Parse layout from URL: e.g. "transcript,translatedOutline-French|video" => [["transcript", "translatedOutline-French"], ["video"]]
+  // Parse layout from URL: e.g. "transcript,translatedText-French|video" => [["transcript", "translatedText-French"], ["video"]]
   function parseLayoutString(layoutStr: string | undefined): string[][] {
     if (!layoutStr) return [];
     return layoutStr.split("|").map(row => row.split(","));
@@ -284,8 +284,8 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
     const parsedLayout = parseLayoutString(layout);
     const newLayout = parsedLayout.map((row, r) =>
       row.map((component, c) => {
-        if (r === rowIdx && c === colIdx && component.startsWith('translatedOutline-')) {
-          return `translatedOutline-${newLanguage}`;
+        if (r === rowIdx && c === colIdx && component.startsWith('translatedText-')) {
+          return `translatedText-${newLanguage}`;
         }
         return component;
       })
@@ -321,8 +321,8 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
       return <CurrentSlideViewerContainer key={key} />;
     }
 
-    if (componentStr.startsWith('translatedOutline-')) {
-      const language = componentStr.substring('translatedOutline-'.length);
+    if (componentStr.startsWith('translatedText-')) {
+      const language = componentStr.substring('translatedText-'.length);
       // Validate language, default to first language if invalid
       const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
       
@@ -346,9 +346,9 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
     if (['transcript', 'sourceText', 'video', 'currentSlide'].includes(componentStr)) {
       return true;
     }
-    
-    if (componentStr.startsWith('translatedOutline-')) {
-      const language = componentStr.substring('translatedOutline-'.length);
+
+    if (componentStr.startsWith('translatedText-')) {
+      const language = componentStr.substring('translatedText-'.length);
       return (languages as readonly string[]).includes(language);
     }
     
@@ -440,7 +440,9 @@ const App = () => {
     // Remove leading slash and use as layout string
     // Note: this will be validated inside LayoutPage
     const layout = pathname.substring(1);
-    pageComponent = <LayoutPage layout={layout} />;
+    // Apply backwards compat fixes: we used to call translatedText "translatedOutline"
+    const fixedLayout = layout.replace(/translatedOutline/g, "translatedText");
+    pageComponent = <LayoutPage layout={fixedLayout} />;
   }
 
   return (
