@@ -45,12 +45,13 @@ function ConnectionStatusWidget({
 function TranscriptViewer({ editable = false }: { editable?: boolean }) {
   const yDoc = useYDoc();
   const transcriptXml = yDoc.getXmlFragment("transcriptDoc");
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const [transcriptText, setTranscriptText] = useState("");
-  useScrollToBottom(transcriptEndRef, [transcriptText], true);
+  useScrollToBottom(scrollContainerRef, transcriptEndRef, [transcriptText], true);
 
   return (
-    <div className="p-compact overflow-auto">
+    <div ref={scrollContainerRef} className="p-compact overflow-auto">
       <ProseMirrorEditor
         yXmlFragment={transcriptXml}
         onTextChanged={setTranscriptText}

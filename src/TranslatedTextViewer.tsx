@@ -30,8 +30,9 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
   fontSize,
   headerControls
 }) => {
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const translatedTextEndRef = useRef<HTMLDivElement | null>(null);
-  useScrollToBottom(translatedTextEndRef, [lines], true);
+  useScrollToBottom(scrollContainerRef, translatedTextEndRef, [lines], true);
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
@@ -138,6 +139,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
 
       {/* Translated Text Content */}
       <div
+        ref={scrollContainerRef}
         className="overflow-auto pb-16 max-w-2xl w-full mx-auto flex-1"
         style={fontSize ? { fontSize: `${fontSize}px` } : undefined}
       >
