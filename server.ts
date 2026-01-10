@@ -123,12 +123,12 @@ const ttsInFlightRequests = new Map<string, Promise<string>>();
 // Voice configuration per language
 const VOICE_CONFIG: Record<string, { voiceId: string; languageCode: string; model: string }> = {
   French: {
-    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
+    voiceId: 'JBFqnCBsd6RMkjVDRZzb', // George
     languageCode: 'fr',
     model: 'eleven_multilingual_v2',
   },
   Spanish: {
-    voiceId: 'Xb7hH8MSUJpSbSDYk0k2', // Alice
+    voiceId: 'JBFqnCBsd6RMkjVDRZzb', // George
     languageCode: 'es',
     model: 'eleven_multilingual_v2',
   },
