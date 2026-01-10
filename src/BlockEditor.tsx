@@ -90,7 +90,10 @@ const BlockItem = memo(function BlockItem({
   // Focus management
   useEffect(() => {
     if (isFocused && textareaRef.current) {
-      textareaRef.current.focus();
+      const textarea = textareaRef.current;
+      textarea.focus();
+      // Move cursor to end
+      textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
     }
   }, [isFocused]);
 
