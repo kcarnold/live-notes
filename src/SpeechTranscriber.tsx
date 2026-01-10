@@ -238,12 +238,12 @@ function SpeechTranscriber() {
 
   if (isRecording) {
     return <button
-      className="bg-red-500 text-white font-medium py-1 px-2 rounded-md hover:bg-red-600"
+      className="bg-red-500 text-white font-medium py-1 px-2 rounded-md hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700 transition-colors"
       onClick={endTranscription}>Stop transcription
     </button>;
   } else {
     return <button
-      className="bg-green-500 text-white font-medium py-1 px-2 rounded-md hover:bg-green-600"
+      className="bg-green-500 text-white font-medium py-1 px-2 rounded-md hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700 transition-colors"
       onClick={() => { void startTranscription(); }}>
       Start transcription
     </button>;

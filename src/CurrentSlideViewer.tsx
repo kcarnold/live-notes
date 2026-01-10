@@ -34,14 +34,14 @@ export function CurrentSlideViewer({
 
   if (slides.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-gray-500">No slides available</div>
+      <div className="flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900">
+        <div className="text-gray-500 dark:text-gray-400">No slides available</div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col bg-black text-white overflow-hidden">
+    <div className="flex flex-col bg-black dark:bg-gray-950 text-white overflow-hidden">
       {/* Slides with context */}
       <div className="flex-1 overflow-y-auto px-1 py-1 space-y-3">
         {visibleSlides.map((slide, idx) => (
@@ -70,7 +70,7 @@ export function CurrentSlideViewer({
               </div>
             </div>
             {!slide.isActive && (
-              <div className="text-xs text-gray-500 mt-1 text-center">
+              <div className="text-xs text-gray-500 dark:text-gray-600 mt-1 text-center">
                 {startIdx + idx < currentIndex ? 'Previous' : 'Next'}
               </div>
             )}
@@ -125,8 +125,8 @@ export function CurrentSlideViewerContainer() {
     );
   } catch {
       return (
-        <div className="flex items-center justify-center h-full bg-gray-50">
-          <div className="text-gray-500">
+        <div className="flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900">
+          <div className="text-gray-500 dark:text-gray-400">
             Waiting for Proclaim data...
             <div className="text-xs mt-2">Is the Proclaim service running?</div>
           </div>

@@ -108,7 +108,7 @@ const BlockItem = memo(function BlockItem({
 
   return (
     <div
-      className="flex items-start gap-2 py-1 hover:bg-gray-50"
+      className="flex items-start gap-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-900 text-gray-900 dark:text-gray-100"
       style={{ paddingLeft: `${indentPadding}px` }}
     >
       {/* Operation buttons - only shown when focused */}
@@ -161,7 +161,7 @@ const BlockItem = memo(function BlockItem({
         type="button"
         onClick={() => onToggleHeading(blockId)}
         onMouseDown={(e) => e.preventDefault()} // Prevent blur when clicking
-        className={`flex-shrink-0 bg-transparent border-none cursor-pointer hover:opacity-60 p-0 ${
+        className={`shrink-0 bg-transparent border-none cursor-pointer hover:opacity-60 p-0 ${
           block.type === 'heading' ? 'font-bold' : ''
         }`}
         title="Click to toggle heading (Cmd+H)"
@@ -171,7 +171,7 @@ const BlockItem = memo(function BlockItem({
       </button>
 
       {/* Content */}
-      <div className="flex-grow min-w-0">
+      <div className="grow min-w-0">
         {isFocused && editable ? (
           <textarea
             ref={(el) => {
@@ -200,7 +200,7 @@ const BlockItem = memo(function BlockItem({
             className={`cursor-text ${block.type === 'heading' ? 'font-bold text-lg' : ''}`}
           >
             {block.content || (
-              <span className="text-gray-400 italic">Click to edit...</span>
+              <span className="text-gray-400 dark:text-gray-500 italic">Click to edit...</span>
             )}
           </div>
         )}
@@ -505,9 +505,9 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
   );
 
   return (
-    <div className="border rounded p-1 bg-white">
+    <div className="border rounded p-1 bg-white dark:bg-gray-800">
       {sortedBlockIds.length === 0 ? (
-        <div className="text-gray-400 italic">No blocks yet</div>
+        <div className="text-gray-400 dark:text-gray-500 italic">No blocks yet</div>
       ) : (
         sortedBlockIds.map((blockId, index) => (
           <BlockItem

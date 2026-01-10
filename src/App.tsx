@@ -245,7 +245,7 @@ function HomePage() {
                 <LayoutDiagram layout={layout.layout} />
                 <a
                   href={`/${layoutStr}`}
-                  className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition text-sm"
+                  className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 transition text-sm shadow hover:shadow-lg"
                 >
                   {layout.label}
                 </a>
@@ -391,7 +391,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
       </div>
       <a
         href="/"
-        className="fixed bottom-4 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 text-white shadow-md hover:bg-gray-700/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300"
+        className="fixed bottom-4 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 dark:bg-gray-700/80 text-white shadow-md hover:bg-gray-700/80 dark:hover:bg-gray-600/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
         title="Home"
         style={{ fontSize: '1.3rem', boxShadow: '0 2px 8px rgba(0,0,0,0.10)' }}
       >
