@@ -17,7 +17,7 @@ import TranslatedTextViewerContainer from "./TranslatedTextViewerContainer";
 import { ClientToken } from "@y-sweet/sdk";
 import SlidesPlayer from "./SlidesPlayer";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
-import ProseMirrorEditor from "./ProseMirrorEditor";
+import ProseMirrorEditor from "./ProseMirrorEditorLazy";
 import { PostHogErrorBoundary } from "posthog-js/react";
 import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 
