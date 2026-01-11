@@ -104,7 +104,7 @@ function SourceTextComponent() {
 
 function TranslatedTextComponent({ language, onLanguageChange }: { language: string; onLanguageChange: (newLang: string) => void }) {
   const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
-  const fontSize = useAtomValue(fontSizeAtom);
+  const [fontSize, setFontSize] = useAtom(fontSizeAtom);
   
   return (
     <div
@@ -132,6 +132,37 @@ function TranslatedTextComponent({ language, onLanguageChange }: { language: str
                 </option>
               ))}
             </select>
+            {/* font size controls */}
+            <div className="flex-1" />
+              <button
+                type="button"
+                aria-label="Decrease font size"
+                className=""
+                onClick={() => {
+                  const currentSize = fontSize || 16;
+                  const newSize = Math.max(10, currentSize - 2);
+                  console.log('Setting font size to', newSize);
+                  setFontSize(newSize);
+                }}
+                >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Increase font size"
+                onClick={() => {
+                  const currentSize = fontSize || 16;
+                  const newSize = Math.min(32, currentSize + 2);
+                  console.log('Setting font size to', newSize);
+                  setFontSize(newSize);
+                }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+              </button>
           </>
         }
       />
