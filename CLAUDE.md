@@ -306,7 +306,7 @@ The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395))
 
 - Layouts are encoded in the URL path: `/transcript,sourceText|translatedText-French,video`
 - Format: rows separated by `|`, columns separated by `,`
-- Components: `transcript`, `sourceText`, `translatedText-{language}`, `video`, `currentSlide`
+- Components: `transcript`, `sourceText`, `translatedText-{language}`, `bilingual-{language}`, `video`, `currentSlide`
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
 - Example with Proclaim: `/translatedText-French,currentSlide` shows translation and current slide side-by-side
@@ -347,6 +347,8 @@ The app has two modes determined by URL hash (`#editor`):
 - [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - Web Speech API integration for live transcription
 - [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer with TTS controls and auto-play logic
 - [TranslatedTextViewerContainer.tsx](src/TranslatedTextViewerContainer.tsx) - Yjs connector for TranslatedTextViewer
+- [BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx) - Shows blocks with original text and translation side-by-side
+- [BilingualBlockViewerContainer.tsx](src/BilingualBlockViewerContainer.tsx) - Yjs connector for BilingualBlockViewer
 - [CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx) - Proclaim slide viewer with pure component and Yjs container
 
 ### TTS System
