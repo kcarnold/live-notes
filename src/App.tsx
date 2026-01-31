@@ -307,7 +307,7 @@ const availableLayouts = [
     key: 'bilingual',
     label: 'Bilingual View',
     layout: [
-      ["video", "bilingual"]
+      ["currentSlide", "bilingual"]
     ]
   },
   {
@@ -333,7 +333,9 @@ function HomePage() {
           // Convert layout array to human-legible string, adding default language to translatedText components
           const layoutStr = layout.layout.map(row => 
             row.map(component => 
-              component === 'translatedText' ? `translatedText-${defaultLang}` : component
+              component === 'translatedText' ? `translatedText-${defaultLang}` : 
+              component === 'bilingual' ? `bilingual-${defaultLang}` :
+              component
             ).join(",")
           ).join("|");
           return (
