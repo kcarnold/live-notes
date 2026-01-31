@@ -181,7 +181,7 @@ export function BilingualBlockViewer({
         ref={scrollContainerRef}
         className="overflow-auto pb-16 flex-1"
       >
-        <div className="flex flex-col gap-4 p-4 max-w-2xl mx-auto">
+        <div className="flex flex-col gap-1 p-4 max-w-2xl mx-auto p-compact">
           {nonEmptyBlocks.map((block, index) => {
             const cacheKey = `${language}:${block.content.trim()}`;
             const translation = translations.get(cacheKey);
@@ -250,7 +250,7 @@ function BlockPair({
     <div
       onClick={isTTSEnabled ? onClick : undefined}
       className={`
-        flex flex-col gap-1 ${indentClass}
+        flex flex-col gap-0 ${indentClass}
         ${isTTSEnabled ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800' : ''}
         ${isPlaying ? 'bg-blue-200 dark:bg-blue-800' : ''}
         ${isLoading ? 'tts-loading' : ''}
