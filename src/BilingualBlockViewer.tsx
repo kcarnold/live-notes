@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect, useEffectEvent, useMemo } from 'react';
-import micromark from 'micromark';
+import snarkdown from 'snarkdown';
 import { Block } from './blockTypes';
 import { useScrollToBottom } from './reactUtils';
 import { useTTS } from './useTTS';
@@ -21,7 +21,7 @@ export interface BilingualBlockViewerProps {
  *
  * Features:
  * - TTS: Click any block to speak it, or enable auto-speak mode
- * - Markdown rendering via micromark
+ * - Markdown rendering
  * - Language selection and font size controls via headerControls
  *
  * Translation lookup uses the same cache key format as the translation pipeline:
@@ -240,10 +240,10 @@ function BlockPair({
   const isHeading = block.type === 'heading';
   const headingClass = isHeading ? 'font-bold' : '';
 
-  // Render markdown to HTML using micromark
+  // Render markdown to HTML using snarkdown
   const translationHtml = useMemo(() => {
     if (!translation) return null;
-    return micromark(translation);
+    return snarkdown(translation);
   }, [translation]);
 
   return (
