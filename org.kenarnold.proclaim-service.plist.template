@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>uv</string>
+        <string>{{UV_PATH}}</string>
         <string>run</string>
         <string>{{SERVICE_SCRIPT}}</string>
     </array>

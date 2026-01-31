@@ -13,6 +13,7 @@ SERVICE_LABEL="org.kenarnold.proclaim-service"
 # Get current user and paths
 CURRENT_USER="$(whoami)"
 LOG_DIR="$HOME/Library/Logs/proclaim-service"
+UV_PATH="$(which uv)"
 
 # Colors for output
 RED='\033[0;31m'
@@ -37,7 +38,8 @@ generate_plist() {
     sed "s|{{SERVICE_SCRIPT}}|$SERVICE_SCRIPT|g" "$PLIST_TEMPLATE" | \
     sed "s|{{REPO_PATH}}|$SCRIPT_DIR|g" | \
     sed "s|{{LOG_DIR}}|$LOG_DIR|g" | \
-    sed "s|{{USERNAME}}|$CURRENT_USER|g"
+    sed "s|{{USERNAME}}|$CURRENT_USER|g" | \
+    sed "s|{{UV_PATH}}|$UV_PATH|g"
 }
 
 uninstall() {
@@ -77,6 +79,11 @@ if [ ! -f "$SERVICE_SCRIPT" ]; then
     exit 1
 fi
 
+if [ -z "$UV_PATH" ]; then
+    log_error "uv not found in PATH. Install uv first: https://docs.astral.sh/uv/"
+    exit 1
+fi
+
 # Create LaunchAgents directory if needed
 mkdir -p "$HOME/Library/LaunchAgents"
 log_info "LaunchAgents directory exists"
@@ -91,6 +98,7 @@ log_info "Plist generated and installed to $PLIST_DEST"
 log_info "  User: $CURRENT_USER"
 log_info "  Repo: $SCRIPT_DIR"
 log_info "  Logs: $LOG_DIR"
+log_info "  uv:   $UV_PATH"
 
 # Check if already loaded
 if launchctl list "$SERVICE_LABEL" &>/dev/null; then
