@@ -84,12 +84,12 @@ describe('blockTypes', () => {
       expect(sorted.map(b => b.content)).toEqual(['Second', 'First', 'Third']);
     });
 
-    it('handles identical positions', () => {
+    it('breaks ties using block id', () => {
       const block1 = createBlock('First', 'bullet', 0, 'abc');
       const block2 = createBlock('Second', 'bullet', 0, 'abc');
 
       const result = compareBlockPositions(block1, block2);
-      expect(result).toBe(0);
+      expect(result).not.toBe(0);
     });
 
     it('correctly orders uppercase before lowercase (case-sensitive)', () => {
