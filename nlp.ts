@@ -35,15 +35,15 @@ export const translateBlock = async (provider: GeminiProvider, todo: Translation
       responseMimeType: 'application/json',
       responseSchema: {
         type: genAI.Type.OBJECT,
-        required: ["lines"],
+        required: ["segments"],
         properties: {
-          lines: {
+          segments: {
             type: genAI.Type.ARRAY,
             items: {
               type: genAI.Type.OBJECT,
-              required: ["num", "translation"],
+              required: ["segmentId", "translation"],
               properties: {
-                num: {
+                segmentId: {
                   type: genAI.Type.INTEGER,
                 },
                 translation: {
@@ -55,12 +55,19 @@ export const translateBlock = async (provider: GeminiProvider, todo: Translation
         },
       },
     };
-    const model = 'gemini-2.0-flash-lite';
-    const inputDocument = todo.chunks.map((chunk, index) => {
-        const isTranslationNeeded = todo.isTranslationNeeded[index];
-        const lineNumber = index;
-        return `${lineNumber} ${isTranslationNeeded ? 'T' : 'C'} ${chunk.trim()}`;
-    }).join('\n');
+
+    type OutputSegment = {
+        segmentId: number;
+        translation: string;
+    };
+
+    const inputDocument = JSON.stringify(
+        todo.chunks.map((chunk, index) => ({
+            segmentId: index,
+            status: todo.isTranslationNeeded[index] ? 'T' : 'C',
+            text: chunk.trim()
+        }))
+    );
     console.log('Input document:', inputDocument);
         
     const contents = [
@@ -77,12 +84,18 @@ Here is some text that has already been translated, provided for reference for s
 ${todo.translatedContext}
 </already_translated>
 
-The input document will be in the form:
-NUMBER C_OR_T TEXT
+The input document is a JSON array of segments where each object has:
+- "segmentId": the segment id
+- "status": "C" (context, already translated) or "T" (needs translation)
+- "text": the content to translate
 
-Where C_OR_T is either C (for context) or T (for translation).
+For each segment with status "T", translate the text into the target language.
 
-For each line marked with T, translate the text into the target language.
+Return exactly as many segments as were provided in the input document, in the same order.
+
+Your response should be a JSON object with a "segments" field that is an array of objects. Each object should have:
+- "segmentId": the segment id
+- "translation": the translated text (or the original text if status was "C")
 
 <input_document>
 ${inputDocument}
@@ -101,11 +114,11 @@ ${inputDocument}
     console.dir(response, { depth: null });
     console.log(response.usageMetadata);
     const jsonResponse = JSON.parse(response.text || '');
-    const lines = jsonResponse.lines;
-    const translatedBlocks: TranslationBlockResult[] = lines.map((line: any) => {
-        const lineNumber = line.num;
-        const translatedText = line.translation;
-        const sourceText = todo.chunks[lineNumber];
+    const segments = jsonResponse.segments as Array<{ segmentId: number; translation: string }>;
+    const translatedBlocks: TranslationBlockResult[] = segments.map((segment: OutputSegment) => {
+        const segmentNumber = segment.segmentId;
+        const translatedText = segment.translation;
+        const sourceText = todo.chunks[segmentNumber];
         return { sourceText, translatedText, language };
     });
     return translatedBlocks;
