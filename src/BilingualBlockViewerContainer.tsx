@@ -1,12 +1,14 @@
+import type React from 'react';
 import { useEffect, useState, useMemo } from 'react';
 import { useYDoc, useMap } from '@y-sweet/react';
-import * as Y from 'yjs';
-import { Block, yMapToBlock, compareBlockPositions } from './blockTypes';
+import type * as Y from 'yjs';
+import { type Block, yMapToBlock, compareBlockPositions } from './blockTypes';
 import { BilingualBlockViewer } from './BilingualBlockViewer';
 
 interface BilingualBlockViewerContainerProps {
   language: string;
   fontSize?: number;
+  headerControls?: React.ReactNode;
 }
 
 /**
@@ -21,6 +23,7 @@ interface BilingualBlockViewerContainerProps {
 export function BilingualBlockViewerContainer({
   language,
   fontSize,
+  headerControls,
 }: BilingualBlockViewerContainerProps) {
   const ydoc = useYDoc();
   const translationCache = useMap('notesTranslationCache');
@@ -73,6 +76,7 @@ export function BilingualBlockViewerContainer({
       translations={translations}
       language={language}
       fontSize={fontSize}
+      headerControls={headerControls}
     />
   );
 }

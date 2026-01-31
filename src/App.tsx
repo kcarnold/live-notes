@@ -171,6 +171,74 @@ function TranslatedTextComponent({ language, onLanguageChange }: { language: str
   );
 }
 
+function BilingualBlockComponent({ language, onLanguageChange }: { language: string; onLanguageChange: (newLang: string) => void }) {
+  const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
+  const [fontSize, setFontSize] = useAtom(fontSizeAtom);
+
+  return (
+    <div
+      className={
+        cardClass +
+        " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"
+      }
+    >
+      <BilingualBlockViewerContainer
+        language={language}
+        fontSize={fontSize}
+        headerControls={
+          <>
+            <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">
+              Bilingual
+            </h2>
+            <select
+              className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
+              value={language}
+              onChange={(e) => onLanguageChange(e.target.value)}
+            >
+              {languages.map((lang) => (
+                <option key={lang} value={lang}>
+                  {lang}
+                </option>
+              ))}
+            </select>
+            {/* font size controls */}
+            <div className="flex-1" />
+              <button
+                type="button"
+                aria-label="Decrease font size"
+                className=""
+                onClick={() => {
+                  const currentSize = fontSize || 16;
+                  const newSize = Math.max(10, currentSize - 2);
+                  console.log('Setting font size to', newSize);
+                  setFontSize(newSize);
+                }}
+                >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Increase font size"
+                onClick={() => {
+                  const currentSize = fontSize || 16;
+                  const newSize = Math.min(32, currentSize + 2);
+                  console.log('Setting font size to', newSize);
+                  setFontSize(newSize);
+                }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+              </button>
+          </>
+        }
+      />
+    </div>
+  );
+}
+
 function VideoComponent({ isEditor }: { isEditor: boolean }) {
   const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
   const [peerConnectionDisconnected, setPeerConnectionDisconnected] = useState(true);
@@ -319,6 +387,9 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
         if (r === rowIdx && c === colIdx && component.startsWith('translatedText-')) {
           return `translatedText-${newLanguage}`;
         }
+        if (r === rowIdx && c === colIdx && component.startsWith('bilingual-')) {
+          return `bilingual-${newLanguage}`;
+        }
         return component;
       })
     );
@@ -370,7 +441,13 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
     if (componentStr.startsWith('bilingual-')) {
       const language = componentStr.substring('bilingual-'.length);
       const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
-      return <BilingualBlockViewerContainer key={key} language={validLanguage} />;
+      return (
+        <BilingualBlockComponent
+          key={key}
+          language={validLanguage}
+          onLanguageChange={(newLang) => updateComponentLanguage(rowIdx, colIdx, newLang)}
+        />
+      );
     }
 
     // Invalid component
