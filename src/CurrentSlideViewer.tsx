@@ -125,7 +125,7 @@ export function CurrentSlideViewerContainer() {
     );
   } catch {
       return (
-        <div className="flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900">
+        <div className="flex items-center justify-center bg-gray-50 dark:bg-gray-900">
           <div className="text-gray-500 dark:text-gray-400">
             Waiting for Proclaim data...
             <div className="text-xs mt-2">Is the Proclaim service running?</div>
