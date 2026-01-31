@@ -266,8 +266,8 @@ export function BlockEditor({ yArray, onTextChanged, onBlocksChanged, editable =
 
   // Memoized sorted list of block IDs
   // version is used to trigger re-computation when yArray changes
-  void version;
   const sortedBlockIds = useMemo(() => {
+    void version
     const blocks = yArray
       .toArray()
       .map(yMap => yMapToBlock(yMap))

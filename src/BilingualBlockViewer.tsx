@@ -1,6 +1,7 @@
-import React, { useRef, useState, useCallback, useEffect, useEffectEvent, useMemo } from 'react';
+import type React from 'react';
+import { useRef, useState, useCallback, useEffect, useEffectEvent, useMemo } from 'react';
 import snarkdown from 'snarkdown';
-import { Block } from './blockTypes';
+import type { Block } from './blockTypes';
 import { useScrollToBottom } from './reactUtils';
 import { useTTS } from './useTTS';
 
@@ -99,6 +100,10 @@ export function BilingualBlockViewer({
 
   // Trigger auto-play when conditions change
   useEffect(() => {
+    void translationLines.length;
+    void tts.status;
+    void autoSpeakEnabled;
+    void playhead;
     runAutoPlay();
   }, [translationLines.length, tts.status, autoSpeakEnabled, playhead]);
 

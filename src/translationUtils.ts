@@ -103,6 +103,8 @@ export interface GenericMap {
     has(key: string): boolean;
 }
 
+type ChunkStatus = 0 | 1 | 2; // 0: skip, 1: translate, 2: context
+
 export function translationCacheKey(language: string, chunkText: string) {
     // The translation cache key is a combination of the language and the chunk text.
     // This is to avoid collisions between different languages.
@@ -117,7 +119,7 @@ export function getTranslationTodos(language: string, decomposedChunks: Decompos
     // The keys of the translation cache are always the trimmed chunks.
     const chunkStatus = decomposedChunks.map((chunk) => {
         return (chunk.content === "" || translationCache.has(translationCacheKey(language, chunk.content))) ? 0 : 1;
-    });
+    }) as ChunkStatus[];
 
     // Mark a few lines before each "need to translate" chunk as "context"
     for (let i = 0; i < chunkStatus.length; i++) {
@@ -125,7 +127,6 @@ export function getTranslationTodos(language: string, decomposedChunks: Decompos
             // Mark the previous few lines as context
             for (let j = 1; j <= 3; j++) {
                 if (i - j >= 0 && chunkStatus[i - j] === 0) {
-                    // @ts-ignore
                     chunkStatus[i - j] = 2;
                 }
             }
@@ -284,7 +285,7 @@ export function buildBlockTranslationRequests(
     const chunkStatus = nonEmptyBlocks.map((block) => {
         const trimmed = block.content.trim();
         return translationCache.has(translationCacheKey(language, trimmed)) ? 0 : 1;
-    });
+    }) as ChunkStatus[];
 
     // Mark context lines (3 lines before each untranslated block)
     for (let i = 0; i < chunkStatus.length; i++) {
