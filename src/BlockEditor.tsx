@@ -21,6 +21,7 @@ const SHOW_BUTTONS = true;
 interface BlockEditorProps {
   yArray: Y.Array<Y.Map<any>>;
   onTextChanged?: (markdown: string) => void;
+  onBlocksChanged?: (blocks: Block[]) => void;
   editable?: boolean;
   onTranslationTrigger?: () => void;
 }
@@ -212,15 +213,17 @@ const BlockItem = memo(function BlockItem({
   );
 });
 
-export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslationTrigger }: BlockEditorProps) {
+export function BlockEditor({ yArray, onTextChanged, onBlocksChanged, editable = true, onTranslationTrigger }: BlockEditorProps) {
   const [version, setVersion] = useState(0);
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const onTextChangedRef = useRef(onTextChanged);
+  const onBlocksChangedRef = useRef(onBlocksChanged);
 
-  // Keep ref updated
+  // Keep refs updated
   useEffect(() => {
     onTextChangedRef.current = onTextChanged;
-  }, [onTextChanged]);
+    onBlocksChangedRef.current = onBlocksChanged;
+  }, [onTextChanged, onBlocksChanged]);
 
   // Initialize and observe Yjs array
   useEffect(() => {
@@ -230,9 +233,12 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
     // Trigger initial render
     setVersion(v => v + 1);
 
-    // Call onTextChanged with initial state
+    // Call callbacks with initial state
+    const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap)).sort(compareBlockPositions);
+    if (onBlocksChangedRef.current) {
+      onBlocksChangedRef.current(blocks);
+    }
     if (onTextChangedRef.current) {
-      const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap)).sort(compareBlockPositions);
       const markdown = serializeBlocksToMarkdown(blocks);
       onTextChangedRef.current(markdown);
     }
@@ -241,9 +247,12 @@ export function BlockEditor({ yArray, onTextChanged, editable = true, onTranslat
     const observer = () => {
       setVersion(v => v + 1);
 
-      // Notify parent of markdown changes
+      // Notify parent of changes
+      const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap)).sort(compareBlockPositions);
+      if (onBlocksChangedRef.current) {
+        onBlocksChangedRef.current(blocks);
+      }
       if (onTextChangedRef.current) {
-        const blocks = yArray.toArray().map(yMap => yMapToBlock(yMap)).sort(compareBlockPositions);
         const markdown = serializeBlocksToMarkdown(blocks);
         onTextChangedRef.current(markdown);
       }

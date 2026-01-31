@@ -235,3 +235,157 @@ export async function getUpdatedTranslation(language: string, translationCache: 
 }
 
 export const translatedTextKeyForLanguage = (language: string) => `translatedText-${language}`;
+
+// ============================================================================
+// Block-based translation (no markdown serialization round-trip)
+// ============================================================================
+
+export interface TranslationBlock {
+    type: 'heading' | 'bullet';
+    level: number;
+    content: string;
+}
+
+/**
+ * Get translation todos from blocks, checking cache for each.
+ * Returns parallel arrays of content strings and whether translation is needed.
+ */
+export function getBlockTranslationTodos(
+    language: string,
+    blocks: TranslationBlock[],
+    translationCache: TranslationCache
+): { contents: string[]; isTranslationNeeded: boolean[] } {
+    const contents: string[] = [];
+    const isTranslationNeeded: boolean[] = [];
+
+    for (const block of blocks) {
+        const trimmed = block.content.trim();
+        if (trimmed === '') continue;
+
+        contents.push(trimmed);
+        const cacheKey = translationCacheKey(language, trimmed);
+        isTranslationNeeded.push(!translationCache.has(cacheKey));
+    }
+
+    return { contents, isTranslationNeeded };
+}
+
+/**
+ * Build translation todos with context from cached translations.
+ * Groups contiguous untranslated blocks and adds context lines before each group.
+ */
+export function buildBlockTranslationRequests(
+    language: string,
+    blocks: TranslationBlock[],
+    translationCache: TranslationCache
+): TranslationTodo[] {
+    // Filter to non-empty blocks and get their status
+    const nonEmptyBlocks = blocks.filter(b => b.content.trim() !== '');
+    const chunkStatus = nonEmptyBlocks.map((block) => {
+        const trimmed = block.content.trim();
+        return translationCache.has(translationCacheKey(language, trimmed)) ? 0 : 1;
+    });
+
+    // Mark context lines (3 lines before each untranslated block)
+    for (let i = 0; i < chunkStatus.length; i++) {
+        if (chunkStatus[i] === 1) {
+            for (let j = 1; j <= 3; j++) {
+                if (i - j >= 0 && chunkStatus[i - j] === 0) {
+                    chunkStatus[i - j] = 2; // context
+                }
+            }
+        }
+    }
+
+    // Find contiguous blocks
+    const contiguousBlocks = findContiguousBlocks(chunkStatus);
+
+    // Build translation todos
+    const translationTodos: TranslationTodo[] = [];
+    for (const [start, end] of contiguousBlocks) {
+        const blocksInContext = nonEmptyBlocks.slice(start, end + 1);
+        const statusesInContext = chunkStatus.slice(start, end + 1);
+
+        // Build context string from cached translations
+        const translatedContext = blocksInContext.map((block) => {
+            const trimmed = block.content.trim();
+            const cached = translationCache.get(translationCacheKey(language, trimmed));
+            if (cached) {
+                return blockToMarkdownLine(block.type, block.level, cached);
+            }
+            return '';
+        }).join('\n');
+
+        translationTodos.push({
+            chunks: blocksInContext.map(b => b.content.trim()),
+            offset: start,
+            isTranslationNeeded: statusesInContext.map(x => x === 1),
+            translatedContext,
+        });
+    }
+
+    return translationTodos;
+}
+
+/**
+ * Convert block type/level to markdown line prefix + content.
+ */
+function blockToMarkdownLine(type: 'heading' | 'bullet', level: number, content: string): string {
+    if (type === 'heading') {
+        const hashes = '#'.repeat(Math.min(level + 2, 6));
+        return `${hashes} ${content}`;
+    } else {
+        const indent = '  '.repeat(level);
+        return `${indent}- ${content}`;
+    }
+}
+
+/**
+ * Reconstruct markdown from blocks using cached translations.
+ */
+export function constructMarkdownFromBlocks(
+    language: string,
+    blocks: TranslationBlock[],
+    translationCache: TranslationCache
+): string {
+    return blocks
+        .filter(block => block.content.trim() !== '')
+        .map(block => {
+            const trimmed = block.content.trim();
+            const cacheKey = translationCacheKey(language, trimmed);
+            const translation = translationCache.get(cacheKey) ?? trimmed;
+            return blockToMarkdownLine(block.type, block.level, translation);
+        })
+        .join('\n');
+}
+
+/**
+ * Main entry point: translate blocks and return markdown string.
+ */
+export async function getUpdatedTranslationFromBlocks(
+    language: string,
+    blocks: TranslationBlock[],
+    translationCache: TranslationCache
+): Promise<string> {
+    const translationTodos = buildBlockTranslationRequests(language, blocks, translationCache);
+
+    if (translationTodos.length > 0) {
+        const response = await fetch('/api/requestTranslatedBlocks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ translationTodos, language }),
+        });
+
+        const result = await response.json().catch(() => null);
+        if (!response.ok || !result?.ok) {
+            if (result?.error) {
+                throw new Error(`Translation error (${response.status}): ${result.error}`);
+            } else {
+                throw new Error(`Translation error (${response.status}): ${response.statusText}`);
+            }
+        }
+        updateTranslationCache(result, translationCache);
+    }
+
+    return constructMarkdownFromBlocks(language, blocks, translationCache);
+}

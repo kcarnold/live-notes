@@ -1,15 +1,16 @@
 import { useCallback, useState } from 'react';
 import { useMap, useYDoc } from '@y-sweet/react';
 import { setYTextFromString } from './yjsUtils';
-import { GenericMap, TranslationCache, getUpdatedTranslation, translatedTextKeyForLanguage } from './translationUtils';
+import type { GenericMap, TranslationBlock, TranslationCache } from './translationUtils';
+import { getUpdatedTranslationFromBlocks, translatedTextKeyForLanguage } from './translationUtils';
 
 export function useTranslationManager({
   languages,
-  sourceTextRef,
+  sourceBlocksRef,
   translationCacheName
 }: {
   languages: readonly string[];
-  sourceTextRef: React.RefObject<string>;
+  sourceBlocksRef: React.RefObject<TranslationBlock[]>;
   translationCacheName: string;
 }) {
   const ydoc = useYDoc();
@@ -18,19 +19,17 @@ export function useTranslationManager({
   const [translationError, setTranslationError] = useState("");
 
   const doTranslations = useCallback(async () => {
-    const sourceText = sourceTextRef.current;
-    if (!sourceText) {
-      console.warn("No source text available for translation.");
+    const blocks = sourceBlocksRef.current;
+    if (!blocks || blocks.length === 0) {
+      console.warn("No source blocks available for translation.");
       return;
     }
-    // Replace any manual line breaks (lines ending in \) with Markdown paragraph breaks
-    const sanitizedText = sourceText.replace(/\\\n\\\n/g, '\n\n');
-    // Continue with translation using sanitizedText
+
     async function doTranslation(language: string) {
-      const updatedText = await getUpdatedTranslation(
+      const updatedText = await getUpdatedTranslationFromBlocks(
         language,
+        blocks,
         translationCache as GenericMap as TranslationCache,
-        sanitizedText
       );
       const key = translatedTextKeyForLanguage(language);
       setYTextFromString(ydoc.getText(key), updatedText);
@@ -47,7 +46,7 @@ export function useTranslationManager({
     } finally {
       setIsTranslating(false);
     }
-  }, [languages, setTranslationError, translationCache, sourceTextRef, ydoc]);
+  }, [languages, translationCache, sourceBlocksRef, ydoc]);
 
   const doResetTranslations = useCallback(() => {
     for (const lang of languages) {
