@@ -304,10 +304,10 @@ const availableLayouts = [
     ]
   },
   {
-    key: 'two-translations',
-    label: 'Two Translations',
+    key: 'bilingual',
+    label: 'Bilingual View',
     layout: [
-      ["video", "translatedText", "translatedText"]
+      ["video", "bilingual"]
     ]
   },
   {
