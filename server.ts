@@ -30,7 +30,7 @@ const phClient = new PostHog(
 
 const geminiProvider = new GeminiProvider({
   apiKey: getEnvOrCrash('GEMINI_API_KEY'),
-  defaultModel: "gemini-2.0-flash-lite",
+  defaultModel: "gemini-2.5-flash-lite",
   maxTokens: 8192,
   posthog: phClient
 });
