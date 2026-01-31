@@ -20,6 +20,7 @@ import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import ProseMirrorEditor from "./ProseMirrorEditorLazy";
 import { PostHogErrorBoundary } from "posthog-js/react";
 import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
+import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -356,16 +357,22 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
       const language = componentStr.substring('translatedText-'.length);
       // Validate language, default to first language if invalid
       const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
-      
+
       return (
-        <TranslatedTextComponent 
+        <TranslatedTextComponent
           key={key}
           language={validLanguage}
           onLanguageChange={(newLang) => updateComponentLanguage(rowIdx, colIdx, newLang)}
         />
       );
     }
-    
+
+    if (componentStr.startsWith('bilingual-')) {
+      const language = componentStr.substring('bilingual-'.length);
+      const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
+      return <BilingualBlockViewerContainer key={key} language={validLanguage} />;
+    }
+
     // Invalid component
     return null;
   };
@@ -382,7 +389,12 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
       const language = componentStr.substring('translatedText-'.length);
       return (languages as readonly string[]).includes(language);
     }
-    
+
+    if (componentStr.startsWith('bilingual-')) {
+      const language = componentStr.substring('bilingual-'.length);
+      return (languages as readonly string[]).includes(language);
+    }
+
     return false;
   };
 
