@@ -196,6 +196,10 @@ export function BilingualBlockViewer({
             const translationLineIndex = translation ? translationLines.indexOf(translation) : -1;
             const isPlayhead = translationLineIndex !== -1 && translationLineIndex === playhead;
 
+            if (!translation) {
+              return null; // Skip blocks without translation
+            }
+
             return (
               <BlockPair
                 key={block.id}
