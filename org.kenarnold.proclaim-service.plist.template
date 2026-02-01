@@ -33,7 +33,7 @@
 
         <!-- Optional: Set PROCLAIM_BASE_URL if on different machine -->
         <!-- <key>PROCLAIM_BASE_URL</key>
-        <string>http://localhost:52195</string> -->
+        <string>http://127.0.0.1:52195</string> -->
     </dict>
 
     <!-- Working directory for relative paths -->
