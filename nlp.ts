@@ -78,24 +78,28 @@ export const translateBlock = async (provider: GeminiProvider, todo: Translation
             text: `
 We are translating text into ${language}.
 
-Here is some text that has already been translated, provided for reference for style and terminology.
+Here is some text that has already been translated, provided for reference for style and terminology. The instructions and text to be translated will follow after this context.
 
 <already_translated>
 ${todo.translatedContext}
 </already_translated>
 
-The input document is a JSON array of segments where each object has:
+The input document is a JSON array of segments:
 - "segmentId": the segment id
-- "status": "C" (context, already translated) or "T" (needs translation)
+- "status": "C" (context, no translation needed) or "T" (needs translation)
 - "text": the content to translate
 
-For each segment with status "T", translate the text into the target language.
+Respond with only JSON:
+{"segments": [{
+  "segmentId": the segment id
+  "translation": the text, in ${language}
+}]}
 
-Return exactly as many segments as were provided in the input document, in the same order.
+Construct this response as follows:
+- For each segment with status "T", append a segment with the given segmentId and translate the text into the target language.
+- Skip any segments with status "C" (these are provided for context only). Do not include any segments with status "C" in your response.
 
-Your response should be a JSON object with a "segments" field that is an array of objects. Each object should have:
-- "segmentId": the segment id
-- "translation": the translated text (or the original text if status was "C")
+Segment ids must match those in the input document.
 
 <input_document>
 ${inputDocument}
