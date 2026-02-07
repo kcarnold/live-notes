@@ -211,6 +211,7 @@ class ProclaimClient:
         for line in text.strip().split('\n'):
             line_stripped = line.strip()
             # Blank lines are slide breaks *only if* not using explicit --
+            # ... and only sometimes. If it all fits on a slide, Proclaim won't actually break it into multiple slides.
             is_slide_break = (line_stripped == '' and not explicitly_delimited) or (line_stripped == '--')
             if is_slide_break:
                 sections.append('')
