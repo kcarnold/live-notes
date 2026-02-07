@@ -7,6 +7,37 @@ This service:
 2. Parses presentation content from the Proclaim database
 3. Updates Yjs shared state with presentation data (via Y-Sweet)
 4. Watches for changes and updates clients in real-time
+
+Protocol documenation:
+
+- Proclaim API: Faithlife provides a local API for Proclaim on port 52195. Key endpoints:
+
+    - GET /onair/session: Returns a session ID for authentication
+    - GET /presentations/onair: Returns current on-air presentation data (requires OnAirSessionId header)
+        - The most important thing this gives us is the `serviceItems` array, which looks like:
+    {
+      "id": "39510e4d-b345-4f63-abf1-8c8e6bdff9b3",
+      "title": "Call to Worship",
+      "notes": "",
+      "kind": "Content",
+      "slides": [
+        { 
+          "localRevision": 639060998184592130,
+          "index": 0
+        },
+        {
+          "localRevision": 639060998184592130,
+          "index": 1
+        },
+        {
+          "localRevision": 639060998184592130,
+          "index": 2
+        }
+      ]
+    },
+    
+    - GET /onair/statusChanged: Returns current status of on-air presentation (requires OnAirSessionId header)
+    - It seems there's also a /presentations/onair/items/{serviceItemId}/slides/{slideIndex}/image endpoint that returns the image for a given slide, but I haven't tested it, and we don't need to use it since we can get all content from the database.
 """
 
 import os
