@@ -10,10 +10,10 @@ This service:
 """
 
 import os
-import sys
 import json
 import logging
 import signal
+import argparse
 import anyio
 from typing import Optional, Dict, Any, List
 from pathlib import Path
@@ -27,7 +27,7 @@ from httpx_ws import aconnect_ws
 from pycrdt import Provider
 from pycrdt.websocket.websocket import HttpxWebsocket
 
-# Configure logging
+# Configure logging (default level, can be overridden by --debug flag)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -527,9 +527,20 @@ async def signal_handler(cancel_scope: anyio.CancelScope):
 
 async def main():
     """Entry point with signal handling"""
-    # Get doc ID from command line or environment
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Proclaim Service - Syncs Proclaim to Yjs')
+    parser.add_argument('doc_id', nargs='?', help='Document ID (default: date-based doc-YYYY-MM-DD)')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    args = parser.parse_args()
+
+    # Set logging level
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
+
+    # Get doc ID from arguments or environment
     # If neither provided, service will use date-based doc_id (default)
-    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID')
+    doc_id = args.doc_id or os.getenv('PROCLAIM_DOC_ID')
 
     service = ProclaimYjsService(YSWEET_URL, doc_id)
 
