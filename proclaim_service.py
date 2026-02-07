@@ -82,8 +82,7 @@ class ProclaimClient:
 
     async def get_onair_presentation(self, timeout: float = 5.0) -> Dict[str, Any]:
         """Fetch /presentations/onair with the OnAirSessionId header."""
-        if not self.session_id:
-            await self.get_session_id()
+        await self.get_session_id()
         assert self.session_id is not None
 
         url = f"{self.base_url}/presentations/onair"
@@ -94,8 +93,7 @@ class ProclaimClient:
 
     async def get_status(self, timeout: float = 5.0) -> Dict[str, Any]:
         """Fetch /onair/statusChanged with the OnAirSessionId header."""
-        if not self.session_id:
-            await self.get_session_id()
+        await self.get_session_id()
         assert self.session_id is not None
 
         url = f"{self.base_url}/onair/statusChanged"
