@@ -341,8 +341,8 @@ class ProclaimYjsService:
         self.ysweet_url = ysweet_url
 
         # If no doc_id provided, use date-based doc_id
-        self.use_date_based_doc_id = doc_id is None
-        if self.use_date_based_doc_id:
+        if doc_id is None:
+            self.use_date_based_doc_id = True
             self.doc_id = self._get_date_based_doc_id()
             self.current_doc_date = date.today()
         else:
