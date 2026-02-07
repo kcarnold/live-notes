@@ -73,6 +73,8 @@ PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://localhost:52195')
 YSWEET_URL = os.getenv('YSWEET_URL', 'http://dev8.kenarnold.org')
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 
+DUMP_PRESENTATION_JSON = os.getenv('DUMP_PRESENTATION_JSON', 'false').lower() == 'true'
+
 
 class ProclaimClient:
     """Client for Proclaim API and database"""
@@ -485,6 +487,11 @@ class ProclaimYjsService:
             item_id = status.get('status', {}).get('itemId')
             slide_index = status.get('status', {}).get('slideIndex', 0)
             presentation_id = status.get('presentationId')
+
+            if DUMP_PRESENTATION_JSON:
+                presentation = await self.proclaim_client.get_onair_presentation()
+                if presentation:
+                    Path('presentation.json').write_text(json.dumps(presentation, indent=2))
 
             # Check if presentation changed
             if item_id != self.last_item_id:
