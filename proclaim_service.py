@@ -99,8 +99,14 @@ class ProclaimClient:
         url = f"{self.base_url}/onair/statusChanged"
         headers = {'OnAirSessionId': self.session_id}
         r = await self.http_client.get(url, headers=headers, timeout=timeout)
+        # 404 just means that the presentation is off air, so return empty status instead of raising
+        if r.status_code == 404:
+            logging.info("Presentation is currently off air")
+            return {}
         r.raise_for_status()
-        return r.json()
+        status = r.json()
+        logger.debug(f"Proclaim status: {status}")
+        return status
 
     def get_service_item(self, item_id: str) -> Optional[Dict[str, Any]]:
         """Get a service item by its ID from the Proclaim database."""
