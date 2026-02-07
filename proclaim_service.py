@@ -72,6 +72,7 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://localhost:52195')
 YSWEET_URL = os.getenv('YSWEET_URL', 'http://dev8.kenarnold.org')
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
+POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
 
 DUMP_PRESENTATION_JSON = os.getenv('DUMP_PRESENTATION_JSON', 'false').lower() == 'true'
 
@@ -476,14 +477,14 @@ class ProclaimYjsService:
         self.last_slide_index = slide_index
         return True
 
-    async def poll_once(self):
-        """Poll Proclaim once and update state if changed"""
+    async def poll_once(self) -> bool:
+        """Poll Proclaim once and update state if changed. Returns True if on air."""
         try:
             # Get current status
             status = await self.proclaim_client.get_status()
             if not status:
-                logger.warning("No status returned from Proclaim")
-                return
+                # off air.
+                return False
 
             item_id = status.get('status', {}).get('itemId')
             slide_index = status.get('status', {}).get('slideIndex', 0)
@@ -498,7 +499,7 @@ class ProclaimYjsService:
             if item_id != self.last_item_id:
                 logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
                 self._handle_item_change(item_id, slide_index, presentation_id)
-                return
+                return True
 
             # Check if slide changed
             if slide_index != self.last_slide_index:
@@ -506,17 +507,21 @@ class ProclaimYjsService:
                 self.update_status_in_yjs(item_id, slide_index)
                 self.last_slide_index = slide_index
 
+            return True
+
         except httpx.HTTPError as e:
             logger.error(f"Error polling Proclaim: {e}")
+            return True
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
+            return True
 
     async def run(self):
         """Main service loop"""
         logger.info(f"Starting Proclaim service for doc: {self.doc_id}")
         logger.info(f"Proclaim URL: {self.proclaim_client.base_url}")
         logger.info(f"Y-Sweet URL: {self.ysweet_url}")
-        logger.info(f"Poll interval: {POLL_INTERVAL}s")
+        logger.info(f"Poll interval: {POLL_INTERVAL}s (on air), {POLL_INTERVAL_OFF_AIR}s (off air)")
 
         try:
             # Get Y-Sweet token and build WebSocket URL
@@ -550,8 +555,9 @@ class ProclaimYjsService:
                         logger.info("Date changed, exiting for restart with new document")
                         return
 
-                    await self.poll_once()
-                    await anyio.sleep(POLL_INTERVAL)
+                    is_on_air = await self.poll_once()
+                    interval = POLL_INTERVAL if is_on_air else POLL_INTERVAL_OFF_AIR
+                    await anyio.sleep(interval)
                 except Exception as e:
                     logger.error(f"Error in polling loop: {e}", exc_info=True)
                     await anyio.sleep(POLL_INTERVAL)
