@@ -57,6 +57,7 @@ from pycrdt import Doc, Map, Array
 from httpx_ws import aconnect_ws
 from pycrdt import Provider
 from pycrdt.websocket.websocket import HttpxWebsocket
+from dataclasses import dataclass
 
 # Configure logging (default level, can be overridden by --debug flag)
 logging.basicConfig(
@@ -75,6 +76,16 @@ POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
 
 DUMP_PRESENTATION_JSON = os.getenv('DUMP_PRESENTATION_JSON', 'false').lower() == 'true'
+
+
+
+@dataclass
+class ServiceItemWithSlides:
+    itemId: str
+    title: str
+    slides: List[str]
+    itemKind: str
+
 
 
 class ProclaimClient:
@@ -316,7 +327,7 @@ class ProclaimClient:
 
         return slides
 
-    def parse_item_translation(self, item_id: str, translation_screen_idx: int) -> Optional[Dict[str, Any]]:
+    def parse_item_translation(self, item_id: str, translation_screen_idx: int) -> Optional[ServiceItemWithSlides]:
         """Extract translated slides for any item type."""
         service_item = self.get_service_item(item_id.replace('-', ''))
         if not service_item:
@@ -331,12 +342,12 @@ class ProclaimClient:
             # Check if this is a skipped item type - show as blank instead
             if item_kind in ["ImageSlideshow"] or item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
                 logger.info(f"Showing blank item: {item_title}")
-                return {
-                    'itemId': item_id,
-                    'title': item_title,
-                    'slides': [''],
-                    'itemKind': item_kind,
-                }
+                return ServiceItemWithSlides(
+                    itemId=item_id,
+                    title=item_title,
+                    slides=[''],
+                    itemKind=item_kind,
+                )
 
             # All item types use the same translation field pattern
             # Note: Using -1 offset to match validate_proclaim.py
@@ -363,12 +374,12 @@ class ProclaimClient:
                 # Content and BiblePassage: just split into slides
                 slides = self.split_into_slides(translation_text)
 
-            return {
-                'itemId': item_id,
-                'title': item_title,
-                'slides': slides,
-                'itemKind': item_kind,
-            }
+            return ServiceItemWithSlides(
+                itemId=item_id,
+                title=item_title,
+                slides=slides,
+                itemKind=item_kind,
+            )
         except Exception as e:
             logger.error(f"Error parsing translation for {item_id}: {e}")
             return None
@@ -398,6 +409,7 @@ class ProclaimYjsService:
         # State tracking
         self.last_item_id = None
         self.last_slide_index = None
+        self.current_item_slides: Optional[ServiceItemWithSlides] = None
 
     @staticmethod
     def _get_date_based_doc_id() -> str:
@@ -429,21 +441,30 @@ class ProclaimYjsService:
             return response.json()
 
 
-    def update_presentation_in_yjs(self, presentation_data: Dict[str, Any]):
+    def update_presentation_in_yjs(self, presentation_data: ServiceItemWithSlides):
         """Store full presentation data in Yjs"""
-        item_id = presentation_data['itemId']
+        item_id = presentation_data.itemId
 
         with self.ydoc.transaction():
             self.presentations_map[item_id] = {
-                'title': presentation_data['title'],
+                'title': presentation_data.title,
                 'itemId': item_id,
-                'slides': presentation_data['slides']
+                'slides': presentation_data.slides
             }
 
-        logger.info(f"Stored presentation {item_id} ({presentation_data['title']}) with {len(presentation_data['slides'])} slides")
+        logger.info(f"Stored presentation {item_id} ({presentation_data.title}) with {len(presentation_data.slides)} slides")
 
     def update_status_in_yjs(self, item_id: str, slide_index: int):
         """Update current status in Yjs"""
+        # Clip slide index to valid range
+        if self.current_item_slides:
+            max_index = len(self.current_item_slides.slides) - 1
+            if slide_index > max_index:
+                logger.warning(f"Slide index {slide_index} out of range for item {item_id}, clipping to {max_index}")
+                slide_index = max_index
+            if slide_index < 0:
+                logger.warning(f"Slide index {slide_index} less than 0 for item {item_id}, clipping to 0")
+                slide_index = 0
         with self.ydoc.transaction():
             self.status_map['itemId'] = item_id
             self.status_map['slideIndex'] = slide_index
@@ -467,12 +488,13 @@ class ProclaimYjsService:
             logger.warning(f"No translation screen found in presentation {presentation_id}")
             return False
 
-        item_data = self.proclaim_client.parse_item_translation(item_id, translation_screen_idx)
-        if not item_data:
+        item_with_slides = self.proclaim_client.parse_item_translation(item_id, translation_screen_idx)
+        if not item_with_slides:
             return False
 
-        self.update_presentation_in_yjs(item_data)
+        self.update_presentation_in_yjs(item_with_slides)
         self.update_status_in_yjs(item_id, slide_index)
+        self.current_item_slides = item_with_slides
         self.last_item_id = item_id
         self.last_slide_index = slide_index
         return True
@@ -495,7 +517,7 @@ class ProclaimYjsService:
                 if presentation:
                     Path('presentation.json').write_text(json.dumps(presentation, indent=2))
 
-            # Check if presentation changed
+            # Check if item changed
             if item_id != self.last_item_id:
                 logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
                 self._handle_item_change(item_id, slide_index, presentation_id)
