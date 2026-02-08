@@ -441,7 +441,7 @@ class ProclaimYjsService:
             return response.json()
 
 
-    def update_presentation_in_yjs(self, presentation_data: ServiceItemWithSlides):
+    def update_presentation_item_in_yjs(self, presentation_data: ServiceItemWithSlides):
         """Store full presentation data in Yjs"""
         item_id = presentation_data.itemId
 
@@ -452,7 +452,7 @@ class ProclaimYjsService:
                 'slides': presentation_data.slides
             }
 
-        logger.info(f"Stored presentation {item_id} ({presentation_data.title}) with {len(presentation_data.slides)} slides")
+        logger.info(f"Stored service item {item_id} ({presentation_data.title}) with {len(presentation_data.slides)} slides")
 
     def update_status_in_yjs(self, item_id: str, slide_index: int):
         """Update current status in Yjs"""
@@ -492,7 +492,7 @@ class ProclaimYjsService:
         if not item_with_slides:
             return False
 
-        self.update_presentation_in_yjs(item_with_slides)
+        self.update_presentation_item_in_yjs(item_with_slides)
         self.update_status_in_yjs(item_id, slide_index)
         self.current_item_slides = item_with_slides
         self.last_item_id = item_id
