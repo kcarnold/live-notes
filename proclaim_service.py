@@ -70,7 +70,7 @@ logger = logging.getLogger('proclaim-service')
 logging.getLogger('httpx').setLevel(logging.WARNING)
 
 # Configuration
-PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://localhost:52195')
+PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://127.0.0.1:52195')
 YSWEET_URL = os.getenv('YSWEET_URL', 'http://dev8.kenarnold.org')
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
