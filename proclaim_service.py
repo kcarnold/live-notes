@@ -533,10 +533,10 @@ class ProclaimYjsService:
 
         except httpx.HTTPError as e:
             logger.error(f"Error polling Proclaim: {e}")
-            return True
+            return False
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
-            return True
+            return False
 
     async def run(self):
         """Main service loop"""
@@ -552,14 +552,6 @@ class ProclaimYjsService:
             logger.info(f"Connecting to Y-Sweet: {ws_url}")
         except Exception as e:
             logger.error(f"Failed to get Y-Sweet token: {e}")
-            return
-        
-        try:
-            # Connect to Proclaim
-            await self.proclaim_client.get_session_id()
-            logger.info(f"Connected to Proclaim session: {self.proclaim_client.session_id}")
-        except Exception as e:
-            logger.error(f"Failed to connect to Proclaim: {e}")
             return
 
         # Connect to Y-Sweet with WebsocketProvider
