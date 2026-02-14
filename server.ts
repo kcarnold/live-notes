@@ -9,7 +9,7 @@ import pLimit from 'p-limit';
 import { DocumentManager } from '@y-sweet/sdk'
 import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
-import { PostHog } from 'posthog-node';
+import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
 import { translateBlock, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
@@ -25,7 +25,10 @@ function getEnvOrCrash(name: string): string {
 
 const phClient = new PostHog(
   getEnvOrCrash('VITE_PUBLIC_POSTHOG_KEY'),
-  { host: getEnvOrCrash('VITE_PUBLIC_POSTHOG_HOST') }
+  {
+    host: getEnvOrCrash('VITE_PUBLIC_POSTHOG_HOST'),
+    enableExceptionAutocapture: true,
+  }
 );
 
 const geminiProvider = new GeminiProvider({
@@ -58,7 +61,7 @@ app.use(express.static("dist"));
 app.use(express.json());
 app.use('/audio-cache', express.static(AUDIO_CACHE_DIR));
 
-
+setupExpressErrorHandler(phClient, app);
 
 
 // Y-Sweet
