@@ -493,8 +493,8 @@ class ProclaimYjsService:
             return False
 
         self.update_presentation_item_in_yjs(item_with_slides)
-        self.update_status_in_yjs(item_id, slide_index)
         self.current_item_slides = item_with_slides
+        self.update_status_in_yjs(item_id, slide_index)
         self.last_item_id = item_id
         self.last_slide_index = slide_index
         return True
