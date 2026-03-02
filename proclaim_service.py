@@ -7,13 +7,44 @@ This service:
 2. Parses presentation content from the Proclaim database
 3. Updates Yjs shared state with presentation data (via Y-Sweet)
 4. Watches for changes and updates clients in real-time
+
+Protocol documenation:
+
+- Proclaim API: Faithlife provides a local API for Proclaim on port 52195. Key endpoints:
+
+    - GET /onair/session: Returns a session ID for authentication
+    - GET /presentations/onair: Returns current on-air presentation data (requires OnAirSessionId header)
+        - The most important thing this gives us is the `serviceItems` array, which looks like:
+    {
+      "id": "39510e4d-b345-4f63-abf1-8c8e6bdff9b3",
+      "title": "Call to Worship",
+      "notes": "",
+      "kind": "Content",
+      "slides": [
+        { 
+          "localRevision": 639060998184592130,
+          "index": 0
+        },
+        {
+          "localRevision": 639060998184592130,
+          "index": 1
+        },
+        {
+          "localRevision": 639060998184592130,
+          "index": 2
+        }
+      ]
+    },
+    
+    - GET /onair/statusChanged: Returns current status of on-air presentation (requires OnAirSessionId header)
+    - It seems there's also a /presentations/onair/items/{serviceItemId}/slides/{slideIndex}/image endpoint that returns the image for a given slide, but I haven't tested it, and we don't need to use it since we can get all content from the database.
 """
 
 import os
-import sys
 import json
 import logging
 import signal
+import argparse
 import anyio
 from typing import Optional, Dict, Any, List
 from pathlib import Path
@@ -26,8 +57,9 @@ from pycrdt import Doc, Map, Array
 from httpx_ws import aconnect_ws
 from pycrdt import Provider
 from pycrdt.websocket.websocket import HttpxWebsocket
+from dataclasses import dataclass
 
-# Configure logging
+# Configure logging (default level, can be overridden by --debug flag)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -38,9 +70,22 @@ logger = logging.getLogger('proclaim-service')
 logging.getLogger('httpx').setLevel(logging.WARNING)
 
 # Configuration
-PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://localhost:52195')
+PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://127.0.0.1:52195')
 YSWEET_URL = os.getenv('YSWEET_URL', 'http://dev8.kenarnold.org')
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
+POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
+
+DUMP_PRESENTATION_JSON = os.getenv('DUMP_PRESENTATION_JSON', 'false').lower() == 'true'
+
+
+
+@dataclass
+class ServiceItemWithSlides:
+    itemId: str
+    title: str
+    slides: List[str]
+    itemKind: str
+
 
 
 class ProclaimClient:
@@ -82,8 +127,7 @@ class ProclaimClient:
 
     async def get_onair_presentation(self, timeout: float = 5.0) -> Dict[str, Any]:
         """Fetch /presentations/onair with the OnAirSessionId header."""
-        if not self.session_id:
-            await self.get_session_id()
+        await self.get_session_id()
         assert self.session_id is not None
 
         url = f"{self.base_url}/presentations/onair"
@@ -94,15 +138,20 @@ class ProclaimClient:
 
     async def get_status(self, timeout: float = 5.0) -> Dict[str, Any]:
         """Fetch /onair/statusChanged with the OnAirSessionId header."""
-        if not self.session_id:
-            await self.get_session_id()
+        await self.get_session_id()
         assert self.session_id is not None
 
         url = f"{self.base_url}/onair/statusChanged"
         headers = {'OnAirSessionId': self.session_id}
         r = await self.http_client.get(url, headers=headers, timeout=timeout)
+        # 404 just means that the presentation is off air, so return empty status instead of raising
+        if r.status_code == 404:
+            logging.info("Presentation is currently off air")
+            return {}
         r.raise_for_status()
-        return r.json()
+        status = r.json()
+        logger.debug(f"Proclaim status: {status}")
+        return status
 
     def get_service_item(self, item_id: str) -> Optional[Dict[str, Any]]:
         """Get a service item by its ID from the Proclaim database."""
@@ -174,6 +223,7 @@ class ProclaimClient:
         for line in text.strip().split('\n'):
             line_stripped = line.strip()
             # Blank lines are slide breaks *only if* not using explicit --
+            # ... and only sometimes. If it all fits on a slide, Proclaim won't actually break it into multiple slides.
             is_slide_break = (line_stripped == '' and not explicitly_delimited) or (line_stripped == '--')
             if is_slide_break:
                 sections.append('')
@@ -277,7 +327,7 @@ class ProclaimClient:
 
         return slides
 
-    def parse_item_translation(self, item_id: str, translation_screen_idx: int) -> Optional[Dict[str, Any]]:
+    def parse_item_translation(self, item_id: str, translation_screen_idx: int) -> Optional[ServiceItemWithSlides]:
         """Extract translated slides for any item type."""
         service_item = self.get_service_item(item_id.replace('-', ''))
         if not service_item:
@@ -292,12 +342,12 @@ class ProclaimClient:
             # Check if this is a skipped item type - show as blank instead
             if item_kind in ["ImageSlideshow"] or item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
                 logger.info(f"Showing blank item: {item_title}")
-                return {
-                    'itemId': item_id,
-                    'title': item_title,
-                    'slides': [''],
-                    'itemKind': item_kind,
-                }
+                return ServiceItemWithSlides(
+                    itemId=item_id,
+                    title=item_title,
+                    slides=[''],
+                    itemKind=item_kind,
+                )
 
             # All item types use the same translation field pattern
             # Note: Using -1 offset to match validate_proclaim.py
@@ -324,12 +374,12 @@ class ProclaimClient:
                 # Content and BiblePassage: just split into slides
                 slides = self.split_into_slides(translation_text)
 
-            return {
-                'itemId': item_id,
-                'title': item_title,
-                'slides': slides,
-                'itemKind': item_kind,
-            }
+            return ServiceItemWithSlides(
+                itemId=item_id,
+                title=item_title,
+                slides=slides,
+                itemKind=item_kind,
+            )
         except Exception as e:
             logger.error(f"Error parsing translation for {item_id}: {e}")
             return None
@@ -343,8 +393,8 @@ class ProclaimYjsService:
         self.ysweet_url = ysweet_url
 
         # If no doc_id provided, use date-based doc_id
-        self.use_date_based_doc_id = doc_id is None
-        if self.use_date_based_doc_id:
+        if doc_id is None:
+            self.use_date_based_doc_id = True
             self.doc_id = self._get_date_based_doc_id()
             self.current_doc_date = date.today()
         else:
@@ -359,6 +409,7 @@ class ProclaimYjsService:
         # State tracking
         self.last_item_id = None
         self.last_slide_index = None
+        self.current_item_slides: Optional[ServiceItemWithSlides] = None
 
     @staticmethod
     def _get_date_based_doc_id() -> str:
@@ -390,21 +441,30 @@ class ProclaimYjsService:
             return response.json()
 
 
-    def update_presentation_in_yjs(self, presentation_data: Dict[str, Any]):
+    def update_presentation_item_in_yjs(self, presentation_data: ServiceItemWithSlides):
         """Store full presentation data in Yjs"""
-        item_id = presentation_data['itemId']
+        item_id = presentation_data.itemId
 
         with self.ydoc.transaction():
             self.presentations_map[item_id] = {
-                'title': presentation_data['title'],
+                'title': presentation_data.title,
                 'itemId': item_id,
-                'slides': presentation_data['slides']
+                'slides': presentation_data.slides
             }
 
-        logger.info(f"Stored presentation {item_id} ({presentation_data['title']}) with {len(presentation_data['slides'])} slides")
+        logger.info(f"Stored service item {item_id} ({presentation_data.title}) with {len(presentation_data.slides)} slides")
 
     def update_status_in_yjs(self, item_id: str, slide_index: int):
         """Update current status in Yjs"""
+        # Clip slide index to valid range
+        if self.current_item_slides:
+            max_index = len(self.current_item_slides.slides) - 1
+            if slide_index > max_index:
+                logger.warning(f"Slide index {slide_index} out of range for item {item_id}, clipping to {max_index}")
+                slide_index = max_index
+            if slide_index < 0:
+                logger.warning(f"Slide index {slide_index} less than 0 for item {item_id}, clipping to 0")
+                slide_index = 0
         with self.ydoc.transaction():
             self.status_map['itemId'] = item_id
             self.status_map['slideIndex'] = slide_index
@@ -428,34 +488,40 @@ class ProclaimYjsService:
             logger.warning(f"No translation screen found in presentation {presentation_id}")
             return False
 
-        item_data = self.proclaim_client.parse_item_translation(item_id, translation_screen_idx)
-        if not item_data:
+        item_with_slides = self.proclaim_client.parse_item_translation(item_id, translation_screen_idx)
+        if not item_with_slides:
             return False
 
-        self.update_presentation_in_yjs(item_data)
+        self.update_presentation_item_in_yjs(item_with_slides)
+        self.current_item_slides = item_with_slides
         self.update_status_in_yjs(item_id, slide_index)
         self.last_item_id = item_id
         self.last_slide_index = slide_index
         return True
 
-    async def poll_once(self):
-        """Poll Proclaim once and update state if changed"""
+    async def poll_once(self) -> bool:
+        """Poll Proclaim once and update state if changed. Returns True if on air."""
         try:
             # Get current status
             status = await self.proclaim_client.get_status()
             if not status:
-                logger.warning("No status returned from Proclaim")
-                return
+                # off air.
+                return False
 
             item_id = status.get('status', {}).get('itemId')
             slide_index = status.get('status', {}).get('slideIndex', 0)
             presentation_id = status.get('presentationId')
 
-            # Check if presentation changed
+            if DUMP_PRESENTATION_JSON:
+                presentation = await self.proclaim_client.get_onair_presentation()
+                if presentation:
+                    Path('presentation.json').write_text(json.dumps(presentation, indent=2))
+
+            # Check if item changed
             if item_id != self.last_item_id:
                 logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
                 self._handle_item_change(item_id, slide_index, presentation_id)
-                return
+                return True
 
             # Check if slide changed
             if slide_index != self.last_slide_index:
@@ -463,17 +529,21 @@ class ProclaimYjsService:
                 self.update_status_in_yjs(item_id, slide_index)
                 self.last_slide_index = slide_index
 
+            return True
+
         except httpx.HTTPError as e:
             logger.error(f"Error polling Proclaim: {e}")
+            return False
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
+            return False
 
     async def run(self):
         """Main service loop"""
         logger.info(f"Starting Proclaim service for doc: {self.doc_id}")
         logger.info(f"Proclaim URL: {self.proclaim_client.base_url}")
         logger.info(f"Y-Sweet URL: {self.ysweet_url}")
-        logger.info(f"Poll interval: {POLL_INTERVAL}s")
+        logger.info(f"Poll interval: {POLL_INTERVAL}s (on air), {POLL_INTERVAL_OFF_AIR}s (off air)")
 
         try:
             # Get Y-Sweet token and build WebSocket URL
@@ -482,14 +552,6 @@ class ProclaimYjsService:
             logger.info(f"Connecting to Y-Sweet: {ws_url}")
         except Exception as e:
             logger.error(f"Failed to get Y-Sweet token: {e}")
-            return
-        
-        try:
-            # Connect to Proclaim
-            await self.proclaim_client.get_session_id()
-            logger.info(f"Connected to Proclaim session: {self.proclaim_client.session_id}")
-        except Exception as e:
-            logger.error(f"Failed to connect to Proclaim: {e}")
             return
 
         # Connect to Y-Sweet with WebsocketProvider
@@ -507,8 +569,9 @@ class ProclaimYjsService:
                         logger.info("Date changed, exiting for restart with new document")
                         return
 
-                    await self.poll_once()
-                    await anyio.sleep(POLL_INTERVAL)
+                    is_on_air = await self.poll_once()
+                    interval = POLL_INTERVAL if is_on_air else POLL_INTERVAL_OFF_AIR
+                    await anyio.sleep(interval)
                 except Exception as e:
                     logger.error(f"Error in polling loop: {e}", exc_info=True)
                     await anyio.sleep(POLL_INTERVAL)
@@ -523,9 +586,20 @@ async def signal_handler(cancel_scope: anyio.CancelScope):
 
 async def main():
     """Entry point with signal handling"""
-    # Get doc ID from command line or environment
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Proclaim Service - Syncs Proclaim to Yjs')
+    parser.add_argument('doc_id', nargs='?', help='Document ID (default: date-based doc-YYYY-MM-DD)')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    args = parser.parse_args()
+
+    # Set logging level
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
+
+    # Get doc ID from arguments or environment
     # If neither provided, service will use date-based doc_id (default)
-    doc_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv('PROCLAIM_DOC_ID')
+    doc_id = args.doc_id or os.getenv('PROCLAIM_DOC_ID')
 
     service = ProclaimYjsService(YSWEET_URL, doc_id)
 

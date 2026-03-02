@@ -290,24 +290,24 @@ function VideoComponent({ isEditor }: { isEditor: boolean }) {
 // Layouts: each is an array of arrays of component keys
 const availableLayouts = [
   {
-    key: 'translation-only',
-    label: 'One Translation',
-    layout: [
-      ["video", "translatedText"]
-    ]
-  },
-  {
-    key: 'translation-only-2',
-    label: 'One Translation, Slide',
+    key: 'slide-and-translation',
+    label: 'Slide and Translation',
     layout: [
       ["currentSlide", "translatedText"]
     ]
   },
   {
-    key: 'bilingual',
+    key: 'slide-and-bilingual',
     label: 'Bilingual View',
     layout: [
       ["currentSlide", "bilingual"]
+    ]
+  },
+  {
+    key: 'video-and-translation',
+    label: 'Translation (old)',
+    layout: [
+      ["video", "translatedText"]
     ]
   },
   {

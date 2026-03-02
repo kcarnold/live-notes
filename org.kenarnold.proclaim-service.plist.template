@@ -20,7 +20,7 @@
     <key>ThrottleInterval</key>
     <integer>5</integer>
 
-    <!-- Environment variables from .env file -->
+    <!-- Environment variables (otherwise provided via .env file) -->
     <key>EnvironmentVariables</key>
     <dict>
         <!-- Set PATH to include the venv if using one, or system paths -->
@@ -31,9 +31,9 @@
         <!-- <key>YSWEET_URL</key>
         <string>http://dev8.kenarnold.org</string> -->
 
-        <!-- Optional: Set PROCLAIM_BASE_URL if on different machine -->
-        <!-- <key>PROCLAIM_BASE_URL</key>
-        <string>http://127.0.0.1:52195</string> -->
+        <!-- Set PROCLAIM_BASE_URL if on different machine -->
+        <key>PROCLAIM_BASE_URL</key>
+        <string>http://127.0.0.1:52195</string>
     </dict>
 
     <!-- Working directory for relative paths -->
