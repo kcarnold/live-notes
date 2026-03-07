@@ -29,7 +29,7 @@
 
         <!-- Optional: Set YSWEET_URL if different from default -->
         <!-- <key>YSWEET_URL</key>
-        <string>http://dev8.kenarnold.org</string> -->
+        <string>https://dev8.kenarnold.org</string> -->
 
         <!-- Set PROCLAIM_BASE_URL if on different machine -->
         <key>PROCLAIM_BASE_URL</key>
