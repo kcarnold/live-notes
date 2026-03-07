@@ -31,7 +31,13 @@ function generateDateRange(startDate: string): string[] {
   const start = new Date(startDate);
   const today = new Date();
 
-  for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+  // Advance start to the first Sunday on or after startDate
+  const d = new Date(start);
+  if (d.getDay() !== 0) {
+    d.setDate(d.getDate() + (7 - d.getDay()));
+  }
+
+  for (; d <= today; d.setDate(d.getDate() + 7)) {
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -126,79 +132,12 @@ async function dumpDocument(docId: string): Promise<any> {
   console.log(`Fetching document: ${docId}...`);
 
   try {
-    // Get a client token for the document
-    const clientToken = await documentManager.getOrCreateDocAndToken(docId, {
-      authorization: 'read-only'
-    });
+    // Fetch document as a Yjs update (no WebSocket needed)
+    const update = await documentManager.getDocAsUpdate(docId);
 
-    // Create a Y.Doc and connect to Y-Sweet using WebSocket sync
     const ydoc = new Y.Doc();
-    const { WebSocket } = await import('ws');
-    const ws = new WebSocket(clientToken.url);
-
-    // Import y-protocols sync utilities
-    const syncProtocol = await import('y-protocols/sync');
-    const encoding = await import('lib0/encoding');
-    const decoding = await import('lib0/decoding');
-
-    let synced = false;
-
-    // Set up message handler for Y.js sync protocol
-    ws.on('message', (data: Buffer) => {
-      const uint8Data = new Uint8Array(data);
-      const decoder = decoding.createDecoder(uint8Data);
-      const encoder = encoding.createEncoder();
-
-      // Read sync message
-      syncProtocol.readSyncMessage(decoder, encoder, ydoc, null);
-
-      // Send response if needed
-      if (encoding.length(encoder) > 0) {
-        ws.send(encoding.toUint8Array(encoder));
-      }
-
-      synced = true;
-    });
-
-    // Wait for connection and send initial sync message
-    await new Promise<void>((resolve, reject) => {
-      ws.on('open', () => {
-        console.log(`Connected to ${docId}`);
-
-        // Send initial sync step 1 (request state)
-        const encoder = encoding.createEncoder();
-        syncProtocol.writeSyncStep1(encoder, ydoc);
-        ws.send(encoding.toUint8Array(encoder));
-
-        resolve();
-      });
-
-      ws.on('error', (err) => {
-        console.error(`Connection error for ${docId}:`, err);
-        reject(err);
-      });
-
-      // Timeout after 10 seconds
-      setTimeout(() => reject(new Error('Connection timeout')), 10000);
-    });
-
-    // Wait for sync to complete (give it some time to receive data)
-    await new Promise<void>((resolve) => {
-      const checkSync = setInterval(() => {
-        if (synced) {
-          clearInterval(checkSync);
-          console.log(`Synced ${docId}`);
-          resolve();
-        }
-      }, 100);
-
-      // Timeout after 5 seconds
-      setTimeout(() => {
-        clearInterval(checkSync);
-        console.log(`Sync ${synced ? 'completed' : 'timed out'} for ${docId}, proceeding...`);
-        resolve();
-      }, 5000);
-    });
+    Y.applyUpdate(ydoc, update);
+    console.log(`Loaded ${docId}`);
 
     // Extract all data structures
     const data: any = {
@@ -287,9 +226,6 @@ async function dumpDocument(docId: string): Promise<any> {
       data.proclaimStatus = serializeMap(proclaimStatus);
     }
 
-    // Clean up
-    ws.close();
-
     // Check if document has any actual data
     const hasData = Object.keys(data).length > 2; // More than docId and timestamp
 
@@ -312,12 +248,17 @@ async function main() {
   const EARLIEST_DATE = '2025-11-30';
   const dates = generateDateRange(EARLIEST_DATE);
 
-  console.log(`Dumping ${dates.length} documents from ${EARLIEST_DATE} to today...`);
+  // Early documents were just `doc1`, `doc2`, up to `doc15`, then switched to date-based naming. Handle both patterns.
+  const docIds = [
+    ...Array.from({ length: 15 }, (_, i) => `doc${i + 1}`),
+    ...dates.map(date => `doc-${date}`)
+  ];
+
+  console.log(`Dumping ${docIds.length} documents from ${EARLIEST_DATE} to today...`);
 
   // Dump each document
   const results: any[] = [];
-  for (const date of dates) {
-    const docId = `doc-${date}`;
+  for (const docId of docIds) {
     const data = await dumpDocument(docId);
 
     if (data) {
