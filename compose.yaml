@@ -1,4 +1,13 @@
 services:
+  y-sweet:
+    image: node:24-slim
+    command: ["npx", "y-sweet@latest", "serve", "/data", "--url", "https://dev7.kenarnold.org"]
+    ports:
+      - "5007:8080"
+    volumes:
+      - ysweet-data:/data
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -15,14 +24,16 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=5008
+      - YSWEET_CONNECTION_STRING=ys://y-sweet:8080
     env_file: "./.env"
+    depends_on:
+      - y-sweet
     restart: unless-stopped
     volumes:
       - ./audio-cache:/usr/src/app/audio-cache
-    # For development, you might want to uncomment these volumes
-    # volumes:
-    #   - ./:/usr/src/app
-    #   - /usr/src/app/node_modules
+
+volumes:
+  ysweet-data:
 
 secrets:
   posthog_cli_token:
