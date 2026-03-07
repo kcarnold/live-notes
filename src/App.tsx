@@ -64,181 +64,6 @@ function TranscriptViewer({ editable = false }: { editable?: boolean }) {
   );
 }
 
-// Layout components
-function TranscriptComponent({ editable }: { editable: boolean }) {
-  const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
-  
-  return (
-    <div
-      className={
-        cardClass +
-        " flex-1/2 min-h-0 bg-gray-50/80 dark:bg-gray-900/60 text-black dark:text-gray-200"
-      }
-    >
-      {editable ? (
-        <SpeechTranscriber />
-      ) : (
-        <h2 className="font-semibold text-xs text-gray-600 dark:text-gray-300 leading-tight">
-          Transcript
-        </h2>
-      )}
-      <TranscriptViewer editable={editable} />
-    </div>
-  );
-}
-
-function SourceTextComponent() {
-  const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
-  const ydoc = useYDoc();
-  
-  return (
-    <div
-      className={
-        cardClass +
-        " flex-1/2 overflow-auto bg-white/70 dark:bg-gray-900/70"
-      }
-    >
-      <SourceTextTranslationManager ydoc={ydoc} />
-    </div>
-  );
-}
-
-function TranslatedTextComponent({ language, onLanguageChange }: { language: string; onLanguageChange: (newLang: string) => void }) {
-  const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
-  const [fontSize, setFontSize] = useAtom(fontSizeAtom);
-  
-  return (
-    <div
-      className={
-        cardClass +
-        " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"
-      }
-    >
-      <TranslatedTextViewerContainer
-        language={language}
-        fontSize={fontSize}
-        headerControls={
-          <>
-            <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">
-              Translation
-            </h2>
-            <select
-              className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
-              value={language}
-              onChange={(e) => onLanguageChange(e.target.value)}
-            >
-              {languages.map((lang) => (
-                <option key={lang} value={lang}>
-                  {lang}
-                </option>
-              ))}
-            </select>
-            {/* font size controls */}
-            <div className="flex-1" />
-              <button
-                type="button"
-                aria-label="Decrease font size"
-                className=""
-                onClick={() => {
-                  const currentSize = fontSize || 16;
-                  const newSize = Math.max(10, currentSize - 2);
-                  console.log('Setting font size to', newSize);
-                  setFontSize(newSize);
-                }}
-                >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                aria-label="Increase font size"
-                onClick={() => {
-                  const currentSize = fontSize || 16;
-                  const newSize = Math.min(32, currentSize + 2);
-                  console.log('Setting font size to', newSize);
-                  setFontSize(newSize);
-                }}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-              </button>
-          </>
-        }
-      />
-    </div>
-  );
-}
-
-function BilingualBlockComponent({ language, onLanguageChange }: { language: string; onLanguageChange: (newLang: string) => void }) {
-  const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
-  const [fontSize, setFontSize] = useAtom(fontSizeAtom);
-
-  return (
-    <div
-      className={
-        cardClass +
-        " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"
-      }
-    >
-      <BilingualBlockViewerContainer
-        language={language}
-        fontSize={fontSize}
-        headerControls={
-          <>
-            <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">
-              Bilingual
-            </h2>
-            <select
-              className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
-              value={language}
-              onChange={(e) => onLanguageChange(e.target.value)}
-            >
-              {languages.map((lang) => (
-                <option key={lang} value={lang}>
-                  {lang}
-                </option>
-              ))}
-            </select>
-            {/* font size controls */}
-            <div className="flex-1" />
-              <button
-                type="button"
-                aria-label="Decrease font size"
-                className=""
-                onClick={() => {
-                  const currentSize = fontSize || 16;
-                  const newSize = Math.max(10, currentSize - 2);
-                  console.log('Setting font size to', newSize);
-                  setFontSize(newSize);
-                }}
-                >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                aria-label="Increase font size"
-                onClick={() => {
-                  const currentSize = fontSize || 16;
-                  const newSize = Math.min(32, currentSize + 2);
-                  console.log('Setting font size to', newSize);
-                  setFontSize(newSize);
-                }}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-              </button>
-          </>
-        }
-      />
-    </div>
-  );
-}
-
 function VideoComponent({ isEditor }: { isEditor: boolean }) {
   const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
   const [peerConnectionDisconnected, setPeerConnectionDisconnected] = useState(true);
@@ -364,13 +189,131 @@ function HomePage() {
   );
 }
 
+function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace: (newName: string) => void }) {
+  const isEditor = useAtomValue(isEditorAtom);
+  const [fontSize, setFontSize] = useAtom(fontSizeAtom);
+  const ydoc = useYDoc();
+
+  const onLanguageChange = (prefix: string) => (newLang: string) => {
+    onReplace(`${prefix}-${newLang}`);
+  };
+
+  const fontSizeControls = (
+    <>
+      <div className="flex-1" />
+      <button
+        type="button"
+        aria-label="Decrease font size"
+        onClick={() => setFontSize(Math.max(10, (fontSize || 16) - 2))}
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        aria-label="Increase font size"
+        onClick={() => setFontSize(Math.min(32, (fontSize || 16) + 2))}
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+        </svg>
+      </button>
+    </>
+  );
+
+  const languageSelector = (prefix: string, language: string) => (
+    <select
+      className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
+      value={language}
+      onChange={(e) => onLanguageChange(prefix)(e.target.value)}
+    >
+      {languages.map((lang) => (
+        <option key={lang} value={lang}>{lang}</option>
+      ))}
+    </select>
+  );
+
+  const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
+
+  if (componentStr === 'transcript') {
+    return (
+      <div className={cardClass + " flex-1/2 min-h-0 bg-gray-50/80 dark:bg-gray-900/60 text-black dark:text-gray-200"}>
+        {isEditor ? <SpeechTranscriber /> : (
+          <h2 className="font-semibold text-xs text-gray-600 dark:text-gray-300 leading-tight">Transcript</h2>
+        )}
+        <TranscriptViewer editable={isEditor} />
+      </div>
+    );
+  }
+
+  if (componentStr === 'sourceText') {
+    return (
+      <div className={cardClass + " flex-1/2 overflow-auto bg-white/70 dark:bg-gray-900/70"}>
+        <SourceTextTranslationManager ydoc={ydoc} />
+      </div>
+    );
+  }
+
+  if (componentStr === 'video') {
+    return <VideoComponent isEditor={isEditor} />;
+  }
+
+  if (componentStr === 'currentSlide') {
+    return <CurrentSlideViewerContainer />;
+  }
+
+  if (componentStr.startsWith('translatedText-')) {
+    const language = componentStr.substring('translatedText-'.length);
+    const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
+    return (
+      <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"}>
+        <TranslatedTextViewerContainer
+          language={validLanguage}
+          fontSize={fontSize}
+          headerControls={
+            <>
+              <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">Translation</h2>
+              {languageSelector('translatedText', validLanguage)}
+              {fontSizeControls}
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (componentStr.startsWith('bilingual-')) {
+    const language = componentStr.substring('bilingual-'.length);
+    const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
+    return (
+      <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"}>
+        <BilingualBlockViewerContainer
+          language={validLanguage}
+          fontSize={fontSize}
+          headerControls={
+            <>
+              <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">Bilingual</h2>
+              {languageSelector('bilingual', validLanguage)}
+              {fontSizeControls}
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className={cardClass + " flex-1/2 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 items-center justify-center"}>
+      <p className="text-sm">Unknown component: <code>{componentStr}</code></p>
+      <a href="/" className="text-xs underline hover:text-red-900 dark:hover:text-red-100">Go home</a>
+    </div>
+  );
+}
+
 // Layout page: render the selected layout from URL
 function LayoutPage({ layout: initialLayout }: { layout: string }) {
   const connectionStatus = useConnectionStatus();
-  const ydoc = useYDoc();
-  // @ts-expect-error ts doesn't like patching stuff onto window
-  window.ydoc = ydoc; // For debugging purposes
-  const isEditor = useAtomValue(isEditorAtom);
 
   // Track current layout in state so we can update it when URL changes
   const [layout, setLayout] = useState(initialLayout);
@@ -381,111 +324,19 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
     return layoutStr.split("|").map(row => row.split(","));
   }
 
-  // Update URL when a translation component changes its language
-  function updateComponentLanguage(rowIdx: number, colIdx: number, newLanguage: string) {
+  function replaceComponent(rowIdx: number, colIdx: number, newName: string) {
     const parsedLayout = parseLayoutString(layout);
     const newLayout = parsedLayout.map((row, r) =>
-      row.map((component, c) => {
-        if (r === rowIdx && c === colIdx && component.startsWith('translatedText-')) {
-          return `translatedText-${newLanguage}`;
-        }
-        if (r === rowIdx && c === colIdx && component.startsWith('bilingual-')) {
-          return `bilingual-${newLanguage}`;
-        }
-        return component;
-      })
+      row.map((component, c) => (r === rowIdx && c === colIdx) ? newName : component)
     );
     const newLayoutStr = newLayout.map(row => row.join(",")).join("|");
     const currentSearch = window.location.search;
     const currentHash = window.location.hash;
     window.history.replaceState(null, '', `/${newLayoutStr}${currentSearch}${currentHash}`);
-    // Trigger rerender by updating state
     setLayout(newLayoutStr);
   }
 
-  // Function to render a component based on its string identifier
-  const renderComponent = (componentStr: string, key: string, rowIdx: number, colIdx: number) => {
-    return <PostHogErrorBoundary key={key} fallback={<div>Error loading component {componentStr}</div>}>
-      {renderComponentInner(componentStr, key, rowIdx, colIdx)}
-    </PostHogErrorBoundary>;
-  }
-  const renderComponentInner = (componentStr: string, key: string, rowIdx: number, colIdx: number) => {
-    if (componentStr === 'transcript') {
-      return <TranscriptComponent key={key} editable={isEditor} />;
-    }
-    
-    if (componentStr === 'sourceText') {
-      return <SourceTextComponent key={key} />;
-    }
-    
-    if (componentStr === 'video') {
-      return <VideoComponent key={key} isEditor={isEditor} />;
-    }
-
-    if (componentStr === 'currentSlide') {
-      return <CurrentSlideViewerContainer key={key} />;
-    }
-
-    if (componentStr.startsWith('translatedText-')) {
-      const language = componentStr.substring('translatedText-'.length);
-      // Validate language, default to first language if invalid
-      const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
-
-      return (
-        <TranslatedTextComponent
-          key={key}
-          language={validLanguage}
-          onLanguageChange={(newLang) => updateComponentLanguage(rowIdx, colIdx, newLang)}
-        />
-      );
-    }
-
-    if (componentStr.startsWith('bilingual-')) {
-      const language = componentStr.substring('bilingual-'.length);
-      const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
-      return (
-        <BilingualBlockComponent
-          key={key}
-          language={validLanguage}
-          onLanguageChange={(newLang) => updateComponentLanguage(rowIdx, colIdx, newLang)}
-        />
-      );
-    }
-
-    // Invalid component
-    return null;
-  };
-
   const parsedLayout = parseLayoutString(layout);
-
-  // Validate that all components in the layout are valid
-  const isValidComponent = (componentStr: string): boolean => {
-    if (['transcript', 'sourceText', 'video', 'currentSlide'].includes(componentStr)) {
-      return true;
-    }
-
-    if (componentStr.startsWith('translatedText-')) {
-      const language = componentStr.substring('translatedText-'.length);
-      return (languages as readonly string[]).includes(language);
-    }
-
-    if (componentStr.startsWith('bilingual-')) {
-      const language = componentStr.substring('bilingual-'.length);
-      return (languages as readonly string[]).includes(language);
-    }
-
-    return false;
-  };
-
-  const isValidLayout = parsedLayout.length > 0 && parsedLayout.every(
-    (row) => row.every((key) => isValidComponent(key))
-  );
-
-  // If anything is wrong with the layout, redirect to home
-  if (!isValidLayout) {
-    window.location.href = "/";
-    return null;
-  }
 
   // Render layout columns
   const columns = parsedLayout.map((col, i) => {
@@ -499,8 +350,13 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
             : "flex flex-col w-full md:w-1/2 h-1/2 md:h-full gap-2 p-1"
         }
       >
-        {col.map((componentStr, j) => 
-          renderComponent(componentStr, `${componentStr}-${i}-${j}`, i, j)
+        {col.map((componentStr, j) =>
+          <PostHogErrorBoundary key={`${componentStr}-${i}-${j}`} fallback={<div>Error loading component {componentStr}</div>}>
+            <PagePart
+              componentStr={componentStr}
+              onReplace={(newName) => replaceComponent(i, j, newName)}
+            />
+          </PostHogErrorBoundary>
         )}
       </div>
     );
