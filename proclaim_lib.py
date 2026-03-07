@@ -1,0 +1,337 @@
+"""
+Shared library for interacting with Proclaim presentation data.
+
+Provides:
+- Database discovery and access (PresentationManager.db)
+- Rich text XML decoding
+- Slide/section parsing and ordering
+- Translation screen detection
+- Service item parsing
+"""
+
+import json
+import logging
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from lxml import etree
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ServiceItemWithSlides:
+    itemId: str
+    title: str
+    slides: List[str]
+    itemKind: str
+
+
+def find_presentation_db() -> str:
+    """Find the most recently modified Proclaim presentation database file."""
+    if (path := Path.home() / 'Library' / 'Application Support' / 'Proclaim' / 'Data').exists():
+        proclaim_root = path
+    elif (path := Path.home() / 'AppData' / 'Local' / 'Proclaim' / 'Data').exists():
+        proclaim_root = path
+    else:
+        raise FileNotFoundError('Proclaim data directory not found.')
+
+    db_files = list(proclaim_root.glob('*/PresentationManager/PresentationManager.db'))
+    if not db_files:
+        raise FileNotFoundError('No PresentationManager.db files found.')
+
+    return str(max(db_files, key=lambda p: p.stat().st_mtime))
+
+
+def decode_richtext_xml(xml: str) -> str:
+    """
+    Decode the rich text XML from Proclaim into plain text.
+
+    The basic XML format is:
+    <Paragraph Language="en-US" Margin="0,0,0,0">
+        <Run Text="I love You Lord" />
+    </Paragraph>
+    """
+    result = ''
+    root = etree.fromstring('<Song>' + xml + '</Song>', parser=None)
+    for paragraph in root:
+        runs = paragraph.findall('Run')
+        for run in runs:
+            result += run.attrib['Text'] + ' '
+        result += '\n'
+    return result
+
+
+def split_into_slides(text: str) -> List[str]:
+    """Split the text into sections based on blank lines or --."""
+    explicitly_delimited = '--' in text
+    sections = ['']
+    for line in text.strip().split('\n'):
+        line_stripped = line.strip()
+        is_slide_break = (line_stripped == '' and not explicitly_delimited) or (line_stripped == '--')
+        if is_slide_break:
+            sections.append('')
+        else:
+            sections[-1] += line + '\n'
+
+    return [
+        section.strip()
+        for section in sections
+        if section.strip() != ''
+        and not (section.startswith('{Credits}') or section.startswith('{Source}'))
+    ]
+
+
+def split_into_song_sections(text: str) -> Dict[str, List[str]]:
+    """
+    Split the song text into labeled sections.
+    A blank line followed by a section type marks a section:
+    Verse, Chorus, Pre-chorus, Bridge, Tag, Title, Interlude
+    """
+    sections: Dict[str, List[str]] = {}
+    current_section_label = None
+    section_types = {'verse', 'chorus', 'pre-chorus', 'bridge', 'tag', 'title', 'interlude', 'ending'}
+    lines = [line.strip() for line in text.splitlines()]
+
+    for line_orig in lines:
+        line = line_orig.lower()
+        if any(line.startswith(st) for st in section_types):
+            if not any(char.isdigit() for char in line):
+                line += ' 1'
+            current_section_label = line
+        elif line.startswith('{') and line.endswith('}'):
+            current_section_label = line[1:-1].strip()
+        else:
+            sections.setdefault(current_section_label, []).append(line_orig)
+
+    return {
+        label: split_into_slides('\n'.join(lines))
+        for label, lines in sections.items()
+    }
+
+
+def get_slides_in_order(slide_sections: Dict[str, List[str]], order_str: str) -> List[str]:
+    """Decode the CustomOrderSequence string into the slides in order."""
+    slides = []
+
+    if order_str.strip() == '':
+        for section in slide_sections.values():
+            slides.extend(section)
+        return slides
+
+    for token in order_str.split(','):
+        token = token.strip()
+
+        trailing_number = ''
+        while token and token[-1].isdigit():
+            trailing_number = token[-1] + trailing_number
+            token = token[:-1]
+        token = token.strip()
+        lower_token = token.lower()
+
+        if token == '':
+            assert trailing_number
+            label = f"Verse {trailing_number}"
+        elif lower_token in ('v', 'verse'):
+            label = f"Verse {trailing_number or '1'}"
+        elif lower_token in ('c', 'chorus'):
+            label = f"Chorus {trailing_number or '1'}"
+        elif lower_token in ('p', 'pre-chorus'):
+            label = f"Pre-chorus {trailing_number or '1'}"
+        elif lower_token == 'b':
+            possible_label = f"Bridge {trailing_number or '1'}"
+            if possible_label.lower() in slide_sections:
+                label = possible_label
+            else:
+                label = "Blank"
+        elif lower_token == 'bridge':
+            label = f"Bridge {trailing_number or '1'}"
+        elif lower_token in ('t', 'tag'):
+            label = f"Tag {trailing_number or '1'}"
+        elif lower_token == 'i':
+            label = f"Interlude {trailing_number or '1'}"
+        elif lower_token == 'ending':
+            label = f"Ending {trailing_number or '1'}"
+        else:
+            label = token
+
+        if label == 'Blank':
+            slides.append('')
+        elif label.lower() in slide_sections:
+            slides.extend(slide_sections[label.lower()])
+        else:
+            logger.warning(f"Label '{label}' ({token}) not found in slide sections.")
+
+    return slides
+
+
+def get_translation_screen_idx(presentation_content: dict) -> Optional[int]:
+    """Get the index of the translation screen from VirtualScreens."""
+    virtual_screens = json.loads(presentation_content.get('VirtualScreens', '[]'))
+    slide_screens = [s for s in virtual_screens if s['outputKind'] in ['Slides', 'SlidesAlternateContent']]
+
+    for idx, screen in enumerate(slide_screens):
+        if any(lang in screen['name'] for lang in ['French', 'Haitian']):
+            return idx
+
+    return None
+
+
+def get_slide_screen_indices(presentation_content: dict) -> tuple:
+    """Get greenscreen and translation screen indices.
+
+    Returns (greenscreen_idx_or_None, translation_idx).
+    Raises ValueError if translation screen count != 1.
+    """
+    virtual_screens = json.loads(presentation_content.get('VirtualScreens', '[]'))
+    slide_screens = [s for s in virtual_screens if s['outputKind'] in ['Slides', 'SlidesAlternateContent']]
+
+    greenscreen_idx = next(
+        (i for i, screen in enumerate(slide_screens) if screen['name'] == 'Green Screen'),
+        None
+    )
+
+    translation_indices = [
+        i for i, screen in enumerate(slide_screens)
+        if any(lang in screen['name'] for lang in ['French', 'Haitian'])
+    ]
+    if len(translation_indices) != 1:
+        raise ValueError(f"Expected one translation screen, found {len(translation_indices)}")
+
+    return greenscreen_idx, translation_indices[0]
+
+
+class ProclaimDB:
+    """Access layer for the Proclaim PresentationManager database."""
+
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or find_presentation_db()
+
+    def connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.db_path)
+
+    def get_service_item(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Get a service item by its ID."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM ServiceItems WHERE ServiceItemId = ?", (item_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return dict(zip([col[0] for col in cursor.description], row))
+
+    def get_presentation(self, presentation_id: str) -> Optional[Dict[str, Any]]:
+        """Get presentation data from the database."""
+        presentation_id = presentation_id.replace('-', '')
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT PresentationId, Content FROM Presentations WHERE PresentationId = ?",
+                (presentation_id,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return {
+                'id': row[0],
+                'content': json.loads(row[1])
+            }
+
+    def get_presentations(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent presentations."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                '''
+                SELECT PresentationId, DateGiven, Title, Content
+                FROM Presentations
+                WHERE DateGiven > "2024-01-01" AND Title NOT LIKE "INCORRECT%"
+                ORDER BY DateGiven DESC
+                LIMIT ?
+                ''', (limit,)
+            ).fetchall()
+
+        return [
+            {
+                'id': row[0],
+                'date_given': row[1],
+                'title': row[2],
+                'content': json.loads(row[3])
+            }
+            for row in rows
+        ]
+
+
+def get_slides_for_song(content: dict, content_key: str = '_richtextfield:Lyrics') -> List[str]:
+    """Get the slides for a song item."""
+    text = decode_richtext_xml(content[content_key])
+    return split_into_slides(text)
+
+
+def parse_item_translation(
+    db: ProclaimDB,
+    item_id: str,
+    translation_screen_idx: int,
+) -> Optional[ServiceItemWithSlides]:
+    """Extract translated slides for any item type."""
+    service_item = db.get_service_item(item_id.replace('-', ''))
+    if not service_item:
+        logger.warning(f"Service item {item_id} not found")
+        return None
+
+    try:
+        content = json.loads(service_item['Content'])
+        item_kind = service_item.get('ServiceItemKind', 'Unknown')
+        item_title = service_item.get('Title', 'Unknown')
+
+        if item_kind in ["ImageSlideshow"] or item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
+            logger.info(f"Showing blank item: {item_title}")
+            return ServiceItemWithSlides(
+                itemId=item_id,
+                title=item_title,
+                slides=[''],
+                itemKind=item_kind,
+            )
+
+        translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
+
+        # Try translation first, fall back to main content
+        if translation_key in content:
+            source_xml = content[translation_key]
+        else:
+            # Fall back to main slide text
+            main_content_keys = {
+                'SongLyrics': '_richtextfield:Lyrics',
+                'Content': '_richtextfield:Main Content',
+                'BiblePassage': '_richtextfield:Passage',
+            }
+            fallback_key = main_content_keys.get(item_kind)
+            if fallback_key and fallback_key in content:
+                logger.warning(f"No translation for {item_id}, falling back to main content")
+                source_xml = content[fallback_key]
+            else:
+                logger.warning(f"No translation or main content found for {item_id}")
+                return None
+
+        source_text = decode_richtext_xml(source_xml)
+
+        if item_kind == 'SongLyrics':
+            sections = split_into_song_sections(source_text)
+            order_str = content.get('CustomOrderSequence', '')
+            slides = get_slides_in_order(sections, order_str)
+
+            if title := content.get('SongDisplayTitle'):
+                slides.insert(0, title)
+        else:
+            slides = split_into_slides(source_text)
+
+        return ServiceItemWithSlides(
+            itemId=item_id,
+            title=item_title,
+            slides=slides,
+            itemKind=item_kind,
+        )
+    except Exception as e:
+        logger.error(f"Error parsing translation for {item_id}: {e}")
+        return None
