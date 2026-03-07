@@ -140,7 +140,7 @@ const availableLayouts = [
     label: 'Everything',
     layout: [
       ["transcript", "sourceText"],
-      ["translatedText", "video"]
+      ["translatedText", "currentSlide"]
     ]
   },
 ];
@@ -181,7 +181,7 @@ function HomePage() {
           );
         })}
         <div className="text-center mb-4">
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/transcript,sourceText|translatedText-French,video#editor">Transcriber</a> |{" "}
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/transcript,sourceText|translatedText-French,currentSlide#editor">Transcriber</a> |{" "}
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedText-French#editor">Note-Taker</a>
         </div>
       </div>
