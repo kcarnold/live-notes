@@ -411,7 +411,7 @@ const App = () => {
 
   // Parse URL path to determine which page to render
   let pageComponent: React.ReactElement;
-  const pathname = window.location.pathname;
+  const pathname = decodeURIComponent(window.location.pathname);
   if (pathname === "/" || pathname === "") {
     pageComponent = <HomePage />;
   } else {
