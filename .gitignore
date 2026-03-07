@@ -21,3 +21,6 @@ audio-cache
 
 *.pyc
 presentation.json
+
+/doc-dumps
+/ysweet_data
