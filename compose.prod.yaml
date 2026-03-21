@@ -1,6 +1,6 @@
 services:
   y-sweet:
-    command: ["npx", "y-sweet@latest", "serve", "/data", "--url", "https://dev7.kenarnold.org"]
+    command: ["npx", "y-sweet@latest", "serve", "/data", "--host", "0.0.0.0", "--url-prefix", "https://dev7.kenarnold.org"]
 
   app:
     environment:
