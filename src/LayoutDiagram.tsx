@@ -1,3 +1,5 @@
+import { useStrings } from "./useLocale";
+
 // --- LayoutDiagram helper for visualizing layouts ---
 const componentColors: Record<string, string> = {
   transcript: "bg-green-300 dark:bg-green-700",
@@ -7,17 +9,17 @@ const componentColors: Record<string, string> = {
   video: "bg-blue-200 dark:bg-blue-700",
   currentSlide: "bg-indigo-200 dark:bg-indigo-700",
 };
-const humanLabels: Record<string, string> = {
-  transcript: "Transcript",
-  sourceText: "Source Text",
-  translatedText: "Translated Text",
-  bilingual: "Bilingual View",
-  video: "Video",
-  currentSlide: "Current Slide",
-};
-
 
 export function LayoutDiagram({ layout }: { layout: string[][] }) {
+  const s = useStrings();
+  const humanLabels: Record<string, string> = {
+    transcript: s.componentTranscript,
+    sourceText: s.componentSourceText,
+    translatedText: s.componentTranslatedText,
+    bilingual: s.componentBilingual,
+    video: s.componentVideo,
+    currentSlide: s.componentCurrentSlide,
+  };
   // layout is a 2D array: columns of rows
   // Find the max column height for grid alignment
   const maxRows = Math.max(...layout.map(col => col.length));

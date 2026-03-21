@@ -52,6 +52,14 @@ export interface AppStrings {
 
   // Navigation
   goHome: string;
+
+  // Layout diagram component labels
+  componentTranscript: string;
+  componentSourceText: string;
+  componentTranslatedText: string;
+  componentBilingual: string;
+  componentVideo: string;
+  componentCurrentSlide: string;
 }
 
 export const strings: Record<SupportedLocale, AppStrings> = {
@@ -82,6 +90,12 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Next',
     untitledPresentation: 'Untitled Presentation',
     goHome: 'Go home',
+    componentTranscript: 'Transcript',
+    componentSourceText: 'Source Text',
+    componentTranslatedText: 'Translated Text',
+    componentBilingual: 'Bilingual View',
+    componentVideo: 'Video',
+    componentCurrentSlide: 'Current Slide',
   },
   fr: {
     connecting: 'Connexion\u2026',
@@ -110,6 +124,12 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Suivant',
     untitledPresentation: 'Pr\u00e9sentation sans titre',
     goHome: 'Accueil',
+    componentTranscript: 'Transcription',
+    componentSourceText: 'Texte source',
+    componentTranslatedText: 'Texte traduit',
+    componentBilingual: 'Vue bilingue',
+    componentVideo: 'Vid\u00e9o',
+    componentCurrentSlide: 'Diapositive actuelle',
   },
   es: {
     connecting: 'Conectando\u2026',
@@ -138,6 +158,12 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Siguiente',
     untitledPresentation: 'Presentaci\u00f3n sin t\u00edtulo',
     goHome: 'Ir al inicio',
+    componentTranscript: 'Transcripci\u00f3n',
+    componentSourceText: 'Texto fuente',
+    componentTranslatedText: 'Texto traducido',
+    componentBilingual: 'Vista biling\u00fce',
+    componentVideo: 'Video',
+    componentCurrentSlide: 'Diapositiva actual',
   },
   ht: {
     connecting: 'Koneksyon\u2026',
@@ -166,5 +192,11 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Apr\u00e8',
     untitledPresentation: 'Prezantasyon San Tit',
     goHome: 'Retounen lakay',
+    componentTranscript: 'Transkripsyon',
+    componentSourceText: 'Teks sous',
+    componentTranslatedText: 'Teks tradui',
+    componentBilingual: 'Vi Bileng',
+    componentVideo: 'Videyo',
+    componentCurrentSlide: 'Diapozitiv aktyèl',
   },
 };
