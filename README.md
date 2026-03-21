@@ -38,11 +38,25 @@ npm start
 
 ## Deployment
 
-```bash
-# Build and run with Docker Compose
-docker compose build
-docker compose up -d
+### Local dev with Docker
 
+```bash
+# Auto-merges compose.yaml + compose.override.yaml (uses localhost URLs)
+docker compose up -d
+```
+
+### Production
+
+```bash
+# On the server
+./deploy.sh
+```
+
+`deploy.sh` runs `git pull`, builds, and starts with `compose.prod.yaml` (sets the public y-sweet URL).
+
+### Other commands
+
+```bash
 # View logs
 docker compose logs -f
 
@@ -50,7 +64,7 @@ docker compose logs -f
 docker compose down
 ```
 
-**Note**: The application uses `compose.yaml`. Environment variables are loaded from `.env` automatically.
+Environment variables are loaded from `.env` automatically.
 
 ## Project Details
 

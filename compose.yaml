@@ -1,7 +1,7 @@
 services:
   y-sweet:
     image: node:24-slim
-    command: ["npx", "y-sweet@latest", "serve", "/data", "--url", "https://dev7.kenarnold.org"]
+    command: ["npx", "y-sweet@latest", "serve", "/data"]
     ports:
       - "5007:8080"
     volumes:
@@ -22,7 +22,6 @@ services:
     ports:
       - "5008:5008"
     environment:
-      - NODE_ENV=production
       - PORT=5008
       - YSWEET_CONNECTION_STRING=ys://y-sweet:8080
     env_file: "./.env"

@@ -1,0 +1,7 @@
+services:
+  y-sweet:
+    command: ["npx", "y-sweet@latest", "serve", "/data", "--url", "https://dev7.kenarnold.org"]
+
+  app:
+    environment:
+      - NODE_ENV=production

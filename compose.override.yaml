@@ -1,0 +1,3 @@
+services:
+  y-sweet:
+    command: ["npx", "y-sweet@latest", "serve", "/data", "--url", "http://localhost:5007"]
