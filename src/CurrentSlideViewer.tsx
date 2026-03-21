@@ -1,4 +1,5 @@
 import { useMap } from '@y-sweet/react';
+import { useStrings } from './useLocale';
 
 interface Slide {
   text: string;
@@ -20,6 +21,7 @@ export function CurrentSlideViewer({
   currentIndex,
   context = 0
 }: CurrentSlideViewerProps) {
+  const s = useStrings();
   // Build array of slides to display with context
   const startIdx = Math.max(0, currentIndex - context);
   const endIdx = Math.min(slides.length - 1, currentIndex + context);
@@ -35,7 +37,7 @@ export function CurrentSlideViewer({
   if (slides.length === 0) {
     return (
       <div className="flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900">
-        <div className="text-gray-500 dark:text-gray-400">No slides available</div>
+        <div className="text-gray-500 dark:text-gray-400">{s.noSlides}</div>
       </div>
     );
   }
@@ -71,7 +73,7 @@ export function CurrentSlideViewer({
             </div>
             {!slide.isActive && (
               <div className="text-xs text-gray-500 dark:text-gray-600 mt-1 text-center">
-                {startIdx + idx < currentIndex ? 'Previous' : 'Next'}
+                {startIdx + idx < currentIndex ? s.previous : s.next}
               </div>
             )}
           </div>
@@ -85,6 +87,7 @@ export function CurrentSlideViewer({
  * Container component that reads from Yjs and passes data to pure component
  */
 export function CurrentSlideViewerContainer() {
+  const s = useStrings();
   const statusMap = useMap('proclaimStatus');
   const presentationsMap = useMap('proclaimPresentations');
 
@@ -102,7 +105,7 @@ export function CurrentSlideViewerContainer() {
       throw new Error('Presentation not found');
     }
 
-    const title = presentation.title || 'Untitled Presentation';
+    const title = presentation.title || s.untitledPresentation;
     const slidesArray = presentation.slides || [];
     const slides: string[] = [];
 
@@ -127,8 +130,8 @@ export function CurrentSlideViewerContainer() {
       return (
         <div className="flex items-center justify-center bg-gray-50 dark:bg-gray-900">
           <div className="text-gray-500 dark:text-gray-400">
-            Waiting for Proclaim data...
-            <div className="text-xs mt-2">Is the Proclaim service running?</div>
+            {s.waitingForProclaim}
+            <div className="text-xs mt-2">{s.isProclaimRunning}</div>
           </div>
         </div>
       );

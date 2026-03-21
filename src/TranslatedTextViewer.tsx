@@ -2,6 +2,7 @@ import React, { useRef, useState, useCallback, useEffect, useEffectEvent } from 
 import { useScrollToBottom } from './reactUtils';
 import { Remark } from 'react-remark';
 import { useTTS } from './useTTS';
+import { useStrings } from './useLocale';
 
 interface TranslatedTextViewerProps {
   /** Lines of text to display (non-empty lines only) */
@@ -30,6 +31,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
   fontSize,
   headerControls
 }) => {
+  const s = useStrings();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const translatedTextEndRef = useRef<HTMLDivElement | null>(null);
   useScrollToBottom(scrollContainerRef, translatedTextEndRef, [lines], true);
@@ -114,7 +116,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
             <>
               <button
                 type='button'
-                aria-label={autoSpeakEnabled ? "Disable auto text-to-speech" : "Enable auto text-to-speech"}
+                aria-label={autoSpeakEnabled ? s.disableAutoTTS : s.enableAutoTTS}
                 aria-pressed={autoSpeakEnabled}
                 onClick={toggleAutoSpeak}
                 className={`
@@ -125,11 +127,11 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
                   }
                 `}
               >
-                {autoSpeakEnabled ? '⏸️ Auto-Speak' : '▶️ Tap to Speak'}
+                {autoSpeakEnabled ? s.autoSpeak : s.tapToSpeak}
               </button>
               {tts.status === 'error' && (
                 <span className="text-sm text-red-600 dark:text-red-400">
-                  Error: {tts.errorMessage}
+                  {s.ttsError}{tts.errorMessage}
                 </span>
               )}
             </>

@@ -4,6 +4,7 @@ import snarkdown from 'snarkdown';
 import type { Block } from './blockTypes';
 import { useScrollToBottom } from './reactUtils';
 import { useTTS } from './useTTS';
+import { useStrings } from './useLocale';
 
 export interface BilingualBlockViewerProps {
   blocks: Block[];
@@ -35,6 +36,7 @@ export function BilingualBlockViewer({
   fontSize = 24,
   headerControls,
 }: BilingualBlockViewerProps) {
+  const s = useStrings();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const contentEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -141,7 +143,7 @@ export function BilingualBlockViewer({
           </div>
         )}
         <div className="p-4 text-gray-500 dark:text-gray-400 italic flex-1">
-          No content yet
+          {s.noContent}
         </div>
       </div>
     );
@@ -158,7 +160,7 @@ export function BilingualBlockViewer({
             <>
               <button
                 type='button'
-                aria-label={autoSpeakEnabled ? "Disable auto text-to-speech" : "Enable auto text-to-speech"}
+                aria-label={autoSpeakEnabled ? s.disableAutoTTS : s.enableAutoTTS}
                 aria-pressed={autoSpeakEnabled}
                 onClick={toggleAutoSpeak}
                 className={`
@@ -169,11 +171,11 @@ export function BilingualBlockViewer({
                   }
                 `}
               >
-                {autoSpeakEnabled ? '⏸️ Auto-Speak' : '▶️ Tap to Speak'}
+                {autoSpeakEnabled ? s.autoSpeak : s.tapToSpeak}
               </button>
               {tts.status === 'error' && (
                 <span className="text-sm text-red-600 dark:text-red-400">
-                  Error: {tts.errorMessage}
+                  {s.ttsError}{tts.errorMessage}
                 </span>
               )}
             </>
@@ -242,6 +244,7 @@ function BlockPair({
   isTTSEnabled,
   onClick,
 }: BlockPairProps) {
+  const s = useStrings();
   // Compute indent based on block level
   const indentClass = block.level > 0 ? `ml-${block.level * 4}` : '';
 
@@ -285,7 +288,7 @@ function BlockPair({
           <div dangerouslySetInnerHTML={{ __html: translationHtml }} />
         ) : (
           <span className="text-gray-400 dark:text-gray-500 italic">
-            (not translated)
+            {s.notTranslated}
           </span>
         )}
       </div>

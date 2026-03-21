@@ -10,6 +10,7 @@ import "./App.css";
 
 import { useAtom, useAtomValue } from "jotai";
 import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
+import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
 import { LayoutDiagram } from "./LayoutDiagram";
 import { useScrollToBottom } from "./reactUtils";
 import SpeechTranscriber from "./SpeechTranscriber";
@@ -27,6 +28,7 @@ function ConnectionStatusWidget({
 }: {
   connectionStatus: string;
 }) {
+  const s = useStrings();
   if (connectionStatus === "connected") {
     return null; // Don't show anything if connected
   }
@@ -38,7 +40,7 @@ function ConnectionStatusWidget({
           : "bg-red-500 text-white"
       }`}
     >
-      {connectionStatus === "connecting" ? "Connecting..." : "Disconnected"}
+      {connectionStatus === "connecting" ? s.connecting : s.disconnected}
     </div>
   );
 }
@@ -116,28 +118,28 @@ function VideoComponent({ isEditor }: { isEditor: boolean }) {
 const availableLayouts = [
   {
     key: 'slide-and-translation',
-    label: 'Slide and Translation',
+    labelKey: 'layoutSlideAndTranslation' as const,
     layout: [
       ["currentSlide", "translatedText"]
     ]
   },
   {
     key: 'slide-and-bilingual',
-    label: 'Bilingual View',
+    labelKey: 'layoutBilingualView' as const,
     layout: [
       ["currentSlide", "bilingual"]
     ]
   },
   {
     key: 'video-and-translation',
-    label: 'Translation (old)',
+    labelKey: 'layoutTranslationOld' as const,
     layout: [
       ["video", "translatedText"]
     ]
   },
   {
     key: 'full',
-    label: 'Everything',
+    labelKey: 'layoutEverything' as const,
     layout: [
       ["transcript", "sourceText"],
       ["translatedText", "currentSlide"]
@@ -147,22 +149,25 @@ const availableLayouts = [
 
 
 function HomePage() {
+  const s = useStrings();
+  const locale = resolveLocale();
   const defaultLang = languages[0];
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-950 dark:to-gray-900 text-black dark:text-gray-200">
       <h1 className="text-2xl font-bold mb-6 mt-8">
-        Choose Layout
+        {s.chooseLayout}
       </h1>
       <div className="flex flex-col gap-6 w-full max-w-xl">
         {availableLayouts.map((layout) => {
           // Convert layout array to human-legible string, adding default language to translatedText components
-          const layoutStr = layout.layout.map(row => 
-            row.map(component => 
-              component === 'translatedText' ? `translatedText-${defaultLang}` : 
+          const layoutStr = layout.layout.map(row =>
+            row.map(component =>
+              component === 'translatedText' ? `translatedText-${defaultLang}` :
               component === 'bilingual' ? `bilingual-${defaultLang}` :
               component
             ).join(",")
           ).join("|");
+          const localeParam = locale !== 'en' ? `?locale=${locale}` : '';
           return (
             <div
               key={layout.key}
@@ -171,10 +176,10 @@ function HomePage() {
               <div className="flex flex-col md:flex-row items-center gap-3 mb-2">
                 <LayoutDiagram layout={layout.layout} />
                 <a
-                  href={`/${layoutStr}`}
+                  href={`/${layoutStr}${localeParam}`}
                   className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 transition text-sm shadow hover:shadow-lg"
                 >
-                  {layout.label}
+                  {s[layout.labelKey]}
                 </a>
               </div>
             </div>
@@ -193,17 +198,21 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
   const isEditor = useAtomValue(isEditorAtom);
   const [fontSize, setFontSize] = useAtom(fontSizeAtom);
   const ydoc = useYDoc();
+  const s = useStrings();
+  const locale = resolveLocale();
 
   const onLanguageChange = (prefix: string) => (newLang: string) => {
     onReplace(`${prefix}-${newLang}`);
   };
+
+  const langDisplayNames = new Intl.DisplayNames([locale], { type: 'language' });
 
   const fontSizeControls = (
     <>
       <div className="flex-1" />
       <button
         type="button"
-        aria-label="Decrease font size"
+        aria-label={s.decreaseFontSize}
         onClick={() => setFontSize(Math.max(10, (fontSize || 16) - 2))}
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -212,7 +221,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
       </button>
       <button
         type="button"
-        aria-label="Increase font size"
+        aria-label={s.increaseFontSize}
         onClick={() => setFontSize(Math.min(32, (fontSize || 16) + 2))}
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -229,7 +238,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
       onChange={(e) => onLanguageChange(prefix)(e.target.value)}
     >
       {languages.map((lang) => (
-        <option key={lang} value={lang}>{lang}</option>
+        <option key={lang} value={lang}>{langDisplayNames.of(LANGUAGE_BCP47[lang]) ?? lang}</option>
       ))}
     </select>
   );
@@ -240,7 +249,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
     return (
       <div className={cardClass + " flex-1/2 min-h-0 bg-gray-50/80 dark:bg-gray-900/60 text-black dark:text-gray-200"}>
         {isEditor ? <SpeechTranscriber /> : (
-          <h2 className="font-semibold text-xs text-gray-600 dark:text-gray-300 leading-tight">Transcript</h2>
+          <h2 className="font-semibold text-xs text-gray-600 dark:text-gray-300 leading-tight">{s.transcript}</h2>
         )}
         <TranscriptViewer editable={isEditor} />
       </div>
@@ -273,7 +282,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
           fontSize={fontSize}
           headerControls={
             <>
-              <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">Translation</h2>
+              <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.translation}</h2>
               {languageSelector('translatedText', validLanguage)}
               {fontSizeControls}
             </>
@@ -293,7 +302,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
           fontSize={fontSize}
           headerControls={
             <>
-              <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">Bilingual</h2>
+              <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.bilingual}</h2>
               {languageSelector('bilingual', validLanguage)}
               {fontSizeControls}
             </>
@@ -306,7 +315,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
   return (
     <div className={cardClass + " flex-1/2 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 items-center justify-center"}>
       <p className="text-sm">Unknown component: <code>{componentStr}</code></p>
-      <a href="/" className="text-xs underline hover:text-red-900 dark:hover:text-red-100">Go home</a>
+      <a href="/" className="text-xs underline hover:text-red-900 dark:hover:text-red-100">{s.goHome}</a>
     </div>
   );
 }
@@ -314,6 +323,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 // Layout page: render the selected layout from URL
 function LayoutPage({ layout: initialLayout }: { layout: string }) {
   const connectionStatus = useConnectionStatus();
+  const s = useStrings();
 
   // Track current layout in state so we can update it when URL changes
   const [layout, setLayout] = useState(initialLayout);
@@ -370,7 +380,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
       <a
         href="/"
         className="fixed bottom-4 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 dark:bg-gray-700/80 text-white shadow-md hover:bg-gray-700/80 dark:hover:bg-gray-600/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
-        title="Home"
+        title={s.goHome}
         style={{ fontSize: '1.3rem', boxShadow: '0 2px 8px rgba(0,0,0,0.10)' }}
       >
         <span style={{ fontSize: '1.3rem', lineHeight: 1 }}>🏠</span>
