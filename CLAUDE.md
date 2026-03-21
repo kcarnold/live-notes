@@ -378,6 +378,16 @@ const fragment = ydoc.getXmlFragment('prosemirror');
 // Modified via y-prosemirror plugin
 ```
 
+### UI Localization
+
+UI strings are localized via [src/strings.ts](src/strings.ts) and [src/useLocale.ts](src/useLocale.ts):
+
+- **Supported locales**: `en`, `fr`, `ht`, `es` — defined in `SupportedLocale` and `SUPPORTED_LOCALES`
+- **Adding strings**: Add to `AppStrings` interface, then add values for all four locales in the `strings` record
+- **Using strings in components**: Call `useStrings()` directly inside the component — do not pass strings as props
+- **Locale resolution**: URL `?locale=` param takes priority, then `navigator.languages`, then defaults to `en`
+- **`LANGUAGE_BCP47`**: Maps translation language names (e.g. `'French'`) to BCP 47 codes — separate from UI locale
+
 ### Translation Cache Keys
 
 Translation cache keys combine language and content ([translationUtils.ts:106-110](translationUtils.ts#L106-L110)):
