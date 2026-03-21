@@ -1,5 +1,5 @@
-export type SupportedLocale = 'en' | 'fr' | 'ht';
-export const SUPPORTED_LOCALES: SupportedLocale[] = ['en', 'fr', 'ht'];
+export type SupportedLocale = 'en' | 'fr' | 'ht' | 'es';
+export const SUPPORTED_LOCALES: SupportedLocale[] = ['en', 'fr', 'ht', 'es'];
 
 /** Maps internal language identifiers (from configAtoms.languages) to BCP 47 codes */
 export const LANGUAGE_BCP47: Record<string, string> = {
@@ -110,6 +110,34 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Suivant',
     untitledPresentation: 'Pr\u00e9sentation sans titre',
     goHome: 'Accueil',
+  },
+  es: {
+    connecting: 'Conectando\u2026',
+    disconnected: 'Desconectado',
+    transcript: 'Transcripci\u00f3n',
+    translation: 'Traducci\u00f3n',
+    bilingual: 'Biling\u00fce',
+    chooseLayout: 'Elegir dise\u00f1o',
+    layoutSlideAndTranslation: 'Diapositiva y traducci\u00f3n',
+    layoutBilingualView: 'Vista biling\u00fce',
+    layoutTranslationOld: 'Traducci\u00f3n (antiguo)',
+    layoutEverything: 'Todo',
+    decreaseFontSize: 'Disminuir tama\u00f1o de fuente',
+    increaseFontSize: 'Aumentar tama\u00f1o de fuente',
+    autoSpeak: '\u23f8\ufe0f Habla autom\u00e1tica',
+    tapToSpeak: '\u25b6\ufe0f Toca para hablar',
+    disableAutoTTS: 'Desactivar texto a voz autom\u00e1tico',
+    enableAutoTTS: 'Activar texto a voz autom\u00e1tico',
+    ttsError: 'Error: ',
+    noContent: 'Sin contenido a\u00fan',
+    notTranslated: '(no traducido)',
+    noSlides: 'No hay diapositivas disponibles',
+    waitingForProclaim: 'Esperando datos de Proclaim\u2026',
+    isProclaimRunning: '\u00bfEst\u00e1 ejecut\u00e1ndose el servicio Proclaim?',
+    previous: 'Anterior',
+    next: 'Siguiente',
+    untitledPresentation: 'Presentaci\u00f3n sin t\u00edtulo',
+    goHome: 'Ir al inicio',
   },
   ht: {
     connecting: 'Koneksyon\u2026',
