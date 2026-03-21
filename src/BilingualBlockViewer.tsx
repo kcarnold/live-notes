@@ -54,7 +54,7 @@ export function BilingualBlockViewer({
     }).filter(line => line.trim() !== '');
   }, [nonEmptyBlocks, translations, language]);
 
-  useScrollToBottom(scrollContainerRef, contentEndRef, [nonEmptyBlocks, translations], true);
+  useScrollToBottom(scrollContainerRef, contentEndRef, [nonEmptyBlocks.length, translations.size], true);
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 

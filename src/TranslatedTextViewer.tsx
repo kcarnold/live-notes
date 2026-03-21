@@ -34,7 +34,7 @@ const TranslatedTextViewer: React.FC<TranslatedTextViewerProps> = ({
   const s = useStrings();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const translatedTextEndRef = useRef<HTMLDivElement | null>(null);
-  useScrollToBottom(scrollContainerRef, translatedTextEndRef, [lines], true);
+  useScrollToBottom(scrollContainerRef, translatedTextEndRef, [lines.length], true);
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
