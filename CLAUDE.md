@@ -107,7 +107,7 @@ The app uses **Yjs** for real-time collaborative state management:
    - `transcriptDoc` (XmlFragment): Live transcription from speech
    - `prosemirror` (XmlFragment): User-edited source text for translation
    - `translatedText-{language}` (Y.Text): Translated output for each language
-   - `meta` (Y.Map): Metadata like video visibility settings
+   - `meta` (Y.Map): Metadata (unused currently)
    - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
    - `proclaimPresentations` (Y.Map): Maps itemId → presentation data (title, slides)
    - `proclaimStatus` (Y.Map): Current Proclaim status (itemId, slideIndex)
@@ -304,9 +304,9 @@ The viewer shows:
 
 The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395)):
 
-- Layouts are encoded in the URL path: `/transcript,sourceText|translatedText-French,video`
+- Layouts are encoded in the URL path: `/transcript,sourceText|translatedText-French,currentSlide`
 - Format: rows separated by `|`, columns separated by `,`
-- Components: `transcript`, `sourceText`, `translatedText-{language}`, `bilingual-{language}`, `video`, `currentSlide`
+- Components: `transcript`, `sourceText`, `translatedText-{language}`, `bilingual-{language}`, `currentSlide`
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
 - Example with Proclaim: `/translatedText-French,currentSlide` shows translation and current slide side-by-side

@@ -1,7 +1,6 @@
 import {
   AuthEndpoint,
   useConnectionStatus,
-  useMap,
   useYDoc,
   YDocProvider,
 } from "@y-sweet/react";
@@ -15,8 +14,7 @@ import { LayoutDiagram } from "./LayoutDiagram";
 import { useScrollToBottom } from "./reactUtils";
 import SpeechTranscriber from "./SpeechTranscriber";
 import TranslatedTextViewerContainer from "./TranslatedTextViewerContainer";
-import { ClientToken } from "@y-sweet/sdk";
-import SlidesPlayer from "./SlidesPlayer";
+import type { ClientToken } from "@y-sweet/sdk";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import ProseMirrorEditor from "./ProseMirrorEditorLazy";
 import { PostHogErrorBoundary } from "posthog-js/react";
@@ -66,54 +64,6 @@ function TranscriptViewer({ editable = false }: { editable?: boolean }) {
   );
 }
 
-function VideoComponent({ isEditor }: { isEditor: boolean }) {
-  const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
-  const [peerConnectionDisconnected, setPeerConnectionDisconnected] = useState(true);
-  const meta = useMap("meta");
-  const videoVisibility = meta.get("videoVisibility") || "visible";
-
-  if (!isEditor && videoVisibility === "hidden") {
-    return null;
-  }
-
-  return (
-    <div
-      className={
-        cardClass +
-        " flex-1/2 overflow-hidden bg-gray-100/80 dark:bg-gray-900/60"
-      }
-    >
-      {(isEditor || videoVisibility !== "hidden") && (
-        <>
-          {peerConnectionDisconnected && <b>Waiting for video...</b>}
-          {isEditor && (
-            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-              <label className="mr-1">
-                <input
-                  type="checkbox"
-                  checked={videoVisibility !== "hidden"}
-                  onChange={(e) => {
-                    meta.set(
-                      "videoVisibility",
-                      e.target.checked ? "visible" : "hidden"
-                    );
-                  }}
-                />{" "}
-                Show Video
-              </label>
-            </div>
-          )}
-          <SlidesPlayer
-            streamToken={"ncf-live-translation"}
-            apiPath={"https://b.siobud.com/api"}
-            setPeerConnectionDisconnected={setPeerConnectionDisconnected}
-          />
-        </>
-      )}
-    </div>
-  );
-}
-
 // Layouts: each is an array of arrays of component keys
 const availableLayouts = [
   {
@@ -128,13 +78,6 @@ const availableLayouts = [
     labelKey: 'layoutBilingualView' as const,
     layout: [
       ["currentSlide", "bilingual"]
-    ]
-  },
-  {
-    key: 'video-and-translation',
-    labelKey: 'layoutTranslationOld' as const,
-    layout: [
-      ["video", "translatedText"]
     ]
   },
   {
@@ -264,10 +207,6 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
     );
   }
 
-  if (componentStr === 'video') {
-    return <VideoComponent isEditor={isEditor} />;
-  }
-
   if (componentStr === 'currentSlide') {
     return <CurrentSlideViewerContainer />;
   }
@@ -328,7 +267,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
   // Track current layout in state so we can update it when URL changes
   const [layout, setLayout] = useState(initialLayout);
 
-  // Parse layout from URL: e.g. "transcript,translatedText-French|video" => [["transcript", "translatedText-French"], ["video"]]
+  // Parse layout from URL: e.g. "transcript,translatedText-French|currentSlide" => [["transcript", "translatedText-French"], ["currentSlide"]]
   function parseLayoutString(layoutStr: string | undefined): string[][] {
     if (!layoutStr) return [];
     return layoutStr.split("|").map(row => row.split(","));

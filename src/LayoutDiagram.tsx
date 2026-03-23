@@ -6,7 +6,6 @@ const componentColors: Record<string, string> = {
   sourceText: "bg-yellow-200 dark:bg-yellow-600",
   translatedText: "bg-purple-200 dark:bg-purple-700",
   bilingual: "bg-pink-200 dark:bg-pink-700",
-  video: "bg-blue-200 dark:bg-blue-700",
   currentSlide: "bg-indigo-200 dark:bg-indigo-700",
 };
 
@@ -17,7 +16,6 @@ export function LayoutDiagram({ layout }: { layout: string[][] }) {
     sourceText: s.componentSourceText,
     translatedText: s.componentTranslatedText,
     bilingual: s.componentBilingual,
-    video: s.componentVideo,
     currentSlide: s.componentCurrentSlide,
   };
   // layout is a 2D array: columns of rows

@@ -24,7 +24,6 @@ export interface AppStrings {
   // Layout names
   layoutSlideAndTranslation: string;
   layoutBilingualView: string;
-  layoutTranslationOld: string;
   layoutEverything: string;
 
   // Font size controls
@@ -58,7 +57,6 @@ export interface AppStrings {
   componentSourceText: string;
   componentTranslatedText: string;
   componentBilingual: string;
-  componentVideo: string;
   componentCurrentSlide: string;
 }
 
@@ -72,7 +70,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Choose Layout',
     layoutSlideAndTranslation: 'Slide and Translation',
     layoutBilingualView: 'Bilingual View',
-    layoutTranslationOld: 'Translation (old)',
     layoutEverything: 'Everything',
     decreaseFontSize: 'Decrease font size',
     increaseFontSize: 'Increase font size',
@@ -94,7 +91,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentSourceText: 'Source Text',
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
-    componentVideo: 'Video',
     componentCurrentSlide: 'Current Slide',
   },
   fr: {
@@ -106,7 +102,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Choisir la mise en page',
     layoutSlideAndTranslation: 'Diapositive et traduction',
     layoutBilingualView: 'Vue bilingue',
-    layoutTranslationOld: 'Traduction (ancien)',
     layoutEverything: 'Tout',
     decreaseFontSize: 'Diminuer la taille du texte',
     increaseFontSize: 'Augmenter la taille du texte',
@@ -128,7 +123,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentSourceText: 'Texte source',
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
-    componentVideo: 'Vid\u00e9o',
     componentCurrentSlide: 'Diapositive actuelle',
   },
   es: {
@@ -140,7 +134,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Elegir dise\u00f1o',
     layoutSlideAndTranslation: 'Diapositiva y traducci\u00f3n',
     layoutBilingualView: 'Vista biling\u00fce',
-    layoutTranslationOld: 'Traducci\u00f3n (antiguo)',
     layoutEverything: 'Todo',
     decreaseFontSize: 'Disminuir tama\u00f1o de fuente',
     increaseFontSize: 'Aumentar tama\u00f1o de fuente',
@@ -162,7 +155,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentSourceText: 'Texto fuente',
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
-    componentVideo: 'Video',
     componentCurrentSlide: 'Diapositiva actual',
   },
   ht: {
@@ -174,7 +166,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Chwazi Dispozisyon',
     layoutSlideAndTranslation: 'Diapozitiv ak Tradiksyon',
     layoutBilingualView: 'Vi Bileng',
-    layoutTranslationOld: 'Tradiksyon (ansyen)',
     layoutEverything: 'Tout bagay',
     decreaseFontSize: 'Diminye gw\u00f2s\u00e8 l\u00e8t',
     increaseFontSize: 'Ogmante gw\u00f2s\u00e8 l\u00e8t',
@@ -196,7 +187,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentSourceText: 'Teks sous',
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',
-    componentVideo: 'Videyo',
     componentCurrentSlide: 'Diapozitiv aktyèl',
   },
 };
