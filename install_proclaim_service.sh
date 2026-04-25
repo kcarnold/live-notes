@@ -33,13 +33,24 @@ log_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+fetch_posthog_config() {
+    local server_url="${1:-https://dev8.kenarnold.org}"
+    local config
+    config=$(curl -sf "$server_url/api/config") || { log_warn "Could not fetch PostHog config from $server_url (service may be down)"; return 1; }
+    POSTHOG_KEY=$(echo "$config" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('posthogKey',''))")
+    POSTHOG_HOST=$(echo "$config" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('posthogHost',''))")
+}
+
 generate_plist() {
     # Generate plist from template with variable substitution
     sed "s|{{SERVICE_SCRIPT}}|$SERVICE_SCRIPT|g" "$PLIST_TEMPLATE" | \
     sed "s|{{REPO_PATH}}|$SCRIPT_DIR|g" | \
     sed "s|{{LOG_DIR}}|$LOG_DIR|g" | \
     sed "s|{{USERNAME}}|$CURRENT_USER|g" | \
-    sed "s|{{UV_PATH}}|$UV_PATH|g"
+    sed "s|{{UV_PATH}}|$UV_PATH|g" | \
+    sed "s|{{POSTHOG_KEY}}|$POSTHOG_KEY|g" | \
+    sed "s|{{POSTHOG_HOST}}|$POSTHOG_HOST|g" | \
+    sed "s|{{YSWEET_URL}}|$SERVER_URL|g"
 }
 
 uninstall() {
@@ -61,10 +72,17 @@ uninstall() {
     exit 0
 }
 
-# Check for --uninstall flag
-if [ "$1" = "--uninstall" ]; then
-    uninstall
-fi
+# Parse arguments
+SERVER_URL="https://dev8.kenarnold.org"
+POSTHOG_KEY=""
+POSTHOG_HOST=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall) uninstall ;;
+        --server-url=*) SERVER_URL="${arg#--server-url=}" ;;
+    esac
+done
 
 echo "Installing proclaim service..."
 
@@ -92,13 +110,21 @@ log_info "LaunchAgents directory exists"
 mkdir -p "$LOG_DIR"
 log_info "Log directory created at $LOG_DIR"
 
+# Fetch PostHog config from the server
+if fetch_posthog_config "$SERVER_URL"; then
+    log_info "PostHog config fetched from $SERVER_URL"
+else
+    log_warn "PostHog error reporting will be disabled"
+fi
+
 # Generate and install plist from template
 generate_plist > "$PLIST_DEST"
 log_info "Plist generated and installed to $PLIST_DEST"
-log_info "  User: $CURRENT_USER"
-log_info "  Repo: $SCRIPT_DIR"
-log_info "  Logs: $LOG_DIR"
-log_info "  uv:   $UV_PATH"
+log_info "  User:   $CURRENT_USER"
+log_info "  Repo:   $SCRIPT_DIR"
+log_info "  Logs:   $LOG_DIR"
+log_info "  uv:     $UV_PATH"
+log_info "  Server: $SERVER_URL"
 
 # Check if already loaded
 if launchctl list "$SERVICE_LABEL" &>/dev/null; then

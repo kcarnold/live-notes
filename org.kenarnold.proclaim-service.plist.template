@@ -27,13 +27,17 @@
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 
-        <!-- Optional: Set YSWEET_URL if different from default -->
-        <!-- <key>YSWEET_URL</key>
-        <string>https://dev8.kenarnold.org</string> -->
+        <key>YSWEET_URL</key>
+        <string>{{YSWEET_URL}}</string>
 
         <!-- Set PROCLAIM_BASE_URL if on different machine -->
         <key>PROCLAIM_BASE_URL</key>
         <string>http://127.0.0.1:52195</string>
+
+        <key>POSTHOG_API_KEY</key>
+        <string>{{POSTHOG_KEY}}</string>
+        <key>POSTHOG_HOST</key>
+        <string>{{POSTHOG_HOST}}</string>
     </dict>
 
     <!-- Working directory for relative paths -->
