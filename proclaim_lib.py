@@ -280,58 +280,54 @@ def parse_item_translation(
         logger.warning(f"Service item {item_id} not found")
         return None
 
-    try:
-        content = json.loads(service_item['Content'])
-        item_kind = service_item.get('ServiceItemKind', 'Unknown')
-        item_title = service_item.get('Title', 'Unknown')
+    content = json.loads(service_item['Content'])
+    item_kind = service_item.get('ServiceItemKind') or 'Unknown'
+    item_title = service_item.get('Title') or 'Unknown'
 
-        if item_kind in ["ImageSlideshow"] or item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
-            logger.info(f"Showing blank item: {item_title}")
-            return ServiceItemWithSlides(
-                itemId=item_id,
-                title=item_title,
-                slides=[''],
-                itemKind=item_kind,
-            )
-
-        translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
-
-        # Try translation first, fall back to main content
-        if translation_key in content:
-            source_xml = content[translation_key]
-        else:
-            # Fall back to main slide text
-            main_content_keys = {
-                'SongLyrics': '_richtextfield:Lyrics',
-                'Content': '_richtextfield:Main Content',
-                'BiblePassage': '_richtextfield:Passage',
-            }
-            fallback_key = main_content_keys.get(item_kind)
-            if fallback_key and fallback_key in content:
-                logger.warning(f"No translation for {item_id}, falling back to main content")
-                source_xml = content[fallback_key]
-            else:
-                logger.warning(f"No translation or main content found for {item_id}")
-                return None
-
-        source_text = decode_richtext_xml(source_xml)
-
-        if item_kind == 'SongLyrics':
-            sections = split_into_song_sections(source_text)
-            order_str = content.get('CustomOrderSequence', '')
-            slides = get_slides_in_order(sections, order_str)
-
-            if title := content.get('SongDisplayTitle'):
-                slides.insert(0, title)
-        else:
-            slides = split_into_slides(source_text)
-
+    if item_kind in ["ImageSlideshow"] or item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
+        logger.info(f"Showing blank item: {item_title}")
         return ServiceItemWithSlides(
             itemId=item_id,
             title=item_title,
-            slides=slides,
+            slides=[''],
             itemKind=item_kind,
         )
-    except Exception as e:
-        logger.error(f"Error parsing translation for {item_id}: {e}")
-        return None
+
+    translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
+
+    # Try translation first, fall back to main content
+    if translation_key in content:
+        source_xml = content[translation_key]
+    else:
+        # Fall back to main slide text
+        main_content_keys = {
+            'SongLyrics': '_richtextfield:Lyrics',
+            'Content': '_richtextfield:Main Content',
+            'BiblePassage': '_richtextfield:Passage',
+        }
+        fallback_key = main_content_keys.get(item_kind)
+        if fallback_key and fallback_key in content:
+            logger.warning(f"No translation for {item_id}, falling back to main content")
+            source_xml = content[fallback_key]
+        else:
+            logger.warning(f"No translation or main content found for {item_id}")
+            return None
+
+    source_text = decode_richtext_xml(source_xml)
+
+    if item_kind == 'SongLyrics':
+        sections = split_into_song_sections(source_text)
+        order_str = content.get('CustomOrderSequence') or ''
+        slides = get_slides_in_order(sections, order_str)
+
+        if title := content.get('SongDisplayTitle'):
+            slides.insert(0, title)
+    else:
+        slides = split_into_slides(source_text)
+
+    return ServiceItemWithSlides(
+        itemId=item_id,
+        title=item_title,
+        slides=slides,
+        itemKind=item_kind,
+    )
