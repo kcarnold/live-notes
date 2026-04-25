@@ -299,6 +299,23 @@ The viewer shows:
 - **Intelligent parsing**: Handles song sections, custom order sequences, Bible passages
 - **Translation support**: Extracts slides from translation screens (French, Haitian)
 - **Skipped items**: Shows blank for image slideshows and certain slide types
+- **Error reporting**: PostHog exception capture via env vars injected at install time
+
+#### Installation as macOS LaunchAgent
+
+```bash
+bash install_proclaim_service.sh --server-url=https://dev8.kenarnold.org
+```
+
+The install script:
+1. Fetches PostHog config from `{server-url}/api/config` and injects `POSTHOG_API_KEY` + `POSTHOG_HOST`
+2. Sets `YSWEET_URL` from `--server-url` (defaults to `https://dev8.kenarnold.org`)
+3. Generates `~/Library/LaunchAgents/org.kenarnold.proclaim-service.plist` from the template
+4. Loads the service as a LaunchAgent (auto-restarts, survives reboots)
+
+#### PostHog Config Endpoint
+
+`GET /api/config` on the Express server returns `{ posthogKey, posthogHost }` — used by the install script and any other service that needs to report to the same PostHog project without separately managing the key.
 
 ### Layout System
 

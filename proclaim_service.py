@@ -44,12 +44,18 @@ import os
 import json
 import logging
 import signal
+import socket
 import argparse
 import anyio
 from typing import Optional, Dict, Any
 from pathlib import Path
 from datetime import date
 import httpx
+from posthog import Posthog
+from opentelemetry import logs as otel_logs
+from opentelemetry.sdk.logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk.logs.export import BatchLogRecordProcessor
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
 from pycrdt import Doc, Map
 from httpx_ws import aconnect_ws
@@ -80,6 +86,27 @@ POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
 
 DUMP_PRESENTATION_JSON = os.getenv('DUMP_PRESENTATION_JSON', 'false').lower() == 'true'
+
+_POSTHOG_KEY = os.getenv('POSTHOG_API_KEY', '')
+_POSTHOG_HOST = os.getenv('POSTHOG_HOST', 'https://us.i.posthog.com')
+DISTINCT_ID = f'proclaim-service@{socket.gethostname()}'
+
+if _POSTHOG_KEY:
+    ph = Posthog(_POSTHOG_KEY, host=_POSTHOG_HOST, enable_exception_autocapture=True)
+
+    _logger_provider = LoggerProvider()
+    otel_logs.set_logger_provider(_logger_provider)
+    _logger_provider.add_log_record_processor(
+        BatchLogRecordProcessor(
+            OTLPLogExporter(
+                endpoint=f"{_POSTHOG_HOST}/i/v1/logs",
+                headers={"Authorization": f"Bearer {_POSTHOG_KEY}"}
+            )
+        )
+    )
+    logging.getLogger().addHandler(LoggingHandler(logger_provider=_logger_provider))
+else:
+    ph = None
 
 
 class ProclaimClient:
@@ -274,11 +301,16 @@ class ProclaimYjsService:
 
             return True
 
+        except httpx.ConnectError:
+            logger.debug("Proclaim not reachable (not running?)")
+            return False
         except httpx.HTTPError as e:
             logger.error(f"Error polling Proclaim: {e}")
+            if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
             return False
         except Exception as e:
             logger.error(f"Unexpected error: {e}", exc_info=True)
+            if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
             return False
 
     async def run(self):
@@ -317,6 +349,7 @@ class ProclaimYjsService:
                     await anyio.sleep(interval)
                 except Exception as e:
                     logger.error(f"Error in polling loop: {e}", exc_info=True)
+                    if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
                     await anyio.sleep(POLL_INTERVAL)
 
 async def signal_handler(cancel_scope: anyio.CancelScope):
