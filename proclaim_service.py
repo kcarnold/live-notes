@@ -52,9 +52,9 @@ from pathlib import Path
 from datetime import date
 import httpx
 from posthog import Posthog
-from opentelemetry import logs as otel_logs
-from opentelemetry.sdk.logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk.logs.export import BatchLogRecordProcessor
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
 from pycrdt import Doc, Map
@@ -95,7 +95,7 @@ if _POSTHOG_KEY:
     ph = Posthog(_POSTHOG_KEY, host=_POSTHOG_HOST, enable_exception_autocapture=True)
 
     _logger_provider = LoggerProvider()
-    otel_logs.set_logger_provider(_logger_provider)
+    set_logger_provider(_logger_provider)
     _logger_provider.add_log_record_processor(
         BatchLogRecordProcessor(
             OTLPLogExporter(
