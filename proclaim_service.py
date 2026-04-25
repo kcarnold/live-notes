@@ -279,7 +279,7 @@ class ProclaimYjsService:
                 return False
 
             item_id = status.get('status', {}).get('itemId')
-            slide_index = status.get('status', {}).get('slideIndex', 0)
+            slide_index = status.get('status', {}).get('slideIndex') or 0
             presentation_id = status.get('presentationId')
 
             if DUMP_PRESENTATION_JSON:

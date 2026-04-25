@@ -169,7 +169,7 @@ def get_slides_in_order(slide_sections: Dict[str, List[str]], order_str: str) ->
 
 def get_translation_screen_idx(presentation_content: dict) -> Optional[int]:
     """Get the index of the translation screen from VirtualScreens."""
-    virtual_screens = json.loads(presentation_content.get('VirtualScreens', '[]'))
+    virtual_screens = json.loads(presentation_content.get('VirtualScreens') or '[]')
     slide_screens = [s for s in virtual_screens if s['outputKind'] in ['Slides', 'SlidesAlternateContent']]
 
     for idx, screen in enumerate(slide_screens):
@@ -185,7 +185,7 @@ def get_slide_screen_indices(presentation_content: dict) -> tuple:
     Returns (greenscreen_idx_or_None, translation_idx).
     Raises ValueError if translation screen count != 1.
     """
-    virtual_screens = json.loads(presentation_content.get('VirtualScreens', '[]'))
+    virtual_screens = json.loads(presentation_content.get('VirtualScreens') or '[]')
     slide_screens = [s for s in virtual_screens if s['outputKind'] in ['Slides', 'SlidesAlternateContent']]
 
     greenscreen_idx = next(
