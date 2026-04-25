@@ -8,7 +8,7 @@ This service:
 3. Updates Yjs shared state with presentation data (via Y-Sweet)
 4. Watches for changes and updates clients in real-time
 
-Protocol documenation:
+Protocol documentation:
 
 - Proclaim API: Faithlife provides a local API for Proclaim on port 52195. Key endpoints:
 
@@ -145,13 +145,13 @@ class ProclaimYjsService:
             self.current_doc_date = None
 
         # Yjs state
-        self.ydoc = Doc()
+        self.ydoc: Doc = Doc()
         self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
         self.status_map = self.ydoc.get('proclaimStatus', type=Map)
 
         # State tracking
-        self.last_item_id = None
-        self.last_slide_index = None
+        self.last_item_id: Optional[str] = None
+        self.last_slide_index: Optional[int] = None
         self.current_item_slides: Optional[ServiceItemWithSlides] = None
 
     @staticmethod
