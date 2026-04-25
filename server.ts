@@ -64,6 +64,14 @@ app.use('/audio-cache', express.static(AUDIO_CACHE_DIR));
 setupExpressErrorHandler(phClient, app);
 
 
+// Public config for services that need to report to PostHog
+app.get('/api/config', (_req, res) => {
+  res.json({
+    posthogKey: process.env.VITE_PUBLIC_POSTHOG_KEY ?? '',
+    posthogHost: process.env.VITE_PUBLIC_POSTHOG_HOST ?? '',
+  });
+});
+
 // Y-Sweet
 app.post('/api/ys-auth', async (req, res) => {
   console.log('Auth request:', req.body);
