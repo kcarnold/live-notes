@@ -10,3 +10,9 @@ dependencies = [
     "pycrdt-websocket>=0.16.0",
     "requests>=2.32.5",
 ]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.2",
+    "types-lxml>=2026.2.16",
+]
