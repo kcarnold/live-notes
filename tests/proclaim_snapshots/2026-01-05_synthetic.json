@@ -1,0 +1,53 @@
+{
+  "date": "2026-01-05",
+  "note": "Synthetic fixture: SongLyrics, Content, BiblePassage, ImageSlideshow, Blank",
+  "current_status": {
+    "itemId": "song001",
+    "slideIndex": 2
+  },
+  "presentation_content": {
+    "VirtualScreens": "[{\"outputKind\": \"Slides\", \"name\": \"Main\"}, {\"outputKind\": \"SlidesAlternateContent\", \"name\": \"French Translation\"}]"
+  },
+  "service_items": [
+    {
+      "ServiceItemId": "song001",
+      "Title": "Beautiful Savior",
+      "ServiceItemKind": "SongLyrics",
+      "content_dict": {
+        "_richtextfield:Lyrics": "<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Verse 1\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Line one of verse one\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Line two of verse one\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Chorus 1\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Chorus line one\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Chorus line two\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Verse 2\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Line one of verse two\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Line two of verse two\" /></Paragraph>",
+        "slideOutput:0:RichTextXml": "<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Verse 1\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Ligne un du verset un\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Ligne deux du verset un\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Chorus 1\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Refrain ligne un\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Refrain ligne deux\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Verse 2\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Ligne un du verset deux\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Ligne deux du verset deux\" /></Paragraph>",
+        "CustomOrderSequence": "v1,c,v2",
+        "SongDisplayTitle": "Beautiful Savior"
+      }
+    },
+    {
+      "ServiceItemId": "content001",
+      "Title": "Call to Worship",
+      "ServiceItemKind": "Content",
+      "content_dict": {
+        "_richtextfield:Main Content": "<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"First slide of call to worship\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"--\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Second slide of call to worship\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"--\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Third slide of call to worship\" /></Paragraph>",
+        "slideOutput:0:RichTextXml": "<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Premier texte d appel au culte\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"--\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Deuxieme texte d appel au culte\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"--\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"Troisieme texte d appel au culte\" /></Paragraph>"
+      }
+    },
+    {
+      "ServiceItemId": "bible001",
+      "Title": "Scripture Reading",
+      "ServiceItemKind": "BiblePassage",
+      "content_dict": {
+        "_richtextfield:Passage": "<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"John 3 16\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"For God so loved the world\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"John 3 17\" /></Paragraph>\n<Paragraph Language=\"en-US\" Margin=\"0,0,0,0\"><Run Text=\"God did not send his Son to condemn the world\" /></Paragraph>"
+      }
+    },
+    {
+      "ServiceItemId": "image001",
+      "Title": "Welcome Slides",
+      "ServiceItemKind": "ImageSlideshow",
+      "content_dict": {}
+    },
+    {
+      "ServiceItemId": "blank001",
+      "Title": "Blank",
+      "ServiceItemKind": "Content",
+      "content_dict": {}
+    }
+  ]
+}

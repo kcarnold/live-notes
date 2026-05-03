@@ -1,0 +1,54 @@
+{
+  "status": {
+    "itemId": "song001",
+    "slideIndex": 2
+  },
+  "presentations": [
+    {
+      "itemId": "song001",
+      "title": "Beautiful Savior",
+      "itemKind": "SongLyrics",
+      "slides": [
+        "Beautiful Savior",
+        "Ligne un du verset un\nLigne deux du verset un",
+        "Refrain ligne un\nRefrain ligne deux",
+        "Ligne un du verset deux\nLigne deux du verset deux"
+      ]
+    },
+    {
+      "itemId": "content001",
+      "title": "Call to Worship",
+      "itemKind": "Content",
+      "slides": [
+        "Premier texte d appel au culte",
+        "Deuxieme texte d appel au culte",
+        "Troisieme texte d appel au culte"
+      ]
+    },
+    {
+      "itemId": "bible001",
+      "title": "Scripture Reading",
+      "itemKind": "BiblePassage",
+      "slides": [
+        "John 3 16 \nFor God so loved the world",
+        "John 3 17 \nGod did not send his Son to condemn the world"
+      ]
+    },
+    {
+      "itemId": "image001",
+      "title": "Welcome Slides",
+      "itemKind": "ImageSlideshow",
+      "slides": [
+        ""
+      ]
+    },
+    {
+      "itemId": "blank001",
+      "title": "Blank",
+      "itemKind": "Content",
+      "slides": [
+        ""
+      ]
+    }
+  ]
+}

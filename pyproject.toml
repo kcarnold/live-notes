@@ -18,5 +18,10 @@ dependencies = [
 [dependency-groups]
 dev = [
     "mypy>=1.20.2",
+    "pytest>=9.0.3",
     "types-lxml>=2026.2.16",
 ]
+
+[tool.pytest]
+testpaths = ["tests"]
+pythonpath = ["."]

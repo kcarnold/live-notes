@@ -24,3 +24,8 @@ presentation.json
 
 /doc-dumps
 /ysweet_data
+
+# Captured Proclaim snapshots may contain live service content; keep them local.
+# Synthetic fixtures (named *_synthetic.json) should still be committed.
+tests/proclaim_snapshots/*_captured.json
+tests/proclaim_snapshots/*_captured.expected.json

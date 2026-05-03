@@ -295,93 +295,111 @@ Phase 7 adds `slideAgent`.
 
 ---
 
-## 7. Test Infrastructure (Phase 1 ready-to-use)
+## 7. Test Infrastructure (Phase 1 as built)
 
-### Synthetic fixture: `tests/proclaim_snapshots/2026-01-05_synthetic.json`
+### Snapshot format (actual)
 
-Shape:
 ```json
 {
-  "captured_at": "2026-01-05T10:00:00+00:00",
-  "presentation_id": "aabbccdd11223344",
-  "status_response": { "presentationId": "...", "status": { "itemId": "...", "slideIndex": 0 } },
-  "onair_response": {
-    "serviceItems": [
-      { "id": "item-song-001", "title": "Amazing Grace", "kind": "SongLyrics", "slides": [...] },
-      { "id": "item-content-002", "title": "Call to Worship", "kind": "Content", "slides": [...] },
-      { "id": "item-bible-003", "title": "Romans 8:1-4", "kind": "BiblePassage", "slides": [...] },
-      { "id": "item-image-004", "title": "NCF Slide", "kind": "ImageSlideshow", "slides": [] },
-      { "id": "item-blank-005", "title": "Blank", "kind": "Content", "slides": [] }
-    ]
+  "date": "2026-05-02",
+  "note": "Captured from live Proclaim session",
+  "current_status": { "itemId": "cadcccaa-...", "slideIndex": 3, ... },
+  "presentation_content": {
+    "VirtualScreens": "[{...JSON string...}]"
   },
-  "presentation_row": {
-    "id": "aabbccdd11223344",
-    "content": {
-      "VirtualScreens": "[{...JSON string...}]"  // MUST be JSON string, not parsed list
-    }
-  },
-  "service_items": {
-    "item-song-001": {
-      "ServiceItemId": "itemsong001",
+  "service_items": [
+    {
+      "ServiceItemId": "cadcccaa301848bcb0738e239fc264b7",
+      "Title": "Revelation Song",
       "ServiceItemKind": "SongLyrics",
-      "Title": "Amazing Grace",
-      "Content": "{...JSON string with _richtextfield:Lyrics, slideOutput:0:RichTextXml, CustomOrderSequence, SongDisplayTitle...}"
+      "content_dict": {
+        "_richtextfield:Lyrics": "<Paragraph ...>...",
+        "slideOutput:1:RichTextXml": "<Paragraph ...>...",
+        "CustomOrderSequence": "v1,c,v2",
+        "SongDisplayTitle": "Revelation Song"
+      }
     }
-  }
+  ]
 }
 ```
 
-Key: `service_items` is keyed by dashed ID. Each `Content` field is a JSON
-string containing the rich text XML fields.
+Differences from the design sketch:
+- `service_items` is a **list** (preserves service order), not a dict
+- `content_dict` stores item content as a **parsed dict**, not a JSON string — `MockProclaimDB` serializes it back to `Content` on access
+- `presentation_content` is a flat dict (just the content, not the full row); `VirtualScreens` is still a JSON string inside it
+- `current_status` is the raw status object from the API (includes extra fields like `mediaState`)
+- No `onair_response` or `captured_at` fields
+
+### Expected output files
+
+Each snapshot has a companion `*.expected.json` with the full parse output:
+
+```json
+{
+  "status": { "itemId": "...", "slideIndex": 3, ... },
+  "presentations": [
+    { "itemId": "...", "title": "Revelation Song", "itemKind": "SongLyrics", "slides": [...] }
+  ]
+}
+```
+
+Regenerate with: `uv run tests/update_expected.py [stem] [--force]`
 
 ### MockProclaimDB (`tests/conftest.py`)
 
 ```python
 class MockProclaimDB:
-    def __init__(self, snapshot):
-        self._items = {}
-        for key, row in snapshot['service_items'].items():
-            self._items[key] = row
-            self._items[key.replace('-', '')] = row  # both forms
-        self._presentation = snapshot['presentation_row']
+    def __init__(self, data):
+        self._items = {
+            item["ServiceItemId"].replace("-", ""): item
+            for item in data["service_items"]
+        }
 
     def get_service_item(self, item_id):
-        return self._items.get(item_id)
-
-    def get_presentation(self, presentation_id):
-        # ID matching with dash stripping
+        item = self._items.get(item_id.replace("-", ""))
+        if item is None:
+            return None
+        result = dict(item)
+        if "content_dict" in result:
+            result["Content"] = json.dumps(result.pop("content_dict"))
+        return result
 ```
 
-### Parametrized fixture
+### Parametrized fixtures
 
 ```python
-SNAPSHOT_DIR = Path(__file__).parent / 'proclaim_snapshots'
+@pytest.fixture(
+    params=sorted(p for p in SNAPSHOTS_DIR.glob("*.json") if not p.stem.endswith(".expected")),
+    ids=lambda p: p.stem,
+)
+def snapshot(request): ...
 
-@pytest.fixture(params=_snapshot_files(), ids=_snapshot_ids())
-def snapshot(request):
-    return json.loads(Path(request.param).read_text())
+@pytest.fixture
+def expected(request, snapshot): ...  # loads *.expected.json alongside snapshot, or None
 ```
-
-All tests in `test_proclaim_pipeline.py` accept `snapshot` fixture and run
-against every `.json` file in the snapshots directory.
 
 ### Capture tool (`proclaim_capture.py`)
 
-Env var `PROCLAIM_CAPTURE_DIR` enables capture in `proclaim_service.py`.
-`capture_snapshot()` gathers: API status response, onair response, all
-service item DB rows, presentation row. `save_snapshot()` writes to
-`YYYY-MM-DD_{hash8}.json` with dedup (won't overwrite if content matches).
+Standalone script, not embedded in `proclaim_service.py`. Calls
+`/onair/session` → `/presentations/onair` → `/onair/statusChanged`, fetches
+`presentation_content` from DB via `presentationId` in status response.
+
+Run: `uv run proclaim_capture.py [--output PATH]`
 
 ### pyproject.toml additions
 
 ```toml
-[tool.pytest.ini_options]
+[tool.pytest]
 testpaths = ["tests"]
 pythonpath = ["."]
 ```
 
-`pythonpath = ["."]` is needed so `from conftest import MockProclaimDB`
-works (tests/ is not a package).
+Uses `[tool.pytest]` (pytest 9 native TOML), not `[tool.pytest.ini_options]`.
+
+### Things from the design sketch worth considering
+
+- **Hash-based dedup in capture**: the sketch proposed not overwriting a snapshot if content matches. Useful once passive capture is running.
+- **Passive capture via env var in `proclaim_service.py`**: embedding `PROCLAIM_CAPTURE_DIR` in the service so snapshots accumulate automatically during live use — good for building a test corpus without manual effort.
 
 ---
 

@@ -60,6 +60,12 @@ npm test
 # Run tests without ANSI color codes (useful for agents/CI)
 npm test -- --no-color
 
+# Run Python tests (Proclaim parsing pipeline)
+uv run pytest tests/ -v
+
+# Regenerate Proclaim expected output files after intentional parse changes
+uv run tests/update_expected.py [--force]
+
 # Run specific test file
 npm test -- path/to/test.ts --run
 
@@ -343,6 +349,16 @@ The app has two modes determined by URL hash (`#editor`):
   - Receives real-time updates from editors
   - Read-only Y-Sweet token
   - Can use TTS (auto or manual mode)
+
+## Proclaim Test Infrastructure
+
+Python tests in `tests/` cover the Proclaim parsing pipeline. Two files per snapshot in `tests/proclaim_snapshots/`:
+- `*.json` — input: raw Proclaim DB + API data (captured with `uv run proclaim_capture.py`)
+- `*.expected.json` — approved parse output used for exact-match comparison
+
+`Grouping` service item kind has no slide content and returns `None` from `parse_item_translation` — skip it in tests.
+
+**When starting work on Proclaim parsing or the slide translation agent, read [`docs/agent-research.md`](docs/agent-research.md) first** — it documents gotchas (VirtualScreens double-encoding, ID hyphen stripping, translation screen index math) that are not obvious from the code.
 
 ## Key Files
 
