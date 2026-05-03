@@ -336,7 +336,13 @@ def parse_item_translation(
     item_id: str,
     translation_screen_idx: Optional[int],
 ) -> Optional['ServiceItemWithSlides']:
-    """Extract slides for any item type, populating sourceSlides and storedTranslation."""
+    """Extract slides for any item type, populating sourceSlides and storedTranslation.
+
+    translation_screen_idx=None means no translation screen is configured for this
+    presentation. In that case storedTranslation is left as None and slides falls back
+    to sourceSlides (the untranslated main content). Returns None only if neither the
+    main content key nor the translation screen yields any content.
+    """
     service_item = db.get_service_item(item_id.replace('-', ''))
     if not service_item:
         logger.warning(f"Service item {item_id} not found")
