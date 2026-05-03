@@ -67,6 +67,7 @@ from proclaim_lib import (
     ProclaimDB,
     get_translation_screen_idx,
     parse_item_translation,
+    item_to_yjs_dict,
 )
 
 # Configure logging (default level, can be overridden by --debug flag)
@@ -216,11 +217,7 @@ class ProclaimYjsService:
         item_id = presentation_data.itemId
 
         with self.ydoc.transaction():
-            self.presentations_map[item_id] = {
-                'title': presentation_data.title,
-                'itemId': item_id,
-                'slides': presentation_data.slides
-            }
+            self.presentations_map[item_id] = item_to_yjs_dict(presentation_data)
 
         logger.info(f"Stored service item {item_id} ({presentation_data.title}) with {len(presentation_data.slides)} slides")
 
@@ -255,8 +252,7 @@ class ProclaimYjsService:
 
         translation_idx = get_translation_screen_idx(pres_data['content'])
         if translation_idx is None:
-            logger.warning(f"No translation screen found in presentation {presentation_id}")
-            return False
+            logger.debug(f"No translation screen found in presentation {presentation_id}")
 
         item_with_slides = parse_item_translation(self.db, item_id, translation_idx)
         if not item_with_slides:

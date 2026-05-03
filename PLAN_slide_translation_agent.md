@@ -55,7 +55,7 @@ Later, once the agent is working, we can deprecate `slides` in favor of
 
 ---
 
-## Phase 1: Capture & Test Infrastructure
+## Phase 1: Capture & Test Infrastructure ✅ DONE
 
 **Goal**: Record real Proclaim data for offline testing. Purely additive — no
 behavior changes, no existing code modified.
@@ -89,33 +89,28 @@ ImageSlideshow (blank), Blank content item.
 
 ---
 
-## Phase 2: Extract Source Slides
+## Phase 2: Extract Source Slides ✅ DONE (2026-05-02)
 
 **Goal**: Parse **both** main-screen and translation-screen content from
 Proclaim, sync both to Yjs. Existing viewer unaffected.
 
-**`proclaim_lib.py` changes**:
-- Add `sourceSlides` and `storedTranslation` (both `Optional[List[str]]`) to
-  `ServiceItemWithSlides`
-- New function `parse_item_slides(db, item_id, translation_idx)`:
-  - `translation_idx` is `Optional[int]` (None = no translation screen)
-  - Always extracts main-screen → `sourceSlides`
-  - Extracts translation-screen → `storedTranslation` (when screen exists)
-  - Sets `slides` = `storedTranslation ?? sourceSlides` for backward compat
-- Keep `parse_item_translation()` as alias
+**What was built**:
+- `ServiceItemWithSlides` gains `sourceSlides` and `storedTranslation`
+- `_parse_screen(content, item_kind, screen_idx)` shared helper — None = main
+  content, int = translation screen; `parse_item_translation` now calls it twice
+- `item_to_yjs_dict(item)` pure function used by service and tests
+- `parse_item_translation` signature: `translation_screen_idx: Optional[int]`
+- `_handle_item_change` no longer bails when translation screen is absent
+- `slides` field kept as `storedTranslation ?? sourceSlides` for backward compat
+  (documented in `ServiceItemWithSlides` and `item_to_yjs_dict`)
+- Fixed pre-existing bug: `update_expected.py` was globbing `.expected.json` as snapshots
 
-**`proclaim_service.py` changes**:
-- `update_presentation_item_in_yjs()` writes `sourceSlides`, `itemKind`,
-  and optionally `storedTranslation` alongside existing `slides`
-- `_handle_item_change()` works when `translation_idx is None`
-
-**Tests**: verify both `sourceSlides` and `storedTranslation` extraction.
-
-**Demo**: Yjs inspector shows new fields alongside existing ones.
-
-**Before moving on, decide**:
-- Confirm `sourceSlides`/`storedTranslation` naming
-- Is `storedTranslation` always one language, or mixed French/Haitian per item?
+**Decisions made**:
+- `storedTranslation` is one field — it's whatever is on the translation screen
+  (can be French, Haitian, or mixed depending on the item/service). The agent
+  will treat it as a draft regardless.
+- `slides` backward-compat field is documented as legacy; deprecate once Phase 4
+  updates `CurrentSlideViewer`.
 
 ---
 

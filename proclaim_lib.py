@@ -25,8 +25,13 @@ logger = logging.getLogger(__name__)
 class ServiceItemWithSlides:
     itemId: str
     title: str
+    # Legacy field: storedTranslation when present, else sourceSlides. Kept so
+    # CurrentSlideViewer (which reads only 'slides' from Yjs) keeps working
+    # until it's updated to prefer sourceSlides + agent translations.
     slides: List[str]
     itemKind: str
+    sourceSlides: Optional[List[str]] = None       # main-screen (untranslated)
+    storedTranslation: Optional[List[str]] = None  # translation-screen content from Proclaim
 
 
 def find_presentation_db() -> str:
@@ -269,12 +274,69 @@ def get_slides_for_song(content: dict, content_key: str = '_richtextfield:Lyrics
     return split_into_slides(text)
 
 
+_MAIN_CONTENT_KEYS = {
+    'SongLyrics': '_richtextfield:Lyrics',
+    'Content': '_richtextfield:Main Content',
+    'BiblePassage': '_richtextfield:Passage',
+}
+
+
+def _parse_screen(content: dict, item_kind: str, screen_idx: Optional[int]) -> Optional[List[str]]:
+    """Extract slides for one virtual screen.
+
+    screen_idx=None → main content key for this item kind.
+    screen_idx=n    → slideOutput:{n-1}:RichTextXml.
+    Returns None if the key is absent from content.
+    """
+    if screen_idx is None:
+        key = _MAIN_CONTENT_KEYS.get(item_kind)
+        if not key or key not in content:
+            return None
+    else:
+        key = f'slideOutput:{screen_idx - 1}:RichTextXml'
+        if key not in content:
+            return None
+
+    text = decode_richtext_xml(content[key])
+
+    if item_kind == 'SongLyrics':
+        sections = split_into_song_sections(text)
+        order_str = content.get('CustomOrderSequence', '')
+        slides = get_slides_in_order(sections, order_str)
+        if title := content.get('SongDisplayTitle'):
+            slides.insert(0, title)
+    else:
+        slides = split_into_slides(text)
+
+    return slides
+
+
+def item_to_yjs_dict(item: 'ServiceItemWithSlides') -> dict:
+    """Convert a ServiceItemWithSlides to the dict written to Yjs.
+
+    The 'slides' field is storedTranslation ?? sourceSlides — it exists only
+    for backward compatibility with CurrentSlideViewer. New consumers should
+    read sourceSlides or storedTranslation directly.
+    """
+    d: Dict[str, Any] = {
+        'title': item.title,
+        'itemId': item.itemId,
+        'slides': item.slides,
+        'itemKind': item.itemKind,
+    }
+    if item.sourceSlides is not None:
+        d['sourceSlides'] = item.sourceSlides
+    if item.storedTranslation is not None:
+        d['storedTranslation'] = item.storedTranslation
+    return d
+
+
 def parse_item_translation(
-    db: ProclaimDB,
+    db: 'ProclaimDB',
     item_id: str,
-    translation_screen_idx: int,
-) -> Optional[ServiceItemWithSlides]:
-    """Extract translated slides for any item type."""
+    translation_screen_idx: Optional[int],
+) -> Optional['ServiceItemWithSlides']:
+    """Extract slides for any item type, populating sourceSlides and storedTranslation."""
     service_item = db.get_service_item(item_id.replace('-', ''))
     if not service_item:
         logger.warning(f"Service item {item_id} not found")
@@ -292,46 +354,30 @@ def parse_item_translation(
                 title=item_title,
                 slides=[''],
                 itemKind=item_kind,
+                sourceSlides=[''],
+                storedTranslation=None,
             )
 
-        translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
+        source = _parse_screen(content, item_kind, None)
+        stored = _parse_screen(content, item_kind, translation_screen_idx) if translation_screen_idx is not None else None
 
-        # Try translation first, fall back to main content
-        if translation_key in content:
-            source_xml = content[translation_key]
-        else:
-            # Fall back to main slide text
-            main_content_keys = {
-                'SongLyrics': '_richtextfield:Lyrics',
-                'Content': '_richtextfield:Main Content',
-                'BiblePassage': '_richtextfield:Passage',
-            }
-            fallback_key = main_content_keys.get(item_kind)
-            if fallback_key and fallback_key in content:
-                logger.warning(f"No translation for {item_id}, falling back to main content")
-                source_xml = content[fallback_key]
-            else:
-                logger.warning(f"No translation or main content found for {item_id}")
-                return None
+        if stored is None and source is None:
+            logger.warning(f"No content found for {item_id}")
+            return None
 
-        source_text = decode_richtext_xml(source_xml)
+        if stored is None and source is not None:
+            logger.warning(f"No translation screen content for {item_id}, using source")
 
-        if item_kind == 'SongLyrics':
-            sections = split_into_song_sections(source_text)
-            order_str = content.get('CustomOrderSequence', '')
-            slides = get_slides_in_order(sections, order_str)
-
-            if title := content.get('SongDisplayTitle'):
-                slides.insert(0, title)
-        else:
-            slides = split_into_slides(source_text)
+        slides = stored or source
 
         return ServiceItemWithSlides(
             itemId=item_id,
             title=item_title,
             slides=slides,
             itemKind=item_kind,
+            sourceSlides=source,
+            storedTranslation=stored,
         )
     except Exception as e:
-        logger.error(f"Error parsing translation for {item_id}: {e}")
+        logger.error(f"Error parsing item {item_id}: {e}")
         return None
