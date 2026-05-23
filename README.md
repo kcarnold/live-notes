@@ -69,7 +69,6 @@ Environment variables are loaded from `.env` automatically.
 ## Project Details
 
 This is a live translation application for presentations/talks. It provides:
-- Real-time speech transcription (Web Speech API)
 - AI-powered translation (Google Gemini)
 - Text-to-speech output (ElevenLabs)
 - Collaborative editing (Y-Sweet/Yjs)

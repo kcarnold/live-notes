@@ -4,14 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **live translation application** for presentations/talks. It provides real-time speech transcription and AI-powered translation into multiple languages, displayed in configurable layouts. The system uses:
+This is a **live translation application** for presentations/talks. It provides AI-powered translation into multiple languages, displayed in configurable layouts. The system uses:
 
 - **Real-time collaboration**: Y-Sweet/Yjs for shared state across viewers
-- **Speech transcription**: Web Speech API (browser-native) for live speech-to-text
 - **Translation**: Google Gemini for AI-powered translation
 - **Text-to-Speech**: ElevenLabs for audio playback of translations
 - **Proclaim integration**: Python service syncing Proclaim presentation slides to Yjs
-- **Rich text editing**: ProseMirror for collaborative markdown editing
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
 
@@ -104,8 +102,6 @@ The app uses **Yjs** for real-time collaborative state management:
 1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status
 2. **Shared Y.Doc** per session: Each session (identified by `?doc=doc-YYYY-MM-DD`) has a shared Yjs document
 3. **Key shared data structures**:
-   - `transcriptDoc` (XmlFragment): Live transcription from speech
-   - `prosemirror` (XmlFragment): User-edited source text for translation
    - `translatedText-{language}` (Y.Text): Translated output for each language
    - `meta` (Y.Map): Metadata (unused currently)
    - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
@@ -213,7 +209,7 @@ This ensures:
 
 ### Block-Based Editor
 
-The app includes a **block-based collaborative editor** ([BlockEditor.tsx](src/BlockEditor.tsx)) as an alternative to ProseMirror:
+The app includes a **block-based collaborative editor** ([BlockEditor.tsx](src/BlockEditor.tsx)) for managing the source text for the outline:
 
 #### Architecture
 - **Yjs-backed blocks**: Each block stored as `Y.Map` in a `Y.Array`
@@ -247,17 +243,6 @@ textarea.style.height = '0px';
 textarea.style.height = textarea.scrollHeight + 'px';
 ```
 This ensures textareas are exactly the right height without extra lines.
-
-### ProseMirror Integration
-
-The app also uses ProseMirror for collaborative rich text editing:
-
-- **Yjs binding**: [y-prosemirror](https://github.com/yjs/y-prosemirror) synchronizes ProseMirror state with Y.XmlFragment
-- **Markdown serialization** ([ProseMirrorEditor.tsx:74-83](ProseMirrorEditor.tsx#L74-L83)): Content is converted to markdown on every change
-- **Custom keybindings** ([ProseMirrorEditor.tsx:54-68](ProseMirrorEditor.tsx#L54-L68)):
-  - `Mod-z/y`: Undo/redo (Yjs-aware)
-  - `Tab/Shift-Tab`: List item indent/outdent
-  - `Mod-Enter`: Trigger translation
 
 ### Proclaim Integration
 
@@ -321,9 +306,9 @@ The install script:
 
 The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395)):
 
-- Layouts are encoded in the URL path: `/transcript,sourceText|translatedText-French,currentSlide`
+- Layouts are encoded in the URL path: `/sourceText|translatedText-French,currentSlide`
 - Format: rows separated by `|`, columns separated by `,`
-- Components: `transcript`, `sourceText`, `translatedText-{language}`, `bilingual-{language}`, `currentSlide`
+- Components: `sourceText`, `translatedText-{language}`, `bilingual-{language}`, `currentSlide`
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
 - Example with Proclaim: `/translatedText-French,currentSlide` shows translation and current slide side-by-side
@@ -333,7 +318,6 @@ The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395))
 The app has two modes determined by URL hash (`#editor`):
 
 - **Editor mode** (`#editor`):
-  - Can transcribe speech
   - Can edit source text
   - Can trigger translations
   - Has full Y-Sweet write access
@@ -353,7 +337,6 @@ The app has two modes determined by URL hash (`#editor`):
 
 ### Frontend Core
 - [App.tsx](src/App.tsx) - Main React app with routing and layout system
-- [ProseMirrorEditor.tsx](src/ProseMirrorEditor.tsx) - Collaborative rich text editor
 - [translationUtils.ts](src/translationUtils.ts) - Translation pipeline logic (chunking, caching, reconstruction)
 - [yjsUtils.ts](src/yjsUtils.ts) - Yjs utility functions and React hooks
 
@@ -361,7 +344,6 @@ The app has two modes determined by URL hash (`#editor`):
 - [BlockEditor.tsx](src/BlockEditor.tsx) - Block-based collaborative editor with Yjs backing
 - [blockTypes.ts](src/blockTypes.ts) - Block data structures and utilities
 - [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
-- [SpeechTranscriber.tsx](src/SpeechTranscriber.tsx) - Web Speech API integration for live transcription
 - [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer with TTS controls and auto-play logic
 - [TranslatedTextViewerContainer.tsx](src/TranslatedTextViewerContainer.tsx) - Yjs connector for TranslatedTextViewer
 - [BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx) - Shows blocks with original text and translation side-by-side
@@ -389,10 +371,6 @@ yText.insert(0, 'new content');  // Insert
 const yMap = ydoc.getMap('key');
 yMap.set('field', 'value');
 yMap.get('field');
-
-// Y.XmlFragment (for ProseMirror)
-const fragment = ydoc.getXmlFragment('prosemirror');
-// Modified via y-prosemirror plugin
 ```
 
 ### UI Localization

@@ -65,17 +65,4 @@
 }
 
 @layer components {
-  .ProseMirror {
-    @apply border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 dark:text-gray-100 p-2 rounded;
-  }
-
-  .ProseMirror:focus {
-    @apply outline-none ring-2 ring-blue-500 dark:ring-blue-600;
-  }
-
-
-  /* Better selection styling in dark mode */
-  .ProseMirror ::selection {
-    @apply bg-blue-200 dark:bg-blue-800;
-  }
 }

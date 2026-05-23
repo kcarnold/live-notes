@@ -15,7 +15,6 @@
   "dependencies": {
     "@elevenlabs/elevenlabs-js": "^2.17.0",
     "@google/genai": "^0.9.0",
-    "@handlewithcare/react-prosemirror": "^2.4.2",
     "@posthog/ai": "^7.0.0",
     "@tailwindcss/vite": "^4.0.12",
     "@y-sweet/react": "^0.8.2",
@@ -30,12 +29,6 @@
     "p-limit": "^7.1.1",
     "posthog-js": "^1.347.2",
     "posthog-node": "^5.24.15",
-    "prosemirror-example-setup": "^1.2.3",
-    "prosemirror-markdown": "^1.13.1",
-    "prosemirror-model": "^1.25.1",
-    "prosemirror-schema-basic": "^1.2.4",
-    "prosemirror-state": "^1.4.3",
-    "prosemirror-view": "1.39.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-reconciler": "0.32.0",
@@ -45,7 +38,6 @@
     "unified": "11",
     "uuid": "^13.0.0",
     "ws": "^8.18.1",
-    "y-prosemirror": "^1.2.17",
     "y-protocols": "^1.0.6",
     "y-textarea": "^1.0.2",
     "yjs": "^13.6.24"

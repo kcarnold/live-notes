@@ -14,7 +14,6 @@ export interface AppStrings {
   disconnected: string;
 
   // Component headers
-  transcript: string;
   translation: string;
   bilingual: string;
 
@@ -53,7 +52,6 @@ export interface AppStrings {
   goHome: string;
 
   // Layout diagram component labels
-  componentTranscript: string;
   componentSourceText: string;
   componentTranslatedText: string;
   componentBilingual: string;
@@ -64,7 +62,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
   en: {
     connecting: 'Connecting...',
     disconnected: 'Disconnected',
-    transcript: 'Transcript',
     translation: 'Translation',
     bilingual: 'Bilingual',
     chooseLayout: 'Choose Layout',
@@ -87,7 +84,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Next',
     untitledPresentation: 'Untitled Presentation',
     goHome: 'Go home',
-    componentTranscript: 'Transcript',
     componentSourceText: 'Source Text',
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
@@ -96,7 +92,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
   fr: {
     connecting: 'Connexion\u2026',
     disconnected: 'D\u00e9connect\u00e9',
-    transcript: 'Transcription',
     translation: 'Traduction',
     bilingual: 'Bilingue',
     chooseLayout: 'Choisir la mise en page',
@@ -119,7 +114,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Suivant',
     untitledPresentation: 'Pr\u00e9sentation sans titre',
     goHome: 'Accueil',
-    componentTranscript: 'Transcription',
     componentSourceText: 'Texte source',
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
@@ -128,7 +122,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
   es: {
     connecting: 'Conectando\u2026',
     disconnected: 'Desconectado',
-    transcript: 'Transcripci\u00f3n',
     translation: 'Traducci\u00f3n',
     bilingual: 'Biling\u00fce',
     chooseLayout: 'Elegir dise\u00f1o',
@@ -151,7 +144,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Siguiente',
     untitledPresentation: 'Presentaci\u00f3n sin t\u00edtulo',
     goHome: 'Ir al inicio',
-    componentTranscript: 'Transcripci\u00f3n',
     componentSourceText: 'Texto fuente',
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
@@ -160,7 +152,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
   ht: {
     connecting: 'Koneksyon\u2026',
     disconnected: 'Dekonekte',
-    transcript: 'Transkripsyon',
     translation: 'Tradiksyon',
     bilingual: 'Bileng',
     chooseLayout: 'Chwazi Dispozisyon',
@@ -183,7 +174,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Apr\u00e8',
     untitledPresentation: 'Prezantasyon San Tit',
     goHome: 'Retounen lakay',
-    componentTranscript: 'Transkripsyon',
     componentSourceText: 'Teks sous',
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',

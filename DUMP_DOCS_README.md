@@ -23,7 +23,7 @@ node dump-docs.ts [output-dir]
    - **transcription**: Speech transcription from Web Speech API
      - `plainText`: Extracted plain text
      - `structure`: Full XML structure
-   - **sourceTextProseMirror**: Rich text from ProseMirror editor
+   - **sourceTextProseMirror**: Rich text from ProseMirror editor (old, deprecated)
      - `plainText`: Extracted plain text
      - `structure`: Full XML structure
    - **sourceTextBlocks**: Block editor content

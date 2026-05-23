@@ -4,19 +4,16 @@ import {
   useYDoc,
   YDocProvider,
 } from "@y-sweet/react";
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import "./App.css";
 
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom } from "jotai";
 import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
 import { LayoutDiagram } from "./LayoutDiagram";
-import { useScrollToBottom } from "./reactUtils";
-import SpeechTranscriber from "./SpeechTranscriber";
 import TranslatedTextViewerContainer from "./TranslatedTextViewerContainer";
 import type { ClientToken } from "@y-sweet/sdk";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
-import ProseMirrorEditor from "./ProseMirrorEditorLazy";
 import { PostHogErrorBoundary } from "posthog-js/react";
 import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
@@ -43,27 +40,6 @@ function ConnectionStatusWidget({
   );
 }
 
-function TranscriptViewer({ editable = false }: { editable?: boolean }) {
-  const yDoc = useYDoc();
-  const transcriptXml = yDoc.getXmlFragment("transcriptDoc");
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-  const [transcriptText, setTranscriptText] = useState("");
-  useScrollToBottom(scrollContainerRef, transcriptEndRef, [transcriptText], true);
-
-  return (
-    <div ref={scrollContainerRef} className="p-compact overflow-auto">
-      <ProseMirrorEditor
-        yXmlFragment={transcriptXml}
-        onTextChanged={setTranscriptText}
-        editable={editable}
-        onTranslationTrigger={() => null} // No-op, no translation in this viewer
-        />
-      <div ref={transcriptEndRef} className="h-0 w-0" />
-    </div>
-  );
-}
-
 // Layouts: each is an array of arrays of component keys
 const availableLayouts = [
   {
@@ -84,7 +60,7 @@ const availableLayouts = [
     key: 'full',
     labelKey: 'layoutEverything' as const,
     layout: [
-      ["transcript", "sourceText"],
+      ["sourceText"],
       ["translatedText", "currentSlide"]
     ]
   },
@@ -129,7 +105,6 @@ function HomePage() {
           );
         })}
         <div className="text-center mb-4">
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/transcript,sourceText|translatedText-French,currentSlide#editor">Transcriber</a> |{" "}
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedText-French#editor">Note-Taker</a>
         </div>
       </div>
@@ -138,7 +113,6 @@ function HomePage() {
 }
 
 function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace: (newName: string) => void }) {
-  const isEditor = useAtomValue(isEditorAtom);
   const [fontSize, setFontSize] = useAtom(fontSizeAtom);
   const ydoc = useYDoc();
   const s = useStrings();
@@ -187,17 +161,6 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
   );
 
   const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
-
-  if (componentStr === 'transcript') {
-    return (
-      <div className={cardClass + " flex-1/2 min-h-0 bg-gray-50/80 dark:bg-gray-900/60 text-black dark:text-gray-200"}>
-        {isEditor ? <SpeechTranscriber /> : (
-          <h2 className="font-semibold text-xs text-gray-600 dark:text-gray-300 leading-tight">{s.transcript}</h2>
-        )}
-        <TranscriptViewer editable={isEditor} />
-      </div>
-    );
-  }
 
   if (componentStr === 'sourceText') {
     return (
@@ -267,7 +230,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
   // Track current layout in state so we can update it when URL changes
   const [layout, setLayout] = useState(initialLayout);
 
-  // Parse layout from URL: e.g. "transcript,translatedText-French|currentSlide" => [["transcript", "translatedText-French"], ["currentSlide"]]
+  // Parse layout from URL: e.g. "sourceText,translatedText-French|currentSlide" => [["sourceText", "translatedText-French"], ["currentSlide"]]
   function parseLayoutString(layoutStr: string | undefined): string[][] {
     if (!layoutStr) return [];
     return layoutStr.split("|").map(row => row.split(","));

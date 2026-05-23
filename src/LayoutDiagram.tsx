@@ -2,7 +2,6 @@ import { useStrings } from "./useLocale";
 
 // --- LayoutDiagram helper for visualizing layouts ---
 const componentColors: Record<string, string> = {
-  transcript: "bg-green-300 dark:bg-green-700",
   sourceText: "bg-yellow-200 dark:bg-yellow-600",
   translatedText: "bg-purple-200 dark:bg-purple-700",
   bilingual: "bg-pink-200 dark:bg-pink-700",
@@ -12,7 +11,6 @@ const componentColors: Record<string, string> = {
 export function LayoutDiagram({ layout }: { layout: string[][] }) {
   const s = useStrings();
   const humanLabels: Record<string, string> = {
-    transcript: s.componentTranscript,
     sourceText: s.componentSourceText,
     translatedText: s.componentTranslatedText,
     bilingual: s.componentBilingual,
