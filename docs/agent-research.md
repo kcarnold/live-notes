@@ -25,8 +25,8 @@ Phase 2 adds: `sourceSlides: Optional[List[str]] = None`,
 ### Yjs data written by proclaim_service.py
 
 ```python
-# proclaimPresentations Y.Map — keyed by item_id
-presentations_map[item_id] = {
+# proclaimServiceItems Y.Map — keyed by item_id
+service_items_map[item_id] = {
     'title': str,
     'itemId': str,
     'slides': list[str],  # currently = translation-screen content
@@ -38,14 +38,14 @@ status_map['slideIndex'] = int
 ```
 
 Phase 2 adds `sourceSlides`, `storedTranslation`, `itemKind` to the
-presentations_map entry. Phase 3 adds `proclaimServiceOrder` Y.Array.
+service_items_map entry. Phase 3 adds `proclaimServiceOrder` Y.Array.
 
 ### CurrentSlideViewer reads from Yjs (`CurrentSlideViewer.tsx:89-124`)
 
 ```typescript
 const statusMap = useMap('proclaimStatus');
-const presentationsMap = useMap('proclaimPresentations');
-// reads: presentation.title, presentation.slides (cast as {title: string; slides: string[]})
+const serviceItemsMap = useMap('proclaimServiceItems');
+// reads: serviceItem.title, serviceItem.slides (cast as {title: string; slides: string[]})
 ```
 
 ---
@@ -225,7 +225,7 @@ Max 20 iterations. AbortController for cancellation.
 
 ### Tool: get_service_order
 
-Reads `proclaimServiceOrder` Y.Array and `proclaimPresentations` Y.Map.
+Reads `proclaimServiceOrder` Y.Array and `proclaimServiceItems` Y.Map.
 Returns:
 ```json
 {

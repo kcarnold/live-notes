@@ -174,7 +174,7 @@ class ProclaimYjsService:
 
         # Yjs state
         self.ydoc: Doc = Doc()
-        self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
+        self.service_items_map = self.ydoc.get('proclaimServiceItems', type=Map)
         self.status_map = self.ydoc.get('proclaimStatus', type=Map)
 
         # State tracking
@@ -212,12 +212,12 @@ class ProclaimYjsService:
             return response.json()
 
 
-    def update_presentation_item_in_yjs(self, presentation_data: ServiceItemWithSlides):
-        """Store full presentation data in Yjs"""
+    def update_service_item_in_yjs(self, presentation_data: ServiceItemWithSlides):
+        """Store full service item data in Yjs"""
         item_id = presentation_data.itemId
 
         with self.ydoc.transaction():
-            self.presentations_map[item_id] = item_to_yjs_dict(presentation_data)
+            self.service_items_map[item_id] = item_to_yjs_dict(presentation_data)
 
         logger.info(f"Stored service item {item_id} ({presentation_data.title}) with {len(presentation_data.slides)} slides")
 
@@ -245,12 +245,12 @@ class ProclaimYjsService:
             logger.warning("No presentation ID in status response")
             return False
 
-        pres_data = self.db.get_presentation(presentation_id)
-        if not pres_data:
+        item_db_data = self.db.get_presentation(presentation_id)
+        if not item_db_data:
             logger.warning(f"Presentation {presentation_id} not found in database")
             return False
 
-        translation_idx = get_translation_screen_idx(pres_data['content'])
+        translation_idx = get_translation_screen_idx(item_db_data['content'])
         if translation_idx is None:
             logger.debug(f"No translation screen found in presentation {presentation_id}")
 
@@ -258,7 +258,7 @@ class ProclaimYjsService:
         if not item_with_slides:
             return False
 
-        self.update_presentation_item_in_yjs(item_with_slides)
+        self.update_service_item_in_yjs(item_with_slides)
         self.current_item_slides = item_with_slides
         self.update_status_in_yjs(item_id, slide_index)
         self.last_item_id = item_id

@@ -10,7 +10,7 @@ findings and implementation reference.
 - `proclaim_lib.py`: `parse_item_translation()` extracts **translation-screen**
   content into `ServiceItemWithSlides.slides`
 - `proclaim_service.py`: writes `{title, itemId, slides}` to Yjs
-  `proclaimPresentations` map — where `slides` = translation-screen text
+  `proclaimServiceItems` map — where `slides` = translation-screen text
 - `CurrentSlideViewer.tsx`: reads `{title, slides}` from Yjs and displays them
 - No test infrastructure for Proclaim parsing
 - No agent, no chat endpoint, no chat UI

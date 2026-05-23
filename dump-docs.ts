@@ -214,10 +214,10 @@ async function dumpDocument(docId: string): Promise<any> {
       data.notesTranslationCache = serializeMap(notesTranslationCache);
     }
 
-    // proclaimPresentations (Map)
-    const proclaimPresentations = ydoc.getMap('proclaimPresentations');
-    if (proclaimPresentations.size > 0) {
-      data.proclaimPresentations = serializeMap(proclaimPresentations);
+    // proclaimServiceItems (Map)
+    const proclaimServiceItems = ydoc.getMap('proclaimServiceItems');
+    if (proclaimServiceItems.size > 0) {
+      data.proclaimServiceItems = serializeMap(proclaimServiceItems);
     }
 
     // proclaimStatus (Map)

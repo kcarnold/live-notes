@@ -89,7 +89,7 @@ export function CurrentSlideViewer({
 export function CurrentSlideViewerContainer() {
   const s = useStrings();
   const statusMap = useMap('proclaimStatus');
-  const presentationsMap = useMap('proclaimPresentations');
+  const serviceItemsMap = useMap('proclaimServiceItems');
 
   try {
     // Read current status
@@ -99,14 +99,14 @@ export function CurrentSlideViewerContainer() {
     }
     const slideIndex = (statusMap.get('slideIndex') as number) ?? 0;
 
-    // Read presentation data
-    const presentation = presentationsMap.get(itemId) as { title: string; slides: string[] } | undefined;
-    if (!presentation) {
-      throw new Error('Presentation not found');
+    // Read service item data
+    const serviceItem = serviceItemsMap.get(itemId) as { title: string; slides: string[] } | undefined;
+    if (!serviceItem) {
+      throw new Error('Service item not found');
     }
 
-    const title = presentation.title || s.untitledPresentation;
-    const slidesArray = presentation.slides || [];
+    const title = serviceItem.title || s.untitledPresentation;
+    const slidesArray = serviceItem.slides || [];
     const slides: string[] = [];
 
     if (slidesArray.length > 0) {

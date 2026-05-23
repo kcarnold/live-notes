@@ -32,7 +32,7 @@ node dump-docs.ts [output-dir]
    - **translatedTexts**: Translations for each language (French, Spanish, etc.)
    - **meta**: Metadata (video settings, etc.)
    - **notesTranslationCache**: Translation cache
-   - **proclaimPresentations**: Proclaim presentation data
+   - **proclaimServiceItems**: Proclaim presentation data
    - **proclaimStatus**: Current Proclaim slide status
 
 4. Saves two types of files:

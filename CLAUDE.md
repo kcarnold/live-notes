@@ -115,7 +115,7 @@ The app uses **Yjs** for real-time collaborative state management:
    - `translatedText-{language}` (Y.Text): Translated output for each language
    - `meta` (Y.Map): Metadata (unused currently)
    - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
-   - `proclaimPresentations` (Y.Map): Maps itemId → presentation data (title, slides)
+   - `proclaimServiceItems` (Y.Map): Maps itemId → presentation data (title, slides)
    - `proclaimStatus` (Y.Map): Current Proclaim status (itemId, slideIndex)
 
 ### Translation Pipeline
@@ -285,7 +285,7 @@ Proclaim API/DB → Python Service → Y-Sweet → React Components
 ```
 
 The Python service syncs to two Yjs data structures:
-- `proclaimPresentations` (Y.Map): Maps itemId → `{title, itemId, slides, sourceSlides, storedTranslation, itemKind}` — `slides`: legacy translation-screen content; `sourceSlides`: main-screen source text; `storedTranslation`: existing Proclaim translation; `itemKind`: item type
+- `proclaimServiceItems` (Y.Map): Maps itemId → `{title, itemId, slides, sourceSlides, storedTranslation, itemKind}` — `slides`: legacy translation-screen content; `sourceSlides`: main-screen source text; `storedTranslation`: existing Proclaim translation; `itemKind`: item type
 - `proclaimStatus` (Y.Map): Current status `{itemId, slideIndex}`
 
 #### React Components

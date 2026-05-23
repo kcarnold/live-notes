@@ -12,8 +12,9 @@ The integration uses **Yjs** for real-time synchronization:
    - Updates Yjs shared state via Y-Sweet WebSocket connection
 
 2. **Yjs Shared State**
-   - `proclaimPresentations` (Y.Map) - Maps itemId → presentation data
-     - Each presentation contains: `{title: string, itemId: string, slides: Y.Array<string>}`
+   - `proclaimServiceItems` (Y.Map) - Maps itemId → service item data
+     - Each entry contains: `{title: string, itemId: string, slides: Y.Array<string>}`
+     - **Schema history**: renamed from `proclaimPresentations` (2026-05-23) — "presentation" referred to the whole service, not an item
    - `proclaimStatus` (Y.Map) - Current status: `{itemId: string, slideIndex: number}`
 
 3. **React Components** (`CurrentSlideViewer.tsx`)
@@ -75,7 +76,7 @@ When a new presentation is detected:
 - Queries Proclaim SQLite database for service item content
 - Parses rich text XML to extract slide text
 - Decodes the custom order sequence to get slides in correct order
-- Stores full presentation in `proclaimPresentations` Yjs map
+- Stores full presentation in `proclaimServiceItems` Yjs map
 - Updates `proclaimStatus` with current itemId and slideIndex
 - Sends update to Y-Sweet WebSocket
 
