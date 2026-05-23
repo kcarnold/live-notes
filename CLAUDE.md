@@ -285,7 +285,7 @@ Proclaim API/DB → Python Service → Y-Sweet → React Components
 ```
 
 The Python service syncs to two Yjs data structures:
-- `proclaimPresentations` (Y.Map): Maps itemId → `{title, itemId, slides: string[]}`
+- `proclaimPresentations` (Y.Map): Maps itemId → `{title, itemId, slides, sourceSlides, storedTranslation, itemKind}` — `slides`: legacy translation-screen content; `sourceSlides`: main-screen source text; `storedTranslation`: existing Proclaim translation; `itemKind`: item type
 - `proclaimStatus` (Y.Map): Current status `{itemId, slideIndex}`
 
 #### React Components
@@ -360,12 +360,15 @@ Python tests in `tests/` cover the Proclaim parsing pipeline. Two files per snap
 
 **When starting work on Proclaim parsing or the slide translation agent, read [`docs/agent-research.md`](docs/agent-research.md) first** — it documents gotchas (VirtualScreens double-encoding, ID hyphen stripping, translation screen index math) that are not obvious from the code.
 
+**The phased implementation plan is in [`PLAN_slide_translation_agent.md`](PLAN_slide_translation_agent.md)** — start here when continuing slide translation agent work.
+
 ## Key Files
 
 ### Backend
 - [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
 - [nlp.ts](nlp.ts) - Gemini API integration for translation
 - [proclaim_service.py](proclaim_service.py) - Python service that syncs Proclaim presentation data to Yjs
+- [proclaim_lib.py](proclaim_lib.py) - Core Proclaim parsing library (SQLite DB reading, XML parsing, slide extraction)
 
 ### Frontend Core
 - [App.tsx](src/App.tsx) - Main React app with routing and layout system
