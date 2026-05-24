@@ -158,7 +158,7 @@ describe('useTTS', () => {
       expect(onFinished).not.toHaveBeenCalledWith('First text');
     });
 
-    it('should ignore fetch completion if request was superseded', async () => {
+    it('should ignore fetch completion if request was superseded', () => {
       const onFinished = vi.fn();
 
       // Make fetch slow
@@ -196,7 +196,7 @@ describe('useTTS', () => {
       expect(result.current.currentText).toBe('Second text');
     });
 
-    it('should handle cancel during loading', async () => {
+    it('should handle cancel during loading', () => {
       const onFinished = vi.fn();
 
       // Make fetch slow
