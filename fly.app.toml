@@ -1,0 +1,42 @@
+# fly.toml app configuration file generated for live-outline-app on 2026-05-23T23:00:27-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'live-outline-app'
+primary_region = 'ord'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+  [build.args]
+    POSTHOG_CLI_ENV_ID = ''
+    POSTHOG_CLI_HOST = ''
+    VITE_PUBLIC_POSTHOG_HOST = ''
+    VITE_PUBLIC_POSTHOG_KEY = ''
+
+[env]
+  PORT = '5008'
+  YSWEET_CONNECTION_STRING = 'ys://live-outline-ysweet.internal:8080'
+
+[[mounts]]
+  source = 'audio_cache'
+  destination = '/usr/src/app/audio-cache'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 5008
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024
