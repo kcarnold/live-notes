@@ -132,7 +132,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
         aria-label={s.decreaseFontSize}
         onClick={() => setFontSize(Math.max(10, (fontSize || 16) - 2))}
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" role="img" aria-label={s.decreaseFontSize}>
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
         </svg>
       </button>
@@ -141,7 +141,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
         aria-label={s.increaseFontSize}
         onClick={() => setFontSize(Math.min(32, (fontSize || 16) + 2))}
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" role="img" aria-label={s.increaseFontSize}>
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
         </svg>
       </button>
@@ -255,6 +255,7 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
     if (col.length === 0) return null;
     return (
       <div
+        // biome-ignore lint/suspicious/noArrayIndexKey: The array index is stable
         key={i}
         className={
           parsedLayout.length === 1
