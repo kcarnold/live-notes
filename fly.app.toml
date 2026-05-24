@@ -17,7 +17,7 @@ primary_region = 'ord'
 
 [env]
   PORT = '5008'
-  YSWEET_CONNECTION_STRING = 'ys://live-outline-ysweet.internal:8080'
+  YSWEET_CONNECTION_STRING = 'yss://live-outline-ysweet.fly.dev'
 
 [[mounts]]
   source = 'audio_cache'
