@@ -5,6 +5,7 @@ import { generateKeyBetween } from 'fractional-indexing';
 import {
   Block,
   BlockType,
+  BlockYMap,
   createBlock,
   yMapToBlock,
   updateYMap,
@@ -19,7 +20,7 @@ import {
 const SHOW_BUTTONS = true;
 
 interface BlockEditorProps {
-  yArray: Y.Array<Y.Map<any>>;
+  yArray: Y.Array<BlockYMap>;
   onTextChanged?: (markdown: string) => void;
   onBlocksChanged?: (blocks: Block[]) => void;
   editable?: boolean;
@@ -28,7 +29,7 @@ interface BlockEditorProps {
 
 interface BlockItemProps {
   blockId: string;
-  yArray: Y.Array<Y.Map<any>>;
+  yArray: Y.Array<BlockYMap>;
   isFocused: boolean;
   isFirst: boolean;
   isLast: boolean;
@@ -333,7 +334,7 @@ export function BlockEditor({ yArray, onTextChanged, onBlocksChanged, editable =
       const nextPos = currentIndex < sortedBlocks.length - 1
         ? sortedBlocks[currentIndex + 1].position
         : null;
-      const newPosition = generateKeyBetween(currentPos, nextPos) as string;
+      const newPosition = generateKeyBetween(currentPos, nextPos);
 
       const newBlock = createBlock(
         content,

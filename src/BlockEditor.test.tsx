@@ -3,13 +3,13 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Y from 'yjs';
 import { BlockEditor } from './BlockEditor';
-import { createBlock, getPosition, addBlockToYArray, createSequentialPositions } from './blockTypes';
+import { createBlock, getPosition, addBlockToYArray, createSequentialPositions, type BlockYMap } from './blockTypes';
 
 const positions = createSequentialPositions(10);
 
 describe('BlockEditor', () => {
   let ydoc: Y.Doc;
-  let yArray: Y.Array<Y.Map<any>>;
+  let yArray: Y.Array<BlockYMap>;
 
   beforeEach(() => {
     ydoc = new Y.Doc();
@@ -112,13 +112,14 @@ describe('BlockEditor', () => {
       await waitFor(() => {
         const yMap = yArray.get(0);
         const yText = yMap.get('content') as Y.Text;
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         expect(yText.toString()).toBe('Updated text');
       });
     });
 
     it('calls onTextChanged callback when content changes', async () => {
       const user = userEvent.setup();
-      const onTextChanged = vi.fn();
+      const onTextChanged = vi.fn<(markdown: string) => void>();
       const positions = createSequentialPositions(1);
       const block = createBlock('Test', 'bullet', 0, positions[0]);
       addBlockToYArray(yArray, block);
@@ -178,7 +179,9 @@ describe('BlockEditor', () => {
         expect(yArray.length).toBe(2);
         const block1 = yArray.get(0);
         const block2 = yArray.get(1);
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         expect((block1.get('content') as Y.Text).toString()).toBe('Hello ');
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         expect((block2.get('content') as Y.Text).toString()).toBe('World');
       });
     });
@@ -354,6 +357,7 @@ describe('BlockEditor', () => {
         expect(yMap.get('type')).toBe('heading');
         expect(yMap.get('level')).toBe(0);
         // Content should not include the #
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         expect((yMap.get('content') as Y.Text).toString()).toBe('Test');
       });
     });
@@ -393,6 +397,7 @@ describe('BlockEditor', () => {
         const yMap = yArray.get(0);
         expect(yMap.get('level')).toBe(5);
         // Content should not include the #
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         expect((yMap.get('content') as Y.Text).toString()).toBe('Test');
       });
     });
@@ -414,6 +419,7 @@ describe('BlockEditor', () => {
         const yMap = yArray.get(0);
         expect(yMap.get('type')).toBe('bullet');
         // Content should include the #
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         expect((yMap.get('content') as Y.Text).toString()).toBe('Test#');
       });
     });
@@ -549,6 +555,7 @@ describe('BlockEditor', () => {
       await waitFor(() => {
         // Check that second block now has a position before first
         const blocks = yArray.toArray().map(yMap => ({
+          // eslint-disable-next-line @typescript-eslint/no-base-to-string
           content: (yMap.get('content') as Y.Text).toString(),
           position: yMap.get('position') as string
         }));
@@ -575,6 +582,7 @@ describe('BlockEditor', () => {
 
       await waitFor(() => {
         const blocks = yArray.toArray().map(yMap => ({
+          // eslint-disable-next-line @typescript-eslint/no-base-to-string
           content: (yMap.get('content') as Y.Text).toString(),
           position: yMap.get('position') as string
         }));
@@ -641,7 +649,7 @@ describe('BlockEditor', () => {
       render(<BlockEditor yArray={yArray} />);
 
       await user.click(screen.getByText('Second'));
-      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+      const textarea = screen.getByRole<HTMLTextAreaElement>('textbox');
 
       // Move cursor to start
       textarea.setSelectionRange(0, 0);
@@ -649,7 +657,7 @@ describe('BlockEditor', () => {
 
       // Should focus first block
       await waitFor(() => {
-        const activeTextarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+        const activeTextarea = screen.getByRole<HTMLTextAreaElement>('textbox');
         expect(activeTextarea.value).toBe('First');
       });
     });
@@ -664,7 +672,7 @@ describe('BlockEditor', () => {
       render(<BlockEditor yArray={yArray} />);
 
       await user.click(screen.getByText('First'));
-      const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+      const textarea = screen.getByRole<HTMLTextAreaElement>('textbox');
 
       // Move cursor to end
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -672,7 +680,7 @@ describe('BlockEditor', () => {
 
       // Should focus second block
       await waitFor(() => {
-        const activeTextarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+        const activeTextarea = screen.getByRole<HTMLTextAreaElement>('textbox');
         expect(activeTextarea.value).toBe('Second');
       });
     });
@@ -715,6 +723,7 @@ describe('BlockEditor', () => {
 
       await waitFor(() => {
         const blocks = yArray.toArray().map(yMap => ({
+          // eslint-disable-next-line @typescript-eslint/no-base-to-string
           content: (yMap.get('content') as Y.Text).toString(),
           position: yMap.get('position') as string
         }));
@@ -740,6 +749,7 @@ describe('BlockEditor', () => {
 
       await waitFor(() => {
         const blocks = yArray.toArray().map(yMap => ({
+          // eslint-disable-next-line @typescript-eslint/no-base-to-string
           content: (yMap.get('content') as Y.Text).toString(),
           position: yMap.get('position') as string
         }));
@@ -847,7 +857,7 @@ describe('BlockEditor', () => {
 
   describe('Markdown Serialization', () => {
     it('generates correct markdown through onTextChanged', async () => {
-      const onTextChanged = vi.fn();
+      const onTextChanged = vi.fn<(markdown: string) => void>();
 
       const block1 = createBlock('Title', 'heading', 0, positions[0]);
       const block2 = createBlock('First point', 'bullet', 0, positions[1]);
@@ -868,7 +878,7 @@ describe('BlockEditor', () => {
     });
 
     it('skips empty blocks when serializing', async () => {
-      const onTextChanged = vi.fn();
+      const onTextChanged = vi.fn<(markdown: string) => void>();
 
       const block1 = createBlock('Title', 'heading', 0, positions[0]);
       const block2 = createBlock('', 'bullet', 0, positions[1]); // empty
@@ -962,7 +972,7 @@ describe('BlockEditor', () => {
   });
 
   describe('Yjs Integration', () => {
-    it('maintains block order using fractional indices', async () => {
+    it('maintains block order using fractional indices', () => {
       // Create blocks with explicit fractional index positions
       const block1 = createBlock('First', 'bullet', 0, 'a0');
       const block2 = createBlock('Second', 'bullet', 0, 'a1');
