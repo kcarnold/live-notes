@@ -203,8 +203,9 @@ app.post('/api/tts', async (req, res) => {
     } finally {
       ttsInFlightRequests.delete(cacheKey);
     }
-  } catch (error: any) {
-    console.error('TTS error:', error?.message || error);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('TTS error:', message);
     return res.status(500).json({ error: 'Failed to generate speech' });
   }
 });
@@ -224,7 +225,7 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-const server = app.listen(app.get("port"), () => {
+app.listen(app.get("port"), () => {
   console.log(`Server running on http://localhost:${PORT}`);
 }).on('error', (error) => {
   console.error('Server error:', error);
