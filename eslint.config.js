@@ -40,4 +40,16 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Root-level TS files (server.ts, nlp.ts, etc.) aren't part of any tsconfig project;
+    // disable type-aware rules and clear the project setting to avoid parse errors.
+    // TODO: sometime we should type-check these too.
+    files: ['*.ts'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      parserOptions: {
+        project: false,
+      },
+    },
+  },
 )
