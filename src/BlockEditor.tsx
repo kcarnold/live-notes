@@ -231,7 +231,9 @@ export function BlockEditor({ yArray, onTextChanged, onBlocksChanged, editable =
     // @ts-expect-error - for debugging
     window.yArray = yArray;
 
-    // Trigger initial render
+    // Trigger initial render (synchronous setState in effect is intentional here —
+    // this runs only on mount/yArray-change to bootstrap the version counter)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVersion(v => v + 1);
 
     // Call callbacks with initial state
