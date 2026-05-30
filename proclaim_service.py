@@ -81,7 +81,8 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 
 # Configuration
 PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', 'http://127.0.0.1:52195')
-YSWEET_URL = os.getenv('YSWEET_URL', 'https://dev8.kenarnold.org')
+YSWEET_URL = os.getenv('YSWEET_URL', '')
+assert YSWEET_URL, "YSWEET_URL must be set"
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
 

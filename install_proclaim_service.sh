@@ -34,7 +34,7 @@ log_error() {
 }
 
 fetch_posthog_config() {
-    local server_url="${1:-https://dev8.kenarnold.org}"
+    local server_url="${1:-https://live-outline-app.fly.dev}"
     local config
     config=$(curl -sf "$server_url/api/config") || { log_warn "Could not fetch PostHog config from $server_url (service may be down)"; return 1; }
     POSTHOG_KEY=$(echo "$config" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('posthogKey',''))")
@@ -73,7 +73,7 @@ uninstall() {
 }
 
 # Parse arguments
-SERVER_URL="https://dev8.kenarnold.org"
+SERVER_URL="https://live-outline-app.fly.dev"
 POSTHOG_KEY=""
 POSTHOG_HOST=""
 
