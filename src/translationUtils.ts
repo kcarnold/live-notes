@@ -235,8 +235,6 @@ export async function getUpdatedTranslation(language: string, translationCache: 
     return translatedText;
 }
 
-export const translatedTextKeyForLanguage = (language: string) => `translatedText-${language}`;
-
 // ============================================================================
 // Block-based translation (no markdown serialization round-trip)
 // ============================================================================
