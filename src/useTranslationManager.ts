@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useMap } from '@y-sweet/react';
 import type { GenericMap, TranslationBlock, TranslationCache } from './translationUtils';
-import { getUpdatedTranslationFromBlocks } from './translationUtils';
+import { fetchAndCacheTranslations } from './translationUtils';
 
 export function useTranslationManager({
   languages,
@@ -26,7 +26,7 @@ export function useTranslationManager({
     async function doTranslation(language: string) {
       // Populates translationCache (notesTranslationCache) as a side effect;
       // the returned markdown blob is no longer consumed since viewers read the cache directly.
-      await getUpdatedTranslationFromBlocks(
+      await fetchAndCacheTranslations(
         language,
         blocks,
         translationCache as GenericMap as TranslationCache,

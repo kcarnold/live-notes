@@ -359,9 +359,9 @@ export function constructMarkdownFromBlocks(
 }
 
 /**
- * Main entry point: translate blocks and return markdown string.
+ * Main entry point: translate blocks. Stores results in cache. Returns reconstructed markdown.
  */
-export async function getUpdatedTranslationFromBlocks(
+export async function fetchAndCacheTranslations(
     language: string,
     blocks: TranslationBlock[],
     translationCache: TranslationCache
