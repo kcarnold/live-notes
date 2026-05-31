@@ -9,6 +9,8 @@ interface BilingualBlockViewerContainerProps {
   language: string;
   fontSize?: number;
   headerControls?: React.ReactNode;
+  /** When false, hide the original-language text and show only the translation. Defaults to true. */
+  showOriginal?: boolean;
 }
 
 /**
@@ -24,6 +26,7 @@ export function BilingualBlockViewerContainer({
   language,
   fontSize,
   headerControls,
+  showOriginal,
 }: BilingualBlockViewerContainerProps) {
   const ydoc = useYDoc();
   const translationCache = useMap('notesTranslationCache');
@@ -77,6 +80,7 @@ export function BilingualBlockViewerContainer({
       language={language}
       fontSize={fontSize}
       headerControls={headerControls}
+      showOriginal={showOriginal}
     />
   );
 }
