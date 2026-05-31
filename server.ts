@@ -38,7 +38,9 @@ const geminiProvider = new GeminiProvider({
   posthog: phClient
 });
 
-const documentManager = new DocumentManager(getEnvOrCrash("YSWEET_CONNECTION_STRING"));
+const ySweetConnectionString = getEnvOrCrash("YSWEET_CONNECTION_STRING");
+console.log('Y-Sweet Connection String:', ySweetConnectionString);
+const documentManager = new DocumentManager(ySweetConnectionString);
 
 const elevenLabsClient = new ElevenLabsClient({
   apiKey: getEnvOrCrash('ELEVENLABS_API_KEY'),
