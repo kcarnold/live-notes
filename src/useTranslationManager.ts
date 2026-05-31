@@ -24,8 +24,8 @@ export function useTranslationManager({
     }
 
     async function doTranslation(language: string) {
-      // Populates translationCache (notesTranslationCache) as a side effect;
-      // the returned markdown blob is no longer consumed since viewers read the cache directly.
+      // Populates translationCache (notesTranslationCache) as a side effect.
+      // Viewers read the cache directly.
       await fetchAndCacheTranslations(
         language,
         blocks,
