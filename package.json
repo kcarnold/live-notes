@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:server": "node server.ts",
+    "dev:ysweet": "npx y-sweet@latest serve ./ysweet_data --port 5007",
     "test": "vitest"
   },
   "dependencies": {
