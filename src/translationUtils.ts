@@ -185,60 +185,6 @@ export function updateTranslationCache(serverResponse: any, translationCache: Tr
     }
 }
 
-export function constructTranslatedText(language: string, decomposedChunks: DecomposedChunk[], translationCache: TranslationCache) {
-    const translatedText = decomposedChunks.map((chunk) => {
-        const key = translationCacheKey(language, chunk.content);
-      const cachedTranslation = translationCache.get(key);
-      let content: string;
-      if (cachedTranslation) {
-        content = cachedTranslation;
-      } else {
-        if (chunk.content.trim() !== '')
-          // It's ok if we ended up with an empty chunk.
-          console.warn('No cached translation for', key);
-        // Fallback to the original content
-        content = chunk.content;
-      }
-      return chunk.format + content + chunk.trailingWhitespace;
-    }).join('\n');
-    return translatedText;
-}
-
-export async function getUpdatedTranslation(language: string, translationCache: TranslationCache, text: string) {
-    const decomposedChunks = getDecomposedChunks(text);
-    const translationTodos = getTranslationTodos(language, decomposedChunks, translationCache as GenericMap as TranslationCache);
-
-    if (translationTodos.length > 0) {
-    const response = await fetch('/api/requestTranslatedBlocks', {
-        method: 'POST',
-        headers: {
-        'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-        translationTodos,
-        language: language,
-        }),
-    });
-
-    const result = await response.json().catch(() => null);
-    if (!response.ok || !result?.ok) {
-        // If we have a JSON result with error details, include them in the error message
-        if (result?.error) {
-        throw new Error(`Translation error (${response.status}): ${result.error}`);
-        } else {
-        throw new Error(`Translation error (${response.status}): ${response.statusText}`);
-        }
-    }
-    updateTranslationCache(result, translationCache);
-    }
-    const translatedText = constructTranslatedText(language, decomposedChunks, translationCache as GenericMap as TranslationCache);
-    return translatedText;
-}
-
-// ============================================================================
-// Block-based translation (no markdown serialization round-trip)
-// ============================================================================
-
 export interface TranslationBlock {
     type: 'heading' | 'bullet';
     level: number;
@@ -340,32 +286,13 @@ function blockToMarkdownLine(type: 'heading' | 'bullet', level: number, content:
 }
 
 /**
- * Reconstruct markdown from blocks using cached translations.
- */
-export function constructMarkdownFromBlocks(
-    language: string,
-    blocks: TranslationBlock[],
-    translationCache: TranslationCache
-): string {
-    return blocks
-        .filter(block => block.content.trim() !== '')
-        .map(block => {
-            const trimmed = block.content.trim();
-            const cacheKey = translationCacheKey(language, trimmed);
-            const translation = translationCache.get(cacheKey) ?? trimmed;
-            return blockToMarkdownLine(block.type, block.level, translation);
-        })
-        .join('\n');
-}
-
-/**
- * Main entry point: translate blocks. Stores results in cache. Returns reconstructed markdown.
+ * Main entry point: translate blocks. Stores results in cache.
  */
 export async function fetchAndCacheTranslations(
     language: string,
     blocks: TranslationBlock[],
     translationCache: TranslationCache
-): Promise<string> {
+): Promise<void> {
     const translationTodos = buildBlockTranslationRequests(language, blocks, translationCache);
 
     if (translationTodos.length > 0) {
@@ -385,6 +312,4 @@ export async function fetchAndCacheTranslations(
         }
         updateTranslationCache(result, translationCache);
     }
-
-    return constructMarkdownFromBlocks(language, blocks, translationCache);
 }
