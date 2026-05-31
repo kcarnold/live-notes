@@ -11,7 +11,6 @@ import { useAtom } from "jotai";
 import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
 import { LayoutDiagram } from "./LayoutDiagram";
-import TranslatedTextViewerContainer from "./TranslatedTextViewerContainer";
 import type { ClientToken } from "@y-sweet/sdk";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import { PostHogErrorBoundary } from "posthog-js/react";
@@ -179,9 +178,10 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
     const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
     return (
       <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-auto"}>
-        <TranslatedTextViewerContainer
+        <BilingualBlockViewerContainer
           language={validLanguage}
           fontSize={fontSize}
+          showOriginal={false}
           headerControls={
             <>
               <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.translation}</h2>

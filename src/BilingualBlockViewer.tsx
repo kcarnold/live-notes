@@ -12,6 +12,8 @@ export interface BilingualBlockViewerProps {
   language: string;
   fontSize?: number;
   headerControls?: React.ReactNode;
+  /** When false, hide the original-language text and show only the translation. Defaults to true. */
+  showOriginal?: boolean;
 }
 
 /**
@@ -35,6 +37,7 @@ export function BilingualBlockViewer({
   language,
   fontSize = 24,
   headerControls,
+  showOriginal = true,
 }: BilingualBlockViewerProps) {
   const s = useStrings();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -212,6 +215,7 @@ export function BilingualBlockViewer({
                 isLoading={isLoading}
                 isPlayhead={isPlayhead}
                 isTTSEnabled={isTTSEnabled}
+                showOriginal={showOriginal}
                 onClick={() => handleBlockClick(index)}
               />
             );
@@ -231,6 +235,7 @@ interface BlockPairProps {
   isLoading: boolean;
   isPlayhead: boolean;
   isTTSEnabled: boolean;
+  showOriginal: boolean;
   onClick: () => void;
 }
 
@@ -242,6 +247,7 @@ function BlockPair({
   isLoading,
   isPlayhead,
   isTTSEnabled,
+  showOriginal,
   onClick,
 }: BlockPairProps) {
   const s = useStrings();
@@ -270,14 +276,16 @@ function BlockPair({
       `}
     >
       {/* Original text - smaller and dimmer */}
-      <div
-        className={`text-gray-500 dark:text-gray-400 ${headingClass}`}
-        style={{ fontSize: fontSize * 0.6 }}
-      >
-        {isHeading && <span className="text-gray-400 dark:text-gray-500 mr-1">{'#'.repeat(block.level + 2)}</span>}
-        {block.type === 'bullet' && <span className="text-gray-400 dark:text-gray-500 mr-1">•</span>}
-        {block.content}
-      </div>
+      {showOriginal && (
+        <div
+          className={`text-gray-500 dark:text-gray-400 ${headingClass}`}
+          style={{ fontSize: fontSize * 0.6 }}
+        >
+          {isHeading && <span className="text-gray-400 dark:text-gray-500 mr-1">{'#'.repeat(block.level + 2)}</span>}
+          {block.type === 'bullet' && <span className="text-gray-400 dark:text-gray-500 mr-1">•</span>}
+          {block.content}
+        </div>
+      )}
 
       {/* Translated text - prominent, rendered as HTML */}
       <div
