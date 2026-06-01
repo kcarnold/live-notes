@@ -251,8 +251,8 @@ function BlockPair({
   onClick,
 }: BlockPairProps) {
   const s = useStrings();
-  // Compute indent based on block level
-  const indentClass = block.level > 0 ? `ml-${block.level * 4}` : '';
+  // Headings are not indented; bullets use level for indentation (matches BlockEditor)
+  const indentPadding = block.type === 'heading' ? 0 : block.level * 12;
 
   // Heading style
   const isHeading = block.type === 'heading';
@@ -267,8 +267,9 @@ function BlockPair({
   return (
     <div
       onClick={isTTSEnabled ? onClick : undefined}
+      style={indentPadding > 0 ? { paddingLeft: `${indentPadding}px` } : undefined}
       className={`
-        flex flex-col gap-0 ${indentClass}
+        flex flex-col gap-0
         ${isTTSEnabled ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800' : ''}
         ${isPlaying ? 'bg-blue-200 dark:bg-blue-800' : ''}
         ${isLoading ? 'tts-loading' : ''}
