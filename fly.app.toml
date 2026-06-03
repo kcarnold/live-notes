@@ -26,6 +26,9 @@ primary_region = 'ord'
 [[services]]
   protocol = 'tcp'
   internal_port = 5008
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
 
   [[services.ports]]
     port = 443
@@ -36,7 +39,6 @@ primary_region = 'ord'
     handlers = ['http']
 
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
