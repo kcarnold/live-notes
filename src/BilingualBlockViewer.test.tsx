@@ -171,6 +171,45 @@ describe("BilingualBlockViewer", () => {
 			expect(screen.queryByText("Hello")).not.toBeInTheDocument();
 			expect(screen.queryByText(tr(FRENCH, "Hello"))).not.toBeInTheDocument();
 		});
+
+		it("renders indented bullet blocks with paddingLeft inline style", () => {
+			const positions = createSequentialPositions(2);
+			const blocks = [
+				createBlock("Top level", "bullet", 0, positions[0]),
+				createBlock("Indented", "bullet", 2, positions[1]),
+			];
+			render(
+				<BilingualBlockViewer
+					blocks={blocks}
+					translations={makeTranslations(blocks, FRENCH)}
+					language={FRENCH}
+				/>,
+			);
+
+			// Top-level block (level 0) should have no paddingLeft style at all
+			const topEl = screen.getByText(tr(FRENCH, "Top level")).closest("[style*='padding']");
+			expect(topEl).toBeNull();
+
+			// Indented block (level 2) should have paddingLeft: 24px (2 * 12)
+			const indentedEl = screen.getByText(tr(FRENCH, "Indented")).closest("[style*='padding']");
+			expect(indentedEl).toHaveStyle("padding-left: 24px");
+		});
+
+		it("does not indent heading blocks regardless of level", () => {
+			const positions = createSequentialPositions(1);
+			const blocks = [createBlock("A Heading", "heading", 2, positions[0])];
+			render(
+				<BilingualBlockViewer
+					blocks={blocks}
+					translations={makeTranslations(blocks, FRENCH)}
+					language={FRENCH}
+				/>,
+			);
+
+			// Heading blocks should not have any padding-left style
+			const headingEl = screen.getByText(tr(FRENCH, "A Heading")).closest("[style*='padding']");
+			expect(headingEl).toBeNull();
+		});
 	});
 
 	// ── Manual playback ───────────────────────────────────────────────────────────
