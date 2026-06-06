@@ -8,10 +8,11 @@ import pLimit from 'p-limit';
 
 import { DocumentManager } from '@y-sweet/sdk'
 import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
 import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
-import { translateBlock, GeminiProvider } from './nlp.ts';
+import { translateBlock } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
 
 // Get API keys from environment variables, crash if not set
@@ -31,12 +32,8 @@ const phClient = new PostHog(
   }
 );
 
-const geminiProvider = new GeminiProvider({
-  apiKey: getEnvOrCrash('GEMINI_API_KEY'),
-  defaultModel: "gemini-2.5-flash-lite",
-  maxTokens: 8192,
-  posthog: phClient
-});
+const google = createGoogleGenerativeAI({ apiKey: getEnvOrCrash('GEMINI_API_KEY') });
+const translationModel = google('gemini-2.5-flash-lite');
 
 const ySweetConnectionString = getEnvOrCrash("YSWEET_CONNECTION_STRING");
 console.log('Y-Sweet Connection String:', ySweetConnectionString);
@@ -95,7 +92,7 @@ app.post('/api/requestTranslatedBlocks', async (req, res) => {
   const language = req.body?.language;
 
   const promises = translationTodos.map(async (todo) => {
-    return await translateBlock(geminiProvider, todo, language);
+    return await translateBlock(translationModel, todo, language);
   });
 
   const results = await Promise.all(promises);

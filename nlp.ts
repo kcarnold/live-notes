@@ -1,22 +1,6 @@
-import { GoogleGenAI } from '@posthog/ai'; 
-import genAI from '@google/genai'; // for types
-import { PostHog } from 'posthog-node';
-
-export class GeminiProvider {
-  apiClient: GoogleGenAI;
-  defaultModel: string;
-  maxTokens: number;
-  
-
-  constructor({ apiKey, defaultModel, maxTokens, posthog }: { apiKey: string, defaultModel: string, maxTokens: number, posthog: PostHog }) {
-    this.apiClient = new GoogleGenAI({
-      apiKey: apiKey,
-      posthog: posthog
-    });
-    this.defaultModel = defaultModel;
-    this.maxTokens = maxTokens;
-  }
-}
+import { generateObject } from 'ai';
+import type { LanguageModel } from 'ai';
+import { z } from 'zod';
 
 export type TranslationTodo = {
     chunks: string[];
@@ -30,37 +14,14 @@ export type TranslationBlockResult = {
     translatedText: string;
 }
 
-export const translateBlock = async (provider: GeminiProvider, todo: TranslationTodo, language: string): Promise<TranslationBlockResult[]> => {
-    const config = {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: genAI.Type.OBJECT,
-        required: ["segments"],
-        properties: {
-          segments: {
-            type: genAI.Type.ARRAY,
-            items: {
-              type: genAI.Type.OBJECT,
-              required: ["segmentId", "translation"],
-              properties: {
-                segmentId: {
-                  type: genAI.Type.INTEGER,
-                },
-                translation: {
-                  type: genAI.Type.STRING,
-                },
-              },
-            },
-          },
-        },
-      },
-    };
+const segmentSchema = z.object({
+    segments: z.array(z.object({
+        segmentId: z.number().int(),
+        translation: z.string(),
+    })),
+});
 
-    type OutputSegment = {
-        segmentId: number;
-        translation: string;
-    };
-
+export const translateBlock = async (model: LanguageModel, todo: TranslationTodo, language: string): Promise<TranslationBlockResult[]> => {
     const inputDocument = JSON.stringify(
         todo.chunks.map((chunk, index) => ({
             segmentId: index,
@@ -69,13 +30,14 @@ export const translateBlock = async (provider: GeminiProvider, todo: Translation
         }))
     );
     console.log('Input document:', inputDocument);
-        
-    const contents = [
-      {
-        role: 'user',
-        parts: [
-          {
-            text: `
+
+    const { object, usage } = await generateObject({
+        model,
+        schema: segmentSchema,
+        messages: [
+            {
+                role: 'user',
+                content: `
 We are translating text into ${language}.
 
 Here is some text that has already been translated, provided for reference for style and terminology. The instructions and text to be translated will follow after this context.
@@ -105,25 +67,15 @@ Segment ids must match those in the input document.
 ${inputDocument}
 </input_document>
   `,
-          },
+            },
         ],
-      },
-    ];
-  
-    const response = await provider.apiClient.models.generateContent({
-      model: provider.defaultModel,
-      config,
-      contents,
     });
-    console.dir(response, { depth: null });
-    console.log(response.usageMetadata);
-    const jsonResponse = JSON.parse(response.text || '');
-    const segments = jsonResponse.segments as Array<{ segmentId: number; translation: string }>;
-    const translatedBlocks: TranslationBlockResult[] = segments.map((segment: OutputSegment) => {
-        const segmentNumber = segment.segmentId;
-        const translatedText = segment.translation;
-        const sourceText = todo.chunks[segmentNumber];
-        return { sourceText, translatedText, language };
-    });
-    return translatedBlocks;
-}  
+
+    console.dir(object, { depth: null });
+    console.log(usage);
+
+    return object.segments.map((segment) => ({
+        sourceText: todo.chunks[segment.segmentId],
+        translatedText: segment.translation,
+    }));
+}
