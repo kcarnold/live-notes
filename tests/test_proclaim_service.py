@@ -62,6 +62,8 @@ def fast_timing(monkeypatch):
     monkeypatch.setattr(ps, "OFF_AIR_DISCONNECT_AFTER", 0.005)
     monkeypatch.setattr(ps, "RECONNECT_BACKOFF_INITIAL", 0.001)
     monkeypatch.setattr(ps, "RECONNECT_BACKOFF_MAX", 0.002)
+    # Ping every poll so the health-check path is exercised within the test window.
+    monkeypatch.setattr(ps, "WS_PING_INTERVAL", 0.0)
 
 
 def make_service():

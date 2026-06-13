@@ -393,6 +393,7 @@ class ProclaimYjsService:
             self.last_slide_index = None
 
             off_air_since: Optional[float] = None
+            last_ping = anyio.current_time()
             while True:
                 # Don't swap the Doc while connected; end the session and let the
                 # caller roll the date with a fresh Doc, then reconnect.
@@ -421,11 +422,18 @@ class ProclaimYjsService:
 
                 self._apply_status(status)
 
-                # Actively ping so a silently-dropped websocket surfaces as an
-                # exception here (httpx_ws swallows the disconnect on recv, so the
-                # Provider can't tell us on its own). Raising bubbles up to the
-                # reconnect-with-backoff loop in run().
-                await websocket.ping()
+                # Health check (throttled to WS_PING_INTERVAL, separate from the
+                # faster slide-poll cadence). The keepalive task is what actually
+                # detects a silent/half-open drop - it waits for the pong and closes
+                # the socket on timeout - but it reports that only through recv(),
+                # which the Provider swallows. So we send here too: once the socket
+                # is closed, this raises in our scope and reaches the reconnect loop
+                # in run(). (Our send doesn't await a pong, so on its own it can't
+                # spot a half-open connection - hence the dependency on keepalive.)
+                now = anyio.current_time()
+                if now - last_ping >= WS_PING_INTERVAL:
+                    await websocket.ping()
+                    last_ping = now
                 await anyio.sleep(POLL_INTERVAL)
 
     async def run(self):
