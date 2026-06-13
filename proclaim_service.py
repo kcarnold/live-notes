@@ -292,22 +292,34 @@ class ProclaimYjsService:
 
 
     def _handle_item_change(self, item_id: str, slide_index: int, presentation_id: Optional[str]) -> bool:
-        """Handle an item change. Returns True if state was updated."""
+        """Handle an item change. Returns True if state was updated.
+
+        Returns False (rather than raising) on any DB/parse problem, so the caller
+        leaves last_item_id unadvanced and retries on the next poll. This also keeps
+        a DB hiccup - e.g. a locked DB raising, or a row that hasn't been written
+        yet - from bubbling up and being mistaken for a Y-Sweet connection failure,
+        which would needlessly drop a healthy websocket.
+        """
         if not presentation_id:
             logger.warning("No presentation ID in status response")
             return False
 
-        pres_data = self.db.get_presentation(presentation_id)
-        if not pres_data:
-            logger.warning(f"Presentation {presentation_id} not found in database")
+        try:
+            pres_data = self.db.get_presentation(presentation_id)
+            if not pres_data:
+                logger.warning(f"Presentation {presentation_id} not in database yet (DB may be trailing the live API); will retry")
+                return False
+
+            translation_idx = get_translation_screen_idx(pres_data['content'])
+            if translation_idx is None:
+                logger.warning(f"No translation screen found in presentation {presentation_id}")
+                return False
+
+            item_with_slides = parse_item_translation(self.db, item_id, translation_idx)
+        except Exception as e:
+            logger.warning(f"Failed to load/parse item {item_id} from Proclaim DB: {e}; will retry")
             return False
 
-        translation_idx = get_translation_screen_idx(pres_data['content'])
-        if translation_idx is None:
-            logger.warning(f"No translation screen found in presentation {presentation_id}")
-            return False
-
-        item_with_slides = parse_item_translation(self.db, item_id, translation_idx)
         if not item_with_slides:
             return False
 
@@ -345,6 +357,14 @@ class ProclaimYjsService:
 
         # Item changed (also covers the forced re-push after a fresh connect,
         # where last_item_id has been reset to None).
+        #
+        # _handle_item_change only advances last_item_id when it succeeds; on
+        # failure we intentionally leave it unchanged so the next poll retries.
+        # Some failures are transient - notably the Proclaim DB trailing the live
+        # API, where the item's row isn't written yet - and retrying is how the
+        # item eventually shows up. The cost is that a genuinely unparseable item
+        # (e.g. an image slideshow with no translation screen) is re-attempted
+        # every poll while it's on air.
         if item_id != self.last_item_id:
             logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
             self._handle_item_change(item_id, slide_index, presentation_id)
