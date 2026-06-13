@@ -75,6 +75,31 @@ npm start
 - Always run `npm install` before building or testing, especially in fresh environments. The build will fail with module resolution errors if dependencies aren't installed.
 - When running tests via tools/agents, use `--no-color` flag to disable ANSI color codes in output.
 
+### Python (Proclaim service)
+
+The Proclaim integration ([proclaim_service.py](proclaim_service.py)) is a standalone Python
+program managed with [uv](https://docs.astral.sh/uv/) (see [pyproject.toml](pyproject.toml)).
+Always invoke Python through `uv run` so the locked environment (`uv.lock`) is used.
+
+```bash
+# Run the service
+uv run proclaim_service.py
+
+# Run the Python tests (pytest, config in [tool.pytest.ini_options])
+uv run pytest
+
+# Run a single test
+uv run pytest tests/test_proclaim_service.py::test_reconnects_after_websocket_drop
+```
+
+Tests live in [tests/](tests/) and cover the service's connection lifecycle (lazy connect,
+off-air disconnect, auto-reconnect with backoff, state re-push). They fake the Proclaim DB,
+the Y-Sweet websocket, and the Yjs Provider, and scale the timing constants down via the
+`fast_timing` fixture so the loops run in milliseconds — no real Proclaim or Y-Sweet needed.
+Async tests run on the asyncio backend via the `anyio_backend` fixture in
+[tests/conftest.py](tests/conftest.py), which also sets `YSWEET_URL` (asserted at import time)
+and puts the repo root on `sys.path`.
+
 ### Deployment
 ```bash
 # Build and run with Docker Compose

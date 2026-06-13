@@ -356,9 +356,8 @@ class ProclaimYjsService:
     async def _wait_until_on_air(self) -> None:
         """Poll Proclaim until it reports on air, holding NO Y-Sweet connection.
 
-        This is the key robustness change: we don't open (or keep) a Y-Sweet
-        connection while nothing is happening, so we never depend on a connection
-        that was established long before it was needed.
+        We don't open (or keep) a Y-Sweet connection while nothing is happening, so
+        we never depend on a connection that was established long before it was needed.
         """
         announced = False
         while True:
