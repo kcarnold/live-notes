@@ -58,7 +58,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
 from pycrdt import Doc, Map
-from httpx_ws import aconnect_ws
+from httpx_ws import aconnect_ws, HTTPXWSException
 from pycrdt import Provider
 from pycrdt.websocket.websocket import HttpxWebsocket
 
@@ -85,6 +85,22 @@ YSWEET_URL = os.getenv('YSWEET_URL', '')
 assert YSWEET_URL, "YSWEET_URL must be set"
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
+
+# Connection robustness tuning.
+# We don't hold a Y-Sweet connection while off air; when we do connect (and if the
+# connection drops), we retry with exponential backoff so a slow/cold Y-Sweet server
+# - e.g. one that scaled to zero - doesn't permanently kill the service.
+RECONNECT_BACKOFF_INITIAL = float(os.getenv('PROCLAIM_RECONNECT_BACKOFF_INITIAL', '1.0'))  # seconds
+RECONNECT_BACKOFF_MAX = float(os.getenv('PROCLAIM_RECONNECT_BACKOFF_MAX', '30.0'))  # seconds
+# How long Proclaim must stay off air before we drop the Y-Sweet connection. A short
+# grace period avoids churn when switching between presentations.
+OFF_AIR_DISCONNECT_AFTER = float(os.getenv('PROCLAIM_OFF_AIR_DISCONNECT_AFTER', '60'))  # seconds
+# Keepalive ping interval for the Y-Sweet websocket. We also actively ping each poll to
+# detect a silently-dropped connection (httpx_ws swallows the disconnect on recv).
+WS_PING_INTERVAL = float(os.getenv('PROCLAIM_WS_PING_INTERVAL', '15'))  # seconds
+# Timeout for fetching a Y-Sweet token; generous enough to let a cold server wake up,
+# but bounded so we fall back to retry-with-backoff instead of hanging forever.
+YSWEET_TOKEN_TIMEOUT = float(os.getenv('PROCLAIM_YSWEET_TOKEN_TIMEOUT', '30'))  # seconds
 
 DUMP_PRESENTATION_JSON = os.getenv('DUMP_PRESENTATION_JSON', 'false').lower() == 'true'
 
@@ -169,6 +185,7 @@ class ProclaimYjsService:
             self.doc_id = self._get_date_based_doc_id()
             self.current_doc_date = date.today()
         else:
+            self.use_date_based_doc_id = False
             self.doc_id = doc_id
             self.current_doc_date = None
 
@@ -201,12 +218,43 @@ class ProclaimYjsService:
             return True
         return False
 
+    def _date_rolled_over(self) -> bool:
+        """Cheap, side-effect-free check of whether the date-based doc is now stale.
+
+        Used inside a live session (where we must not swap the Doc out from under an
+        active Provider) to decide we should end the session and roll over.
+        """
+        return self.use_date_based_doc_id and date.today() != self.current_doc_date
+
+    def _recreate_doc(self) -> None:
+        """Start a fresh Y.Doc so a new day's document doesn't inherit yesterday's slides."""
+        self.ydoc = Doc()
+        self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
+        self.status_map = self.ydoc.get('proclaimStatus', type=Map)
+        self.last_item_id = None
+        self.last_slide_index = None
+        self.current_item_slides = None
+        logger.info(f"Recreated Yjs document for {self.doc_id}")
+
+    def _maybe_roll_doc_date(self) -> None:
+        """If the date-based doc id changed, advance to it with a fresh Doc.
+
+        Only safe to call while NOT connected (it replaces self.ydoc).
+        """
+        if self._check_doc_id_change():
+            self._recreate_doc()
+
     async def get_ysweet_token(self) -> Dict[str, Any]:
-        """Get a Y-Sweet token for the document"""
+        """Get a Y-Sweet token for the document.
+
+        Uses a bounded timeout so a cold/slow Y-Sweet server fails fast into the
+        reconnect-with-backoff loop rather than hanging the service indefinitely.
+        """
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self.ysweet_url}/api/ys-auth",
-                json={"docId": self.doc_id, "isEditor": True}
+                json={"docId": self.doc_id, "isEditor": True},
+                timeout=YSWEET_TOKEN_TIMEOUT,
             )
             response.raise_for_status()
             return response.json()
@@ -270,88 +318,145 @@ class ProclaimYjsService:
         self.last_slide_index = slide_index
         return True
 
-    async def poll_once(self) -> bool:
-        """Poll Proclaim once and update state if changed. Returns True if on air."""
+    async def _fetch_status(self) -> Optional[Dict[str, Any]]:
+        """Fetch current Proclaim status.
+
+        Returns the status dict when on air, or None when off air / Proclaim is
+        unreachable. Polling Proclaim is a local HTTP call and needs no Y-Sweet
+        connection, so this is safe to call while disconnected. Expected
+        connectivity hiccups are swallowed (returns None); they don't raise.
+        """
         try:
-            # Get current status
             status = await self.proclaim_client.get_status()
-            if not status:
-                # off air.
-                return False
-
-            item_id = status.get('status', {}).get('itemId')
-            slide_index = status.get('status', {}).get('slideIndex') or 0
-            presentation_id = status.get('presentationId')
-
-            if DUMP_PRESENTATION_JSON:
-                presentation = await self.proclaim_client.get_onair_presentation()
-                if presentation:
-                    Path('presentation.json').write_text(json.dumps(presentation, indent=2))
-
-            # Check if item changed
-            if item_id != self.last_item_id:
-                logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
-                self._handle_item_change(item_id, slide_index, presentation_id)
-                return True
-
-            # Check if slide changed
-            if slide_index != self.last_slide_index:
-                logger.info(f"Slide changed to {slide_index}")
-                self.update_status_in_yjs(item_id, slide_index)
-                self.last_slide_index = slide_index
-
-            return True
-
+            return status or None
         except httpx.ConnectError:
             logger.debug("Proclaim not reachable (not running?)")
-            return False
+            return None
         except httpx.HTTPError as e:
             logger.error(f"Error polling Proclaim: {e}")
             if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}", exc_info=True)
-            if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
-            return False
+            return None
+
+    def _apply_status(self, status: Dict[str, Any]) -> None:
+        """Push a fetched Proclaim status into Yjs (item and/or slide changes)."""
+        item_id = status.get('status', {}).get('itemId')
+        slide_index = status.get('status', {}).get('slideIndex') or 0
+        presentation_id = status.get('presentationId')
+
+        # Item changed (also covers the forced re-push after a fresh connect,
+        # where last_item_id has been reset to None).
+        if item_id != self.last_item_id:
+            logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
+            self._handle_item_change(item_id, slide_index, presentation_id)
+        elif slide_index != self.last_slide_index:
+            logger.info(f"Slide changed to {slide_index}")
+            self.update_status_in_yjs(item_id, slide_index)
+            self.last_slide_index = slide_index
+
+    async def _wait_until_on_air(self) -> None:
+        """Poll Proclaim until it reports on air, holding NO Y-Sweet connection.
+
+        This is the key robustness change: we don't open (or keep) a Y-Sweet
+        connection while nothing is happening, so we never depend on a connection
+        that was established long before it was needed.
+        """
+        announced = False
+        while True:
+            self._maybe_roll_doc_date()
+            status = await self._fetch_status()
+            if status is not None:
+                logger.info("Proclaim is on air - connecting to Y-Sweet")
+                return
+            if not announced:
+                logger.info("Waiting for Proclaim to go on air (no Y-Sweet connection held)")
+                announced = True
+            await anyio.sleep(POLL_INTERVAL_OFF_AIR)
+
+    async def _run_session(self) -> None:
+        """Open a Y-Sweet connection and sync until off air, disconnect, or date roll.
+
+        Returns normally when the session ends for an expected reason (sustained
+        off air or a date rollover). Raises on connection problems so the caller
+        can reconnect with backoff.
+        """
+        token_data = await self.get_ysweet_token()
+        ws_url = token_data['url'] + '/' + self.doc_id
+        logger.info(f"Connecting to Y-Sweet: {ws_url}")
+
+        async with (
+            aconnect_ws(ws_url, keepalive_ping_interval_seconds=WS_PING_INTERVAL) as websocket,
+            Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
+        ):
+            logger.info("Connected to Y-Sweet")
+            # Force a re-push of the current state onto the freshly connected server.
+            self.last_item_id = None
+            self.last_slide_index = None
+
+            off_air_since: Optional[float] = None
+            while True:
+                # Don't swap the Doc while connected; end the session and let the
+                # caller roll the date with a fresh Doc, then reconnect.
+                if self._date_rolled_over():
+                    logger.info("Date changed - ending session to roll the document")
+                    return
+
+                status = await self._fetch_status()
+                if status is None:
+                    now = anyio.current_time()
+                    if off_air_since is None:
+                        off_air_since = now
+                        logger.info("Off air - will disconnect from Y-Sweet if it persists")
+                    elif now - off_air_since >= OFF_AIR_DISCONNECT_AFTER:
+                        logger.info("Off air long enough - disconnecting from Y-Sweet")
+                        return
+                    await anyio.sleep(POLL_INTERVAL_OFF_AIR)
+                    continue
+
+                off_air_since = None
+
+                if DUMP_PRESENTATION_JSON:
+                    presentation = await self.proclaim_client.get_onair_presentation()
+                    if presentation:
+                        Path('presentation.json').write_text(json.dumps(presentation, indent=2))
+
+                self._apply_status(status)
+
+                # Actively ping so a silently-dropped websocket surfaces as an
+                # exception here (httpx_ws swallows the disconnect on recv, so the
+                # Provider can't tell us on its own). Raising bubbles up to the
+                # reconnect-with-backoff loop in run().
+                await websocket.ping()
+                await anyio.sleep(POLL_INTERVAL)
 
     async def run(self):
-        """Main service loop"""
+        """Main service loop: wait for on air, connect, sync, reconnect on failure."""
         logger.info(f"Starting Proclaim service for doc: {self.doc_id}")
         logger.info(f"Proclaim URL: {self.proclaim_client.base_url}")
         logger.info(f"Y-Sweet URL: {self.ysweet_url}")
         logger.info(f"Poll interval: {POLL_INTERVAL}s (on air), {POLL_INTERVAL_OFF_AIR}s (off air)")
 
-        try:
-            # Get Y-Sweet token and build WebSocket URL
-            token_data = await self.get_ysweet_token()
-            ws_url = token_data['url'] + '/' + self.doc_id
-            logger.info(f"Connecting to Y-Sweet: {ws_url}")
-        except Exception as e:
-            logger.error(f"Failed to get Y-Sweet token: {e}")
-            return
-
-        # Connect to Y-Sweet with WebsocketProvider
-        async with (
-            aconnect_ws(ws_url) as websocket,
-            Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
-        ):
-            logger.info("Connected to Y-Sweet")
-
-            # Main polling loop
-            while True:
-                try:
-                    # Check if date changed (for date-based doc IDs)
-                    if self._check_doc_id_change():
-                        logger.info("Date changed, exiting for restart with new document")
-                        return
-
-                    is_on_air = await self.poll_once()
-                    interval = POLL_INTERVAL if is_on_air else POLL_INTERVAL_OFF_AIR
-                    await anyio.sleep(interval)
-                except Exception as e:
-                    logger.error(f"Error in polling loop: {e}", exc_info=True)
-                    if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
-                    await anyio.sleep(POLL_INTERVAL)
+        backoff = RECONNECT_BACKOFF_INITIAL
+        while True:
+            try:
+                # Phase 1: no connection held until Proclaim is actually on air.
+                await self._wait_until_on_air()
+                # Phase 2: connect and sync until off air / date roll / disconnect.
+                await self._run_session()
+                # Clean end of a session - reset backoff for the next connect.
+                backoff = RECONNECT_BACKOFF_INITIAL
+            except (HTTPXWSException, httpx.HTTPError, OSError) as e:
+                logger.warning(
+                    f"Y-Sweet connection problem ({type(e).__name__}: {e}); "
+                    f"reconnecting in {backoff:.0f}s"
+                )
+                await anyio.sleep(backoff)
+                backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
+            except Exception as e:
+                # Unexpected - report it, but keep the service alive and retry.
+                logger.error(f"Unexpected error in service loop: {e}", exc_info=True)
+                if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
+                await anyio.sleep(backoff)
+                backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
 
 async def signal_handler(cancel_scope: anyio.CancelScope):
     with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:

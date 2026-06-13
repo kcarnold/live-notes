@@ -19,4 +19,9 @@ dependencies = [
 dev = [
     "mypy>=1.20.2",
     "types-lxml>=2026.2.16",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
