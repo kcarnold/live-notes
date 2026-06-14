@@ -61,24 +61,22 @@ function ListenInner({
 
   // Subscribe only to the translator bot's audio (autoSubscribe is off), so the
   // listener hears the translation and not the speaker's original audio.
+  //
+  // This runs whenever the reactive participant list changes (keyed on
+  // `remoteParticipants`), which is essential for late joiners: when a second
+  // listener connects, the translator bot's track is *already* published, so the
+  // TrackPublished / ParticipantConnected events never fire for them. Re-running
+  // as participants/tracks sync in guarantees we subscribe to a bot that was
+  // already present.
   useEffect(() => {
     if (!room) return;
-    const updateSubscriptions = () => {
-      for (const [, participant] of room.remoteParticipants) {
-        const isTranslator = participant.identity === translatorIdentity;
-        for (const [, pub] of participant.trackPublications) {
-          if (pub.kind === Track.Kind.Audio) pub.setSubscribed(isTranslator);
-        }
+    for (const participant of remoteParticipants) {
+      const isTranslator = participant.identity === translatorIdentity;
+      for (const [, pub] of participant.trackPublications) {
+        if (pub.kind === Track.Kind.Audio) pub.setSubscribed(isTranslator);
       }
-    };
-    updateSubscriptions();
-    room.on(RoomEvent.TrackPublished, updateSubscriptions);
-    room.on(RoomEvent.ParticipantConnected, updateSubscriptions);
-    return () => {
-      room.off(RoomEvent.TrackPublished, updateSubscriptions);
-      room.off(RoomEvent.ParticipantConnected, updateSubscriptions);
-    };
-  }, [room, translatorIdentity]);
+    }
+  }, [room, translatorIdentity, remoteParticipants]);
 
   // Accumulate live transcription published by the translator bot.
   useEffect(() => {
