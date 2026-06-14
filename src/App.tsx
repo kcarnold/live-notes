@@ -67,6 +67,13 @@ const availableLayouts = [
     ]
   },
   {
+    key: "slide-and-listen",
+    labelKey: "layoutSlideAndListen" as const,
+    layout: [
+      ["currentSlide", "listen"]
+    ]
+  },
+  {
     key: 'full',
     labelKey: 'layoutEverything' as const,
     layout: [
@@ -115,7 +122,8 @@ function HomePage() {
           );
         })}
         <div className="text-center mb-4">
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedText-French#editor">Note-Taker</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|bilingual-French#editor">Note-Taker</a> |{" "}
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText,broadcast|bilingual-French#editor">Note-Taker</a>
         </div>
       </div>
     </div>
