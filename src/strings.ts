@@ -24,6 +24,7 @@ export interface AppStrings {
   layoutSlideAndTranslation: string;
   layoutBilingualView: string;
   layoutEverything: string;
+  layoutSlideAndListen: string;
 
   // Font size controls
   decreaseFontSize: string;
@@ -81,6 +82,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Choose Layout',
     layoutSlideAndTranslation: 'Slide and Translation',
     layoutBilingualView: 'Bilingual View',
+    layoutSlideAndListen: 'Slide and Listen',
     layoutEverything: 'Everything',
     decreaseFontSize: 'Decrease font size',
     increaseFontSize: 'Increase font size',
@@ -123,6 +125,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Choisir la mise en page',
     layoutSlideAndTranslation: 'Diapositive et traduction',
     layoutBilingualView: 'Vue bilingue',
+    layoutSlideAndListen: 'Diapositive et écoute',
     layoutEverything: 'Tout',
     decreaseFontSize: 'Diminuer la taille du texte',
     increaseFontSize: 'Augmenter la taille du texte',
@@ -165,6 +168,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Elegir dise\u00f1o',
     layoutSlideAndTranslation: 'Diapositiva y traducci\u00f3n',
     layoutBilingualView: 'Vista biling\u00fce',
+    layoutSlideAndListen: 'Diapositiva y escucha',
     layoutEverything: 'Todo',
     decreaseFontSize: 'Disminuir tama\u00f1o de fuente',
     increaseFontSize: 'Aumentar tama\u00f1o de fuente',
@@ -207,6 +211,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Chwazi Dispozisyon',
     layoutSlideAndTranslation: 'Diapozitiv ak Tradiksyon',
     layoutBilingualView: 'Vi Bileng',
+    layoutSlideAndListen: 'Diapozitiv ak \u00c9coute',
     layoutEverything: 'Tout bagay',
     decreaseFontSize: 'Diminye gw\u00f2s\u00e8 l\u00e8t',
     increaseFontSize: 'Ogmante gw\u00f2s\u00e8 l\u00e8t',
