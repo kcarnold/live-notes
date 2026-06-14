@@ -97,6 +97,16 @@ function BroadcastDashboard({ docId }: { docId: string }) {
             ))}
           </ul>
         )}
+        <div className="text-center mt-4">
+          All remote participants:
+          <ul className="text-xs text-gray-500 mt-1">
+            {remoteParticipants.map((p) => (
+              <li key={p.sid}>
+                {p.identity} {p.isSpeaking ? "🔊" : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     </div>
   );
