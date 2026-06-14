@@ -25,7 +25,7 @@ npm install
 ```
 
 Required environment variables (`.env`):
-- `YSWEET_CONNECTION_STRING` - Y-Sweet connection string from jamsocket.com
+- `YSWEET_CONNECTION_STRING` - Y-Sweet connection string
 - `GEMINI_API_KEY` - Google Gemini API key
 - `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
 
