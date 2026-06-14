@@ -100,6 +100,7 @@ function HomePage() {
             row.map(component =>
               component === 'translatedText' ? `translatedText-${defaultLang}` :
               component === 'bilingual' ? `bilingual-${defaultLang}` :
+              component === 'listen' ? `listen-${defaultLang}` :
               component
             ).join(",")
           ).join("|");
@@ -123,7 +124,7 @@ function HomePage() {
         })}
         <div className="text-center mb-4">
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|bilingual-French#editor">Note-Taker</a> |{" "}
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText,broadcast|bilingual-French#editor">Note-Taker</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText,broadcast|bilingual-French#editor">Broadcaster</a>
         </div>
       </div>
     </div>
