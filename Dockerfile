@@ -4,6 +4,13 @@ EXPOSE 5008
 ENV PORT=5008
 WORKDIR /usr/src/app
 
+# Fly.io machines have no public outbound IPv6 route, but the native
+# @livekit/rtc-node client (reqwest -> glibc getaddrinfo) otherwise prefers IPv6
+# and fails LiveKit region discovery ("failed to retrieve region info"). Raise
+# the precedence of IPv4-mapped addresses so getaddrinfo returns IPv4 first.
+# (Node's own fetch hides this via Happy Eyeballs fallback; the Rust client does not.)
+RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+
 COPY package.json package-lock.json ./
 RUN npm ci
 

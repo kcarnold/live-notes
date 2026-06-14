@@ -16,6 +16,17 @@ import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import { PostHogErrorBoundary } from "posthog-js/react";
 import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
+import { getDocId } from "./getDocId";
+
+// Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
+// pane (listen-{language} / broadcast) is actually rendered, keeping it out of
+// the main bundle and isolating the feature.
+const ListenViewer = React.lazy(() =>
+  import("./ListenViewer").then((m) => ({ default: m.ListenViewer }))
+);
+const BroadcastControl = React.lazy(() =>
+  import("./BroadcastControl").then((m) => ({ default: m.BroadcastControl }))
+);
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -194,6 +205,33 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
     );
   }
 
+  if (componentStr.startsWith('listen-')) {
+    const language = componentStr.substring('listen-'.length);
+    const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
+    return (
+      <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-hidden"}>
+        <div className="flex items-center">
+          <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.listenLive}</h2>
+          {languageSelector('listen', validLanguage)}
+        </div>
+        <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-gray-400">{s.connecting}</div>}>
+          <ListenViewer key={validLanguage} language={validLanguage} />
+        </React.Suspense>
+      </div>
+    );
+  }
+
+  if (componentStr === 'broadcast') {
+    return (
+      <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-hidden"}>
+        <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.broadcast}</h2>
+        <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-gray-400">{s.connecting}</div>}>
+          <BroadcastControl />
+        </React.Suspense>
+      </div>
+    );
+  }
+
   if (componentStr.startsWith('bilingual-')) {
     const language = componentStr.substring('bilingual-'.length);
     const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
@@ -293,19 +331,13 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
   );
 }
 
-const getTodayLocal = () => {
-    const today = new Date();
-    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-};
-
 const App = () => {
   // We're an editor only if location hash includes #editor
   const isEditor = window.location.hash.includes("editor");
 
-  const searchParams = new URLSearchParams(window.location.search);
-  // Default doc id is `doc-${date}`, where date is today's date
-  // but allow override from the URL search params ?doc=${docId}
-  const docId = searchParams.get("doc") || `doc-${getTodayLocal()}`;
+  // Default doc id is `doc-${today}`, overridable via ?doc=. Shared with the
+  // live-audio panes via getDocId() so the LiveKit room matches the session.
+  const docId = getDocId();
 
   const [, setIsEditor] = useAtom(isEditorAtom);
   React.useEffect(() => {
