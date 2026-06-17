@@ -24,6 +24,7 @@ import {
   AudioStream,
 } from "@livekit/rtc-node";
 import WebSocket from "ws";
+import type { TranscriptWriter } from "./transcript-writer.ts";
 
 export type BridgeStatus = "starting" | "active" | "error" | "closed";
 
@@ -33,7 +34,6 @@ export class TranslationBridge {
   private audioSource: AudioSource | null = null;
   private localTrack: LocalAudioTrack | null = null;
   private publishedTrackSid: string = "";
-  private transcriptionSegmentId: number = 0;
   private framesSentToGemini: number = 0;
   private framesReceivedFromGemini: number = 0;
 
@@ -60,6 +60,19 @@ export class TranslationBridge {
   private lastAudioFrameTime: number = 0;
   private captureChain: Promise<void> = Promise.resolve();
 
+  // Persists finalized transcript segments into the shared Yjs doc.
+  private readonly writer: TranscriptWriter | null;
+  // Whether this bridge also writes the source-language (English) transcript,
+  // via Gemini input transcription. Only the primary bridge does, so the same
+  // English text isn't appended once per running language.
+  private readonly writesSourceTranscript: boolean;
+  // Accumulators for the current turn's transcription, flushed on turnComplete.
+  private outputTurnBuffer: string = "";
+  private inputTurnBuffer: string = "";
+
+  // The source (input) transcript is published under this language code.
+  static readonly SOURCE_CODE = "en";
+
   constructor(
     sessionId: string,
     targetLanguage: string,
@@ -69,6 +82,8 @@ export class TranslationBridge {
       livekitUrl: string;
       livekitApiKey: string;
       livekitApiSecret: string;
+      writer?: TranscriptWriter | null;
+      writesSourceTranscript?: boolean;
     }
   ) {
     this.sessionId = sessionId;
@@ -79,6 +94,8 @@ export class TranslationBridge {
     this.livekitUrl = config.livekitUrl;
     this.livekitApiKey = config.livekitApiKey;
     this.livekitApiSecret = config.livekitApiSecret;
+    this.writer = config.writer ?? null;
+    this.writesSourceTranscript = config.writesSourceTranscript ?? false;
   }
 
   async start(): Promise<void> {
@@ -330,6 +347,9 @@ export class TranslationBridge {
       setup: {
         model: `models/${this.geminiModel}`,
         outputAudioTranscription: {},
+        // Only the primary bridge transcribes the source audio (English), so the
+        // English transcript is produced once regardless of how many languages run.
+        ...(this.writesSourceTranscript ? { inputAudioTranscription: {} } : {}),
         generationConfig: {
           responseModalities: ["AUDIO"],
           translationConfig: {
@@ -393,21 +413,32 @@ export class TranslationBridge {
         }
       }
 
-      // Handle output transcription (separate field from modelTurn)
+      // Output transcription (target language): accumulate the turn, stream it as
+      // an ephemeral interim line, and persist the finalized segment on turn end.
       if (serverContent?.outputTranscription?.text) {
-        console.log(
-          `[TranslationBridge:${this.targetLanguage}] Transcription:`,
-          serverContent.outputTranscription.text.slice(0, 100)
-        );
-        this.publishTranscriptionText(
-          serverContent.outputTranscription.text,
-          !serverContent.turnComplete
-        );
+        this.outputTurnBuffer += serverContent.outputTranscription.text;
+        this.publishInterim(this.targetLanguage, this.outputTurnBuffer);
       }
 
-      // If turn is complete, advance the segment id
+      // Input transcription (source language / English) — only on the primary bridge.
+      if (this.writesSourceTranscript && serverContent?.inputTranscription?.text) {
+        this.inputTurnBuffer += serverContent.inputTranscription.text;
+        this.publishInterim(TranslationBridge.SOURCE_CODE, this.inputTurnBuffer);
+      }
+
+      // On turn completion, flush finalized segments into Yjs and clear the interim
+      // lines (the finalized text now arrives via Yjs).
       if (serverContent?.turnComplete) {
-        this.transcriptionSegmentId++;
+        if (this.outputTurnBuffer.trim()) {
+          this.writer?.appendSegment(this.targetLanguage, this.outputTurnBuffer);
+          this.publishInterim(this.targetLanguage, "");
+          this.outputTurnBuffer = "";
+        }
+        if (this.inputTurnBuffer.trim()) {
+          this.writer?.appendSegment(TranslationBridge.SOURCE_CODE, this.inputTurnBuffer);
+          this.publishInterim(TranslationBridge.SOURCE_CODE, "");
+          this.inputTurnBuffer = "";
+        }
       }
     } catch (error) {
       console.error(
@@ -616,26 +647,30 @@ export class TranslationBridge {
     }
   }
 
-  private async publishTranscriptionText(text: string, interim: boolean): Promise<void> {
-    if (!this.room || !this.room.localParticipant) return;
+  /**
+   * Publish the current in-progress (interim) transcript line for a language over
+   * the LiveKit data channel. Interim text is ephemeral — finalized segments live
+   * in Yjs — so passing an empty string clears the interim line on turn completion.
+   */
+  private publishInterim(code: string, text: string): void {
+    if (!this.room?.localParticipant) return;
 
     try {
       const payload = JSON.stringify({
         type: "transcription",
-        language: this.targetLanguage,
-        segmentId: `${this.targetLanguage}-${this.transcriptionSegmentId}`,
+        language: code,
         text,
-        final: !interim,
+        interim: true,
         timestamp: Date.now(),
       });
 
-      await this.room.localParticipant.publishData(
+      void this.room.localParticipant.publishData(
         new TextEncoder().encode(payload),
         { reliable: true, topic: "transcription" }
       );
     } catch (error) {
       console.error(
-        `[TranslationBridge:${this.targetLanguage}] Error publishing transcription:`,
+        `[TranslationBridge:${this.targetLanguage}] Error publishing interim transcript:`,
         error
       );
     }

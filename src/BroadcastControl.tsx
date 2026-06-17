@@ -7,10 +7,12 @@ import { useAtom } from "jotai";
 import {
   LiveKitRoom,
   TrackToggle,
+  useLocalParticipant,
   useRemoteParticipants,
+  useTrackVolume,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
-import { Track } from "livekit-client";
+import { LocalAudioTrack, Track } from "livekit-client";
 import { isEditorAtom } from "./configAtoms";
 import { useStrings } from "./useLocale";
 import { getDocId } from "./getDocId";
@@ -33,6 +35,30 @@ interface TokenResp {
 }
 
 const ORGANIZER_IDENTITY = "organizer-host";
+
+// A live level meter for the speaker's own microphone, so they can confirm their
+// audio is actually being captured before/while broadcasting.
+function MicLevelMeter() {
+  const s = useStrings();
+  const { isMicrophoneEnabled, microphoneTrack } = useLocalParticipant();
+  const track = microphoneTrack?.track;
+  const volume = useTrackVolume(track instanceof LocalAudioTrack ? track : undefined);
+  // useTrackVolume returns ~0..1; scale up so normal speech fills the meter.
+  const pct = isMicrophoneEnabled ? Math.min(100, Math.round(volume * 140)) : 0;
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-gray-600 dark:text-gray-300 whitespace-nowrap">{s.micLevel}</span>
+      <div className="flex-1 h-2 rounded bg-gray-200 dark:bg-gray-700 overflow-hidden">
+        <div
+          className={`h-full transition-[width] duration-75 ${
+            isMicrophoneEnabled ? "bg-green-500" : "bg-gray-400"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 function BroadcastDashboard({ docId }: { docId: string }) {
   const s = useStrings();
@@ -76,6 +102,7 @@ function BroadcastDashboard({ docId }: { docId: string }) {
           {listenerCount} {s.listeners}
         </span>
       </div>
+      <MicLevelMeter />
       <div className="flex-1 overflow-auto">
         <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300 mb-1">
           {s.activeTranslations}

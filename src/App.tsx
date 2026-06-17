@@ -10,6 +10,12 @@ import "./App.css";
 import { useAtom } from "jotai";
 import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
+import {
+  LISTEN_LANGUAGE_CODES,
+  LISTEN_FAVORITES,
+  LISTEN_ORIGINAL_CODE,
+  DEFAULT_LISTEN_CODE,
+} from "./listenLanguages";
 import { LayoutDiagram } from "./LayoutDiagram";
 import type { ClientToken } from "@y-sweet/sdk";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
@@ -100,7 +106,7 @@ function HomePage() {
             row.map(component =>
               component === 'translatedText' ? `translatedText-${defaultLang}` :
               component === 'bilingual' ? `bilingual-${defaultLang}` :
-              component === 'listen' ? `listen-${defaultLang}` :
+              component === 'listen' ? `listen-${DEFAULT_LISTEN_CODE}` :
               component
             ).join(",")
           ).join("|");
@@ -179,6 +185,35 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
     </select>
   );
 
+  // The listen picker offers the full Gemini-supported language set (keyed by
+  // BCP-47 code), with "Original / English" and favorites pinned on top. Names are
+  // localized via Intl.DisplayNames; the long list is sorted by localized name.
+  const sortedListenLangs = LISTEN_LANGUAGE_CODES
+    .filter((c) => c !== LISTEN_ORIGINAL_CODE && !LISTEN_FAVORITES.includes(c))
+    .sort((a, b) =>
+      (langDisplayNames.of(a) ?? a).localeCompare(langDisplayNames.of(b) ?? b, locale)
+    );
+
+  const listenLanguageSelector = (language: string) => (
+    <select
+      className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
+      value={language}
+      onChange={(e) => onLanguageChange('listen')(e.target.value)}
+    >
+      <option value={LISTEN_ORIGINAL_CODE}>{s.listenOriginal}</option>
+      <optgroup label={s.favorites}>
+        {LISTEN_FAVORITES.map((c) => (
+          <option key={c} value={c}>{langDisplayNames.of(c) ?? c}</option>
+        ))}
+      </optgroup>
+      <optgroup label={s.allLanguages}>
+        {sortedListenLangs.map((c) => (
+          <option key={c} value={c}>{langDisplayNames.of(c) ?? c}</option>
+        ))}
+      </optgroup>
+    </select>
+  );
+
   const cardClass = "rounded-md shadow bg-gray-100/80 dark:bg-gray-800/80 p-2 mb-2 flex flex-col gap-1 transition hover:shadow-lg";
 
   if (componentStr === 'sourceText') {
@@ -216,12 +251,15 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 
   if (componentStr.startsWith('listen-')) {
     const language = componentStr.substring('listen-'.length);
-    const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
+    const validLanguage =
+      language === LISTEN_ORIGINAL_CODE || LISTEN_LANGUAGE_CODES.includes(language)
+        ? language
+        : DEFAULT_LISTEN_CODE;
     return (
       <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-hidden"}>
         <div className="flex items-center">
           <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.listenLive}</h2>
-          {languageSelector('listen', validLanguage)}
+          {listenLanguageSelector(validLanguage)}
         </div>
         <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-gray-400">{s.connecting}</div>}>
           <ListenViewer key={validLanguage} language={validLanguage} />

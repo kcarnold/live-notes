@@ -111,6 +111,15 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
   return { url, apiKey, apiSecret };
 }
 
+// Give the translation manager what it needs to persist transcripts into Yjs and
+// reap idle translator bots. No-op for transcript/reaper if LiveKit is unconfigured.
+{
+  const lk = getLiveKitConfig();
+  if (lk) {
+    TranslationSessionManager.getInstance().init({ documentManager, livekit: lk });
+  }
+}
+
 // Issue a LiveKit access token. role 'organizer' => can publish (the speaker);
 // anything else => subscribe-only attendee (a listener).
 app.post('/api/livekit/token', async (req, res) => {

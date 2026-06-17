@@ -62,6 +62,10 @@ export interface AppStrings {
   activeTranslations: string;
   noActiveTranslations: string;
   broadcastEditorOnly: string;
+  listenOriginal: string;
+  favorites: string;
+  allLanguages: string;
+  micLevel: string;
 
   // Navigation
   goHome: string;
@@ -105,6 +109,10 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Active translations',
     noActiveTranslations: 'None yet — listeners can request them',
     broadcastEditorOnly: 'Broadcasting is available in editor mode (#editor).',
+    listenOriginal: 'Original / English',
+    favorites: 'Favorites',
+    allLanguages: 'All languages',
+    micLevel: 'Mic level',
     noSlides: 'No slides available',
     waitingForProclaim: 'Waiting for Proclaim data...',
     isProclaimRunning: 'Is the Proclaim service running?',
@@ -148,6 +156,10 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Traductions actives',
     noActiveTranslations: 'Aucune pour l’instant— les auditeurs peuvent en demander',
     broadcastEditorOnly: 'La diffusion est disponible en mode éditeur (#editor).',
+    listenOriginal: 'Original / Anglais',
+    favorites: 'Favoris',
+    allLanguages: 'Toutes les langues',
+    micLevel: 'Niveau du micro',
     noSlides: 'Aucune diapositive disponible',
     waitingForProclaim: 'En attente des donn\u00e9es Proclaim\u2026',
     isProclaimRunning: 'Le service Proclaim est-il actif\u00a0?',
@@ -191,6 +203,10 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Traducciones activas',
     noActiveTranslations: 'Ninguna aún— los oyentes pueden solicitarlas',
     broadcastEditorOnly: 'La transmisión está disponible en modo editor (#editor).',
+    listenOriginal: 'Original / Inglés',
+    favorites: 'Favoritos',
+    allLanguages: 'Todos los idiomas',
+    micLevel: 'Nivel del micrófono',
     noSlides: 'No hay diapositivas disponibles',
     waitingForProclaim: 'Esperando datos de Proclaim\u2026',
     isProclaimRunning: '\u00bfEst\u00e1 ejecut\u00e1ndose el servicio Proclaim?',
@@ -234,6 +250,10 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Tradiksyon aktif',
     noActiveTranslations: 'Pa gen okenn pou kounye a— moun k ap koute ka mande yo',
     broadcastEditorOnly: 'Difizyon disponib nan mòd editè (#editor).',
+    listenOriginal: 'Orijinal / Angle',
+    favorites: 'Favori',
+    allLanguages: 'Tout lang yo',
+    micLevel: 'Nivo mikwo',
     noSlides: 'Pa gen diapozitiv disponib',
     waitingForProclaim: 'Ap tann done Proclaim\u2026',
     isProclaimRunning: '\u00c8ske s\u00e8vis Proclaim la ap kouri?',
