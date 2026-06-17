@@ -47,7 +47,7 @@ export class TranslationBridge {
   private readonly geminiApiKey: string;
   private readonly geminiModel: string = "gemini-3.5-live-translate-preview";
   private readonly sampleRate: number = 24000; // Gemini outputs 24kHz
-  private readonly inputSampleRate: number = 48000; // LiveKit default
+  private readonly inputSampleRate: number = 16000; // Gemini Live expects 16kHz input
   private readonly channels: number = 1;
 
   // LiveKit config
