@@ -15,16 +15,13 @@ import path from 'path';
 import {
   normalizeSlideText,
   slideTranslationKey,
+  type SlideLibraryRecord,
   type SlideProvenance,
   type SlideTranslationEntry,
   type SlideTranslationLookup,
 } from './src/slideTranslation.ts';
 
-/** A stored entry plus the language and normalized source text it was keyed by. */
-export interface SlideLibraryRecord extends SlideTranslationEntry {
-  language: string;
-  sourceText: string;
-}
+export type { SlideLibraryRecord };
 
 interface LibraryFile {
   version: 1;

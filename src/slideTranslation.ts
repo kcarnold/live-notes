@@ -24,6 +24,12 @@ export interface SlideTranslationEntry {
   reviewedAt?: number;
 }
 
+/** A stored entry plus the language and normalized source text it was keyed by. */
+export interface SlideLibraryRecord extends SlideTranslationEntry {
+  language: string;
+  sourceText: string;
+}
+
 /**
  * Per-language display fallback chains, used only at read time.
  *
