@@ -67,6 +67,7 @@ from proclaim_lib import (
     ProclaimDB,
     parse_item_original,
     service_item_signatures,
+    slide_translation_key,
     slides_hash,
 )
 
@@ -90,6 +91,14 @@ POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))
 # Proclaim localRevision is unchanged are not re-parsed, so this is cheap; the interval
 # just bounds how quickly a slide edited underneath us is picked up.
 SERVICE_ORDER_SYNC_INTERVAL = float(os.getenv('PROCLAIM_SERVICE_ORDER_SYNC_INTERVAL', '2.0'))  # seconds
+# Target languages to pre-translate slides into (must match the frontend's configured
+# languages). The service asks the server to translate the active item into these and
+# writes the reviewed-or-auto results into the per-day slideTranslations map.
+SLIDE_TRANSLATION_LANGUAGES = [
+    lang.strip()
+    for lang in os.getenv('SLIDE_TRANSLATION_LANGUAGES', 'French,Haitian Creole,Spanish').split(',')
+    if lang.strip()
+]
 
 # Connection robustness tuning.
 # We don't hold a Y-Sweet connection while off air; when we do connect (and if the
@@ -201,6 +210,9 @@ class ProclaimYjsService:
         # Full service order, stored as a plain list value under a single key (the
         # service is the sole writer and replaces it wholesale, so no Y.Array needed).
         self.service_order_map = self.ydoc.get('proclaimServiceOrder', type=Map)
+        # Content-addressed translations for the current service (reviewed entries from
+        # the server library + auto fallbacks), keyed `${language}:${normalized text}`.
+        self.slide_translations_map = self.ydoc.get('slideTranslations', type=Map)
 
         # State tracking
         self.last_item_id: Optional[str] = None
@@ -210,6 +222,9 @@ class ProclaimYjsService:
         # last parsed them at, so we only re-read the DB when an item actually changes.
         self.items_by_id: Dict[str, ServiceItemWithSlides] = {}
         self.item_revisions: Dict[str, str] = {}
+        # Revision signature we last translated each item at, so we re-translate only
+        # when an item's slides actually change.
+        self.translated_revisions: Dict[str, str] = {}
 
     @staticmethod
     def _get_date_based_doc_id() -> str:
@@ -244,11 +259,13 @@ class ProclaimYjsService:
         self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
         self.status_map = self.ydoc.get('proclaimStatus', type=Map)
         self.service_order_map = self.ydoc.get('proclaimServiceOrder', type=Map)
+        self.slide_translations_map = self.ydoc.get('slideTranslations', type=Map)
         self.last_item_id = None
         self.last_slide_index = None
         self.current_item_slides = None
         self.items_by_id = {}
         self.item_revisions = {}
+        self.translated_revisions = {}
         logger.info(f"Recreated Yjs document for {self.doc_id}")
 
     def _maybe_roll_doc_date(self) -> None:
@@ -401,6 +418,60 @@ class ProclaimYjsService:
             logger.warning(f"Could not fetch on-air presentation: {e}")
             return None
 
+    async def _translate_item(self, slides: list) -> Optional[Dict[str, Any]]:
+        """Ask the server to translate an item's slides into all target languages.
+
+        Returns the ``{language: [{text, status, provenance}, ...]}`` map, or None on
+        failure (translation is best-effort; a failure must not drop the session).
+        """
+        if not slides or not SLIDE_TRANSLATION_LANGUAGES:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.ysweet_url}/api/translateItem",
+                    json={"slides": slides, "languages": SLIDE_TRANSLATION_LANGUAGES},
+                    timeout=60.0,
+                )
+                response.raise_for_status()
+                return response.json().get('translations')
+        except (httpx.HTTPError, ValueError) as e:
+            logger.warning(f"Slide translation request failed: {e}")
+            return None
+
+    def _store_translations(self, slides: list, translations: Dict[str, Any]) -> None:
+        """Write per-slide translation results into the slideTranslations map."""
+        with self.ydoc.transaction():
+            for language, per_slide in translations.items():
+                for slide, entry in zip(slides, per_slide):
+                    if not slide.strip() or not entry:
+                        continue
+                    self.slide_translations_map[slide_translation_key(language, slide)] = {
+                        'text': entry.get('text', ''),
+                        'status': entry.get('status', 'auto'),
+                        'provenance': entry.get('provenance', 'llm'),
+                    }
+
+    async def _translate_active_item(self, item_id: Optional[str]) -> None:
+        """Translate the active item once per content change and store the results.
+
+        Reviewed library entries (including seeded human translations) come back as
+        ``reviewed``; everything else as ``auto``, which the viewer badges as
+        unreviewed. Skipped when we've already translated this item's current revision.
+        """
+        item = self.items_by_id.get(item_id) if item_id else None
+        if not item or not item.slides:
+            return
+        revision = self.item_revisions.get(item_id)
+        if self.translated_revisions.get(item_id) == revision:
+            return
+
+        translations = await self._translate_item(item.slides)
+        if translations:
+            self._store_translations(item.slides, translations)
+            self.translated_revisions[item_id] = revision
+            logger.info(f"Stored translations for item {item_id} ({item.title})")
+
     async def _wait_until_on_air(self) -> None:
         """Poll Proclaim until it reports on air, holding NO Y-Sweet connection.
 
@@ -479,6 +550,10 @@ class ProclaimYjsService:
                     last_order_sync = now
 
                 self._apply_status(status)
+
+                # Translate the active item (best-effort) so viewers have content; only
+                # re-translates when the item's slides change.
+                await self._translate_active_item(status.get('status', {}).get('itemId'))
 
                 # Health check (throttled to WS_PING_INTERVAL, separate from the
                 # faster slide-poll cadence). The keepalive task is what actually

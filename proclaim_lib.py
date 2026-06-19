@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -367,6 +368,25 @@ def parse_item_original(db: ProclaimDB, item_id: str) -> Optional[ServiceItemWit
 
     slides = _slides_from_source_xml(item_kind, content, content[main_key])
     return ServiceItemWithSlides(itemId=item_id, title=item_title, slides=slides, itemKind=item_kind)
+
+
+def normalize_slide_text(text: str) -> str:
+    """Canonicalize slide text for use as a translation key.
+
+    Must match the TypeScript ``normalizeSlideText`` exactly so keys written by this
+    service line up with what the frontend reads: NFC, LF line endings, trailing
+    whitespace stripped per line, surrounding blank lines trimmed, internal line
+    breaks preserved.
+    """
+    text = unicodedata.normalize('NFC', text)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    lines = [line.rstrip() for line in text.split('\n')]
+    return '\n'.join(lines).strip()
+
+
+def slide_translation_key(language: str, slide_text: str) -> str:
+    """Content-addressed key combining language and normalized slide text."""
+    return f"{language}:{normalize_slide_text(slide_text)}"
 
 
 def slides_hash(slides: List[str]) -> str:

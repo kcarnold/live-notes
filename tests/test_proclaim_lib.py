@@ -4,6 +4,7 @@ These need no real Proclaim DB: a tiny fake stands in for ProclaimDB.get_service
 """
 
 import json
+import unicodedata
 
 from proclaim_lib import (
     parse_item_original,
@@ -11,6 +12,8 @@ from proclaim_lib import (
     slides_hash,
     service_item_signatures,
     build_seed_pairs,
+    normalize_slide_text,
+    slide_translation_key,
 )
 
 
@@ -70,7 +73,7 @@ def test_parse_item_original_uses_main_not_translation_screen():
     db = FakeDB({
         'item1': content_item(
             main_lines=['English one', '--', 'English two'],
-            translation_lines=['Français un', '--', 'Français deux'],
+            translation_lines=['Trad un', '--', 'Trad deux'],
         )
     })
     item = parse_item_original(db, 'item1')
@@ -81,11 +84,11 @@ def test_parse_item_translation_still_reads_translation_screen():
     db = FakeDB({
         'item1': content_item(
             main_lines=['English one'],
-            translation_lines=['Français un', '--', 'Français deux'],
+            translation_lines=['Trad un', '--', 'Trad deux'],
         )
     })
     item = parse_item_translation(db, 'item1', translation_screen_idx=1)
-    assert item.slides == ['Français un', 'Français deux']
+    assert item.slides == ['Trad un', 'Trad deux']
 
 
 def test_slides_hash_is_stable_and_sensitive():
@@ -125,3 +128,19 @@ def test_build_seed_pairs_returns_none_on_length_mismatch():
 def test_build_seed_pairs_skips_empty_pairs():
     pairs = build_seed_pairs(['Hello', ''], ['Bonjour', ''])
     assert pairs == [('Hello', 'Bonjour')]
+
+
+def test_normalize_slide_text_matches_ts_behavior():
+    # Surrounding blank lines trimmed, internal breaks kept.
+    assert normalize_slide_text('\n\nLine one\nLine two\n\n') == 'Line one\nLine two'
+    # Trailing whitespace per line stripped; CRLF normalized.
+    assert normalize_slide_text('Line one  \r\nLine two\t') == 'Line one\nLine two'
+    # NFC normalization: a decomposed e + combining acute accent collapses to one code point.
+    decomposed = 'e' + '́'
+    assert normalize_slide_text(decomposed) == unicodedata.normalize('NFC', decomposed)
+    assert len(normalize_slide_text(decomposed)) == 1
+
+
+def test_slide_translation_key_combines_language_and_normalized_text():
+    assert slide_translation_key('French', '  Bonjour  ') == 'French:Bonjour'
+    assert slide_translation_key('French', 'Bonjour\n') == slide_translation_key('French', 'Bonjour')

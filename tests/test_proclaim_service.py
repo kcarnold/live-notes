@@ -74,6 +74,8 @@ def make_service():
     # The full service-order sync hits Proclaim's HTTP API + DB; stub the fetch to a
     # no-op so lifecycle tests need neither. _apply_status itself touches neither.
     service._fetch_onair_presentation = mock.AsyncMock(return_value=None)
+    # Translation makes an HTTP call to the server; stub it for lifecycle tests.
+    service._translate_item = mock.AsyncMock(return_value=None)
     return service
 
 
@@ -252,6 +254,55 @@ def test_sync_service_order_pushes_items_and_caches_revisions():
         presentation['serviceItems'][0]['slides'][0]['localRevision'] = 5
         service._sync_service_order(presentation)
         assert calls == ['i1', 'i2', 'i1']
+
+
+def test_store_translations_writes_content_addressed_keys():
+    """Per-slide results land in slideTranslations under language:normalized-text keys."""
+    from proclaim_lib import slide_translation_key
+
+    service = make_service()
+    service._store_translations(
+        ['Hello', '', 'World'],
+        {
+            'French': [
+                {'text': 'Bonjour', 'status': 'auto', 'provenance': 'llm'},
+                {'text': '', 'status': 'auto', 'provenance': 'llm'},
+                {'text': 'Monde', 'status': 'reviewed', 'provenance': 'human'},
+            ]
+        },
+    )
+    hello = service.slide_translations_map[slide_translation_key('French', 'Hello')]
+    assert hello['text'] == 'Bonjour'
+    assert hello['status'] == 'auto'
+    world = service.slide_translations_map[slide_translation_key('French', 'World')]
+    assert world['status'] == 'reviewed'
+    # The empty slide is skipped.
+    assert slide_translation_key('French', '') not in service.slide_translations_map
+
+
+async def test_translate_active_item_translates_once_per_revision(fast_timing):
+    """The active item is translated only when its revision changes."""
+    from proclaim_lib import ServiceItemWithSlides, slide_translation_key
+
+    service = make_service()
+    service.items_by_id['i1'] = ServiceItemWithSlides('i1', 'Song', ['Hello'], 'Content')
+    service.item_revisions['i1'] = 'r1'
+    service._translate_item = mock.AsyncMock(
+        return_value={'French': [{'text': 'Bonjour', 'status': 'auto', 'provenance': 'llm'}]}
+    )
+
+    await service._translate_active_item('i1')
+    assert service._translate_item.await_count == 1
+    assert service.slide_translations_map[slide_translation_key('French', 'Hello')]['text'] == 'Bonjour'
+
+    # Same revision => no re-translation.
+    await service._translate_active_item('i1')
+    assert service._translate_item.await_count == 1
+
+    # Changed revision => re-translate.
+    service.item_revisions['i1'] = 'r2'
+    await service._translate_active_item('i1')
+    assert service._translate_item.await_count == 2
 
 
 def test_recreate_doc_resets_state():
