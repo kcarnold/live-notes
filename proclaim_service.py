@@ -65,6 +65,8 @@ from pycrdt.websocket.websocket import HttpxWebsocket
 from proclaim_lib import (
     ServiceItemWithSlides,
     ProclaimDB,
+    existing_translation_text,
+    get_translation_screen_idx,
     parse_item_original,
     service_item_signatures,
     slide_translation_key,
@@ -225,6 +227,8 @@ class ProclaimYjsService:
         # Revision signature we last translated each item at, so we re-translate only
         # when an item's slides actually change.
         self.translated_revisions: Dict[str, str] = {}
+        # Cached translation-screen index per presentation (stable for a presentation).
+        self.translation_idx_cache: Dict[str, Optional[int]] = {}
 
     @staticmethod
     def _get_date_based_doc_id() -> str:
@@ -266,6 +270,7 @@ class ProclaimYjsService:
         self.items_by_id = {}
         self.item_revisions = {}
         self.translated_revisions = {}
+        self.translation_idx_cache = {}
         logger.info(f"Recreated Yjs document for {self.doc_id}")
 
     def _maybe_roll_doc_date(self) -> None:
@@ -418,25 +423,59 @@ class ProclaimYjsService:
             logger.warning(f"Could not fetch on-air presentation: {e}")
             return None
 
-    async def _translate_item(self, slides: list) -> Optional[Dict[str, Any]]:
+    async def _translate_item(self, slides: list, reference: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Ask the server to translate an item's slides into all target languages.
 
-        Returns the ``{language: [{text, status, provenance}, ...]}`` map, or None on
-        failure (translation is best-effort; a failure must not drop the session).
+        ``reference`` is Proclaim's existing translation (language unknown); when given,
+        the server aligns it to the source slides as a first draft. Returns the
+        ``{language: [{text, status, provenance}, ...]}`` map, or None on failure
+        (translation is best-effort; a failure must not drop the session).
         """
         if not slides or not SLIDE_TRANSLATION_LANGUAGES:
             return None
+        body: Dict[str, Any] = {"slides": slides, "languages": SLIDE_TRANSLATION_LANGUAGES}
+        if reference:
+            body["reference"] = reference
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.ysweet_url}/api/translateItem",
-                    json={"slides": slides, "languages": SLIDE_TRANSLATION_LANGUAGES},
+                    json=body,
                     timeout=60.0,
                 )
                 response.raise_for_status()
                 return response.json().get('translations')
         except (httpx.HTTPError, ValueError) as e:
             logger.warning(f"Slide translation request failed: {e}")
+            return None
+
+    def _translation_idx_for_presentation(self, presentation_id: str) -> Optional[int]:
+        """The translation-screen index for a presentation (cached; None if absent)."""
+        if presentation_id in self.translation_idx_cache:
+            return self.translation_idx_cache[presentation_id]
+        idx: Optional[int] = None
+        try:
+            pres = self.db.get_presentation(presentation_id)
+            if pres:
+                idx = get_translation_screen_idx(pres['content'])
+        except Exception as e:
+            logger.warning(f"Could not read translation screen for presentation {presentation_id}: {e}")
+        self.translation_idx_cache[presentation_id] = idx
+        return idx
+
+    def _existing_translation_reference(
+        self, item_id: str, presentation_id: Optional[str]
+    ) -> Optional[str]:
+        """Proclaim's existing translation text for an item, to seed a first draft."""
+        if not presentation_id:
+            return None
+        idx = self._translation_idx_for_presentation(presentation_id)
+        if idx is None:
+            return None
+        try:
+            return existing_translation_text(self.db, item_id, idx)
+        except Exception as e:
+            logger.warning(f"Could not read existing translation for item {item_id}: {e}")
             return None
 
     def _store_translations(self, slides: list, translations: Dict[str, Any]) -> None:
@@ -452,12 +491,15 @@ class ProclaimYjsService:
                         'provenance': entry.get('provenance', 'llm'),
                     }
 
-    async def _translate_active_item(self, item_id: Optional[str]) -> None:
+    async def _translate_active_item(
+        self, item_id: Optional[str], presentation_id: Optional[str] = None
+    ) -> None:
         """Translate the active item once per content change and store the results.
 
-        Reviewed library entries (including seeded human translations) come back as
-        ``reviewed``; everything else as ``auto``, which the viewer badges as
-        unreviewed. Skipped when we've already translated this item's current revision.
+        Reviewed library entries come back as ``reviewed``; everything else as ``auto``
+        (the viewer badges these unreviewed), including Proclaim's existing translation
+        when present, which is passed as a first-draft reference. Skipped when we've
+        already translated this item's current revision.
         """
         item = self.items_by_id.get(item_id) if item_id else None
         if not item or not item.slides:
@@ -466,7 +508,8 @@ class ProclaimYjsService:
         if self.translated_revisions.get(item_id) == revision:
             return
 
-        translations = await self._translate_item(item.slides)
+        reference = self._existing_translation_reference(item_id, presentation_id)
+        translations = await self._translate_item(item.slides, reference)
         if translations:
             self._store_translations(item.slides, translations)
             self.translated_revisions[item_id] = revision
@@ -552,8 +595,12 @@ class ProclaimYjsService:
                 self._apply_status(status)
 
                 # Translate the active item (best-effort) so viewers have content; only
-                # re-translates when the item's slides change.
-                await self._translate_active_item(status.get('status', {}).get('itemId'))
+                # re-translates when the item's slides change. Proclaim's existing
+                # translation (if any) is passed as a first-draft reference.
+                await self._translate_active_item(
+                    status.get('status', {}).get('itemId'),
+                    status.get('presentationId'),
+                )
 
                 # Health check (throttled to WS_PING_INTERVAL, separate from the
                 # faster slide-poll cadence). The keepalive task is what actually

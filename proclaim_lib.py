@@ -389,6 +389,37 @@ def slide_translation_key(language: str, slide_text: str) -> str:
     return f"{language}:{normalize_slide_text(slide_text)}"
 
 
+def existing_translation_text(
+    db: ProclaimDB,
+    item_id: str,
+    translation_screen_idx: int,
+) -> Optional[str]:
+    """Return the decoded text of an item's existing translation screen, or None.
+
+    Unlike ``parse_item_translation`` this does NOT fall back to the Main screen: if the
+    item has no translation-screen field we return None (so we never feed the original
+    language back as a "translation" reference). The text is returned joined, unsegmented
+    — the LLM re-aligns it to the source slides.
+    """
+    service_item = db.get_service_item(item_id.replace('-', ''))
+    if not service_item:
+        return None
+
+    content = json.loads(service_item['Content'])
+    item_kind = service_item.get('ServiceItemKind') or 'Unknown'
+    item_title = service_item.get('Title') or 'Unknown'
+    if _is_blank_item(item_kind, item_title):
+        return None
+
+    translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
+    if translation_key not in content:
+        return None
+
+    slides = _slides_from_source_xml(item_kind, content, content[translation_key])
+    text = '\n\n'.join(slide for slide in slides if slide.strip())
+    return text or None
+
+
 def slides_hash(slides: List[str]) -> str:
     """Stable content hash of an item's slides, for detecting changes underneath us."""
     digest = hashlib.sha256()

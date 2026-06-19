@@ -9,6 +9,7 @@ import unicodedata
 from proclaim_lib import (
     parse_item_original,
     parse_item_translation,
+    existing_translation_text,
     slides_hash,
     service_item_signatures,
     build_seed_pairs,
@@ -89,6 +90,26 @@ def test_parse_item_translation_still_reads_translation_screen():
     })
     item = parse_item_translation(db, 'item1', translation_screen_idx=1)
     assert item.slides == ['Trad un', 'Trad deux']
+
+
+def test_existing_translation_text_joins_translation_screen():
+    db = FakeDB({
+        'item1': content_item(
+            main_lines=['English one'],
+            translation_lines=['Trad un', '--', 'Trad deux'],
+        )
+    })
+    assert existing_translation_text(db, 'item1', translation_screen_idx=1) == 'Trad un\n\nTrad deux'
+
+
+def test_existing_translation_text_none_without_translation_screen():
+    db = FakeDB({'item1': content_item(main_lines=['English one'])})
+    assert existing_translation_text(db, 'item1', translation_screen_idx=1) is None
+
+
+def test_existing_translation_text_none_for_blank_item():
+    db = FakeDB({'img1': content_item(kind='ImageSlideshow', title='Slideshow')})
+    assert existing_translation_text(db, 'img1', translation_screen_idx=1) is None
 
 
 def test_slides_hash_is_stable_and_sensitive():
