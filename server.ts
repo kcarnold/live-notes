@@ -13,6 +13,8 @@ import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
 import { translateBlock, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
+import { SlideLibrary } from './slideLibrary.ts';
+import { translateItemSlides } from './src/slideItemTranslation.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -57,6 +59,14 @@ const AUDIO_CACHE_DIR = 'audio-cache';
 
 // Ensure audio cache directory exists
 await fs.mkdir(AUDIO_CACHE_DIR, { recursive: true });
+
+// Persistent reviewed-translation library. Defaults into the audio-cache dir so it
+// rides along with the existing Docker volume; override with SLIDE_LIBRARY_PATH.
+const SLIDE_LIBRARY_PATH =
+  process.env.SLIDE_LIBRARY_PATH || path.join(AUDIO_CACHE_DIR, 'slide-library.json');
+const slideLibrary = new SlideLibrary(SLIDE_LIBRARY_PATH);
+await slideLibrary.load();
+console.log(`Slide translation library: ${SLIDE_LIBRARY_PATH} (${slideLibrary.list().length} entries)`);
 
 const app = express();
 app.use(express.static("dist"));
@@ -103,6 +113,61 @@ app.post('/api/requestTranslatedBlocks', async (req, res) => {
     ok: true,
     results
   });
+});
+
+// --- Slide translation library (persistent reviewed tier) ---
+
+// List all reviewed entries.
+app.get('/api/slideLibrary', (_req, res) => {
+  return res.json({ ok: true, entries: slideLibrary.list() });
+});
+
+// Batch lookup of reviewed entries for one language. Body: { language, texts: string[] }.
+// Returns entries[] aligned with texts (null where there is no reviewed entry).
+app.post('/api/slideLibrary/lookup', (req, res) => {
+  const language = req.body?.language as string | undefined;
+  const texts = (req.body?.texts as string[]) ?? [];
+  if (!language) {
+    return res.status(400).json({ ok: false, error: 'Missing language' });
+  }
+  const entries = texts.map((text) => slideLibrary.lookup(language, text) ?? null);
+  return res.json({ ok: true, entries });
+});
+
+// Upsert a reviewed translation. Body: { language, sourceText, text, provenance? }.
+app.post('/api/slideLibrary', async (req, res) => {
+  const { language, sourceText, text, provenance } = req.body ?? {};
+  if (!language || typeof sourceText !== 'string' || typeof text !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing language, sourceText, or text' });
+  }
+  const record = await slideLibrary.upsert({ language, sourceText, text, provenance });
+  return res.json({ ok: true, record });
+});
+
+// Translate a whole service item, reusing reviewed library entries and filling the
+// rest with the LLM. Body: { slides: string[], languages: string[] }.
+// Returns { translations: { [language]: PerSlideTranslation[] } }.
+app.post('/api/translateItem', async (req, res) => {
+  const slides = (req.body?.slides as string[]) ?? [];
+  const requestedLanguages = (req.body?.languages as string[]) ?? [];
+  if (!Array.isArray(slides) || requestedLanguages.length === 0) {
+    return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
+  }
+
+  const lookup = slideLibrary.toLookup();
+  const entries = await Promise.all(
+    requestedLanguages.map(async (language) => {
+      const perSlide = await translateItemSlides({
+        slides,
+        language,
+        lookup,
+        translate: (todo) => translateBlock(geminiProvider, todo, language),
+      });
+      return [language, perSlide] as const;
+    }),
+  );
+
+  return res.json({ ok: true, translations: Object.fromEntries(entries) });
 });
 
 // TTS request deduplication: Map of cache key -> Promise
