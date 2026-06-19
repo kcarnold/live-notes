@@ -17,6 +17,7 @@ import { PostHogErrorBoundary } from "posthog-js/react";
 import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
 import { SlideReviewContainer } from "./SlideReviewContainer";
+import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -179,6 +180,20 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
     return (
       <div className={cardClass + " flex-1 overflow-auto bg-white/70 dark:bg-gray-900/70"}>
         <SlideReviewContainer />
+      </div>
+    );
+  }
+
+  if (componentStr.startsWith('slideTranslation-')) {
+    const language = componentStr.substring('slideTranslation-'.length);
+    const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
+    return (
+      <div className={cardClass + " flex-1/2 overflow-auto"}>
+        <div className="flex items-center gap-2 px-1">
+          <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.translation}</h2>
+          {languageSelector('slideTranslation', validLanguage)}
+        </div>
+        <SlideTranslationViewerContainer language={validLanguage} />
       </div>
     );
   }
