@@ -65,8 +65,9 @@ from pycrdt.websocket.websocket import HttpxWebsocket
 from proclaim_lib import (
     ServiceItemWithSlides,
     ProclaimDB,
-    get_translation_screen_idx,
-    parse_item_translation,
+    parse_item_original,
+    service_item_signatures,
+    slides_hash,
 )
 
 # Configure logging (default level, can be overridden by --debug flag)
@@ -85,6 +86,10 @@ YSWEET_URL = os.getenv('YSWEET_URL', '')
 assert YSWEET_URL, "YSWEET_URL must be set"
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
+# How often to re-read the full on-air service order (all items + slides). Items whose
+# Proclaim localRevision is unchanged are not re-parsed, so this is cheap; the interval
+# just bounds how quickly a slide edited underneath us is picked up.
+SERVICE_ORDER_SYNC_INTERVAL = float(os.getenv('PROCLAIM_SERVICE_ORDER_SYNC_INTERVAL', '2.0'))  # seconds
 
 # Connection robustness tuning.
 # We don't hold a Y-Sweet connection while off air; when we do connect (and if the
@@ -193,11 +198,18 @@ class ProclaimYjsService:
         self.ydoc: Doc = Doc()
         self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
         self.status_map = self.ydoc.get('proclaimStatus', type=Map)
+        # Full service order, stored as a plain list value under a single key (the
+        # service is the sole writer and replaces it wholesale, so no Y.Array needed).
+        self.service_order_map = self.ydoc.get('proclaimServiceOrder', type=Map)
 
         # State tracking
         self.last_item_id: Optional[str] = None
         self.last_slide_index: Optional[int] = None
         self.current_item_slides: Optional[ServiceItemWithSlides] = None
+        # Parsed original-language slides per item, and the localRevision signature we
+        # last parsed them at, so we only re-read the DB when an item actually changes.
+        self.items_by_id: Dict[str, ServiceItemWithSlides] = {}
+        self.item_revisions: Dict[str, str] = {}
 
     @staticmethod
     def _get_date_based_doc_id() -> str:
@@ -231,9 +243,12 @@ class ProclaimYjsService:
         self.ydoc = Doc()
         self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
         self.status_map = self.ydoc.get('proclaimStatus', type=Map)
+        self.service_order_map = self.ydoc.get('proclaimServiceOrder', type=Map)
         self.last_item_id = None
         self.last_slide_index = None
         self.current_item_slides = None
+        self.items_by_id = {}
+        self.item_revisions = {}
         logger.info(f"Recreated Yjs document for {self.doc_id}")
 
     def _maybe_roll_doc_date(self) -> None:
@@ -291,44 +306,69 @@ class ProclaimYjsService:
         logger.info(f"Updated status: {item_id} slide {slide_index}")
 
 
-    def _handle_item_change(self, item_id: str, slide_index: int, presentation_id: Optional[str]) -> bool:
-        """Handle an item change. Returns True if state was updated.
+    def _sync_service_order(self, presentation: Dict[str, Any]) -> None:
+        """Push the full on-air service order (all items + original slides) into Yjs.
 
-        Returns False (rather than raising) on any DB/parse problem, so the caller
-        leaves last_item_id unadvanced and retries on the next poll. This also keeps
-        a DB hiccup - e.g. a locked DB raising, or a row that hasn't been written
-        yet - from bubbling up and being mistaken for a Y-Sweet connection failure,
-        which would needlessly drop a healthy websocket.
+        For each item we compare Proclaim's per-slide ``localRevision`` signature with
+        what we last parsed; only changed (or not-yet-seen) items are re-read from the
+        DB. This is what keeps us in sync when slide text changes underneath us within
+        the same item. A DB/parse problem for one item is logged and skipped (its
+        revision is left uncached so we retry next sync) rather than dropped on the
+        whole order.
         """
-        if not presentation_id:
-            logger.warning("No presentation ID in status response")
-            return False
+        signatures = service_item_signatures(presentation)
+        order = [sig['id'] for sig in signatures if sig['id']]
 
-        try:
-            pres_data = self.db.get_presentation(presentation_id)
-            if not pres_data:
-                logger.warning(f"Presentation {presentation_id} not in database yet (DB may be trailing the live API); will retry")
-                return False
+        with self.ydoc.transaction():
+            for sig in signatures:
+                item_id = sig['id']
+                if not item_id:
+                    continue
+                unchanged = (
+                    self.item_revisions.get(item_id) == sig['revision']
+                    and item_id in self.items_by_id
+                )
+                if unchanged:
+                    continue
 
-            translation_idx = get_translation_screen_idx(pres_data['content'])
-            if translation_idx is None:
-                logger.warning(f"No translation screen found in presentation {presentation_id}")
-                return False
+                try:
+                    parsed = parse_item_original(self.db, item_id)
+                except Exception as e:
+                    logger.warning(f"Failed to parse item {item_id} from Proclaim DB: {e}; will retry")
+                    continue
+                if not parsed:
+                    continue
 
-            item_with_slides = parse_item_translation(self.db, item_id, translation_idx)
-        except Exception as e:
-            logger.warning(f"Failed to load/parse item {item_id} from Proclaim DB: {e}; will retry")
-            return False
+                self.items_by_id[item_id] = parsed
+                self.item_revisions[item_id] = sig['revision']
+                self.presentations_map[item_id] = {
+                    'title': parsed.title,
+                    'itemId': item_id,
+                    'slides': parsed.slides,
+                    'itemKind': parsed.itemKind,
+                    'slidesHash': slides_hash(parsed.slides),
+                }
+                logger.info(
+                    f"Synced item {item_id} ({parsed.title}) with {len(parsed.slides)} original slides"
+                )
 
-        if not item_with_slides:
-            return False
+            self.service_order_map['order'] = order
 
-        self.update_presentation_item_in_yjs(item_with_slides)
-        self.current_item_slides = item_with_slides
-        self.update_status_in_yjs(item_id, slide_index)
-        self.last_item_id = item_id
-        self.last_slide_index = slide_index
-        return True
+    def _apply_status(self, status: Dict[str, Any]) -> None:
+        """Push the current item/slide pointer into Yjs (presentations come from sync)."""
+        item_id = status.get('status', {}).get('itemId')
+        slide_index = status.get('status', {}).get('slideIndex') or 0
+
+        if item_id != self.last_item_id:
+            logger.info(f"Item changed to {item_id}")
+            self.current_item_slides = self.items_by_id.get(item_id)
+            self.update_status_in_yjs(item_id, slide_index)
+            self.last_item_id = item_id
+            self.last_slide_index = slide_index
+        elif slide_index != self.last_slide_index:
+            logger.info(f"Slide changed to {slide_index}")
+            self.update_status_in_yjs(item_id, slide_index)
+            self.last_slide_index = slide_index
 
     async def _fetch_status(self) -> Optional[Dict[str, Any]]:
         """Fetch current Proclaim status.
@@ -349,29 +389,17 @@ class ProclaimYjsService:
             if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
             return None
 
-    def _apply_status(self, status: Dict[str, Any]) -> None:
-        """Push a fetched Proclaim status into Yjs (item and/or slide changes)."""
-        item_id = status.get('status', {}).get('itemId')
-        slide_index = status.get('status', {}).get('slideIndex') or 0
-        presentation_id = status.get('presentationId')
+    async def _fetch_onair_presentation(self) -> Optional[Dict[str, Any]]:
+        """Fetch the full on-air presentation (the service order), or None on failure.
 
-        # Item changed (also covers the forced re-push after a fresh connect,
-        # where last_item_id has been reset to None).
-        #
-        # _handle_item_change only advances last_item_id when it succeeds; on
-        # failure we intentionally leave it unchanged so the next poll retries.
-        # Some failures are transient - notably the Proclaim DB trailing the live
-        # API, where the item's row isn't written yet - and retrying is how the
-        # item eventually shows up. The cost is that a genuinely unparseable item
-        # (e.g. an image slideshow with no translation screen) is re-attempted
-        # every poll while it's on air.
-        if item_id != self.last_item_id:
-            logger.info(f"Item changed to {item_id} in presentation {presentation_id}")
-            self._handle_item_change(item_id, slide_index, presentation_id)
-        elif slide_index != self.last_slide_index:
-            logger.info(f"Slide changed to {slide_index}")
-            self.update_status_in_yjs(item_id, slide_index)
-            self.last_slide_index = slide_index
+        Like ``_fetch_status``, this is a local Proclaim call; failures are swallowed
+        so a Proclaim hiccup never drops the healthy Y-Sweet connection.
+        """
+        try:
+            return await self.proclaim_client.get_onair_presentation()
+        except httpx.HTTPError as e:
+            logger.warning(f"Could not fetch on-air presentation: {e}")
+            return None
 
     async def _wait_until_on_air(self) -> None:
         """Poll Proclaim until it reports on air, holding NO Y-Sweet connection.
@@ -413,6 +441,7 @@ class ProclaimYjsService:
 
             off_air_since: Optional[float] = None
             last_ping = anyio.current_time()
+            last_order_sync = float('-inf')  # force an immediate sync on connect
             while True:
                 # Don't swap the Doc while connected; end the session and let the
                 # caller roll the date with a fresh Doc, then reconnect.
@@ -434,10 +463,20 @@ class ProclaimYjsService:
 
                 off_air_since = None
 
-                if DUMP_PRESENTATION_JSON:
-                    presentation = await self.proclaim_client.get_onair_presentation()
+                # Refresh the full service order periodically, or immediately when the
+                # active item isn't in our cache yet (e.g. right after connecting).
+                now = anyio.current_time()
+                active_item = status.get('status', {}).get('itemId')
+                if (
+                    now - last_order_sync >= SERVICE_ORDER_SYNC_INTERVAL
+                    or (active_item and active_item not in self.items_by_id)
+                ):
+                    presentation = await self._fetch_onair_presentation()
                     if presentation:
-                        Path('presentation.json').write_text(json.dumps(presentation, indent=2))
+                        if DUMP_PRESENTATION_JSON:
+                            Path('presentation.json').write_text(json.dumps(presentation, indent=2))
+                        self._sync_service_order(presentation)
+                    last_order_sync = now
 
                 self._apply_status(status)
 

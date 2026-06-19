@@ -71,8 +71,9 @@ def make_service():
     with mock.patch.object(ps, "ProclaimDB"):
         service = ps.ProclaimYjsService("http://localhost:8000", doc_id="doc-test")
     service.get_ysweet_token = mock.AsyncMock(return_value={"url": "ws://test"})
-    # Item-change parsing hits the DB; stub it so _apply_status just records state.
-    service._handle_item_change = mock.MagicMock(return_value=True)
+    # The full service-order sync hits Proclaim's HTTP API + DB; stub the fetch to a
+    # no-op so lifecycle tests need neither. _apply_status itself touches neither.
+    service._fetch_onair_presentation = mock.AsyncMock(return_value=None)
     return service
 
 
@@ -196,7 +197,7 @@ async def test_reconnects_after_failed_token_fetch(fast_timing):
 
 
 async def test_fresh_connection_repushes_current_state(fast_timing):
-    """On (re)connect the current item/slide is re-pushed to the new server."""
+    """On (re)connect the current item/slide pointer is re-pushed to the new server."""
     service = make_service()
     service._fetch_status = mock.AsyncMock(return_value=status(item_id="item-9", slide_index=4))
     ws = FakeWebSocket(fail_ping_after=1)  # die after first push so the session ends fast
@@ -206,9 +207,51 @@ async def test_fresh_connection_repushes_current_state(fast_timing):
             with anyio.fail_after(2):
                 await service._run_session()
 
-    # last_item_id was reset to None on connect, so the first poll counts as an
-    # item change and re-pushes via _handle_item_change.
-    service._handle_item_change.assert_called_with("item-9", 4, "pres-1")
+    # last_item_id was reset to None on connect, so the first poll re-pushes the
+    # current item/slide pointer into proclaimStatus.
+    assert service.status_map["itemId"] == "item-9"
+    assert service.status_map["slideIndex"] == 4
+
+
+def test_sync_service_order_pushes_items_and_caches_revisions():
+    """The full-order sync pushes every item's original slides + a service order, and
+    only re-parses items whose localRevision signature changed."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    parsed = {
+        'i1': ServiceItemWithSlides('i1', 'Call to Worship', ['A', 'B'], 'Content'),
+        'i2': ServiceItemWithSlides('i2', 'Song', ['C'], 'SongLyrics'),
+    }
+    calls = []
+
+    def fake_parse(_db, item_id):
+        calls.append(item_id)
+        return parsed[item_id]
+
+    presentation = {
+        'serviceItems': [
+            {'id': 'i1', 'title': 'Call to Worship', 'kind': 'Content',
+             'slides': [{'localRevision': 1}, {'localRevision': 2}]},
+            {'id': 'i2', 'title': 'Song', 'kind': 'SongLyrics', 'slides': [{'localRevision': 9}]},
+        ]
+    }
+
+    with mock.patch.object(ps, 'parse_item_original', fake_parse):
+        service._sync_service_order(presentation)
+        assert list(service.service_order_map['order']) == ['i1', 'i2']
+        assert list(service.presentations_map['i1']['slides']) == ['A', 'B']
+        assert service.presentations_map['i1']['slidesHash']
+        assert calls == ['i1', 'i2']
+
+        # Unchanged revisions => no re-parse.
+        service._sync_service_order(presentation)
+        assert calls == ['i1', 'i2']
+
+        # Change i1's revision => only i1 is re-parsed (slides changed underneath us).
+        presentation['serviceItems'][0]['slides'][0]['localRevision'] = 5
+        service._sync_service_order(presentation)
+        assert calls == ['i1', 'i2', 'i1']
 
 
 def test_recreate_doc_resets_state():
