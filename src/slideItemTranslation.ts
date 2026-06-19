@@ -40,31 +40,43 @@ export type TranslateFn = (todo: TranslateTodo) => Promise<TranslatedSegment[]>;
 /**
  * Resolve a translation for every slide of an item in one model call.
  *
- * - Slides with a reviewed library entry are returned as `reviewed` and supplied to
- *   the model as already-translated context.
- * - Empty slides resolve to empty `auto` text without hitting the model.
- * - Remaining slides are translated together and returned as `auto`.
+ * Precedence per slide:
+ * - a `reviewed` library entry → returned as `reviewed`, fed to the model as context;
+ * - else a `firstDraftBySlide` entry (e.g. Proclaim's existing translation, aligned to
+ *   the source) → returned as `auto`/`imported` without re-translating;
+ * - else the model translates it (with reviewed + first-draft slides as context),
+ *   returned as `auto`/`llm`.
+ * Empty slides resolve to empty `auto` text without hitting the model.
+ *
+ * `firstDraftBySlide`, when given, is aligned to `slides` (undefined = no draft) and is
+ * expected to already be in `language` (the caller only passes it for that language).
  */
 export async function translateItemSlides(params: {
   slides: string[];
   language: string;
   lookup: SlideTranslationLookup;
   translate: TranslateFn;
+  firstDraftBySlide?: (string | undefined)[];
 }): Promise<PerSlideTranslation[]> {
-  const { slides, language, lookup, translate } = params;
+  const { slides, language, lookup, translate, firstDraftBySlide } = params;
 
   const reviewed = slides.map((slide) =>
     slide.trim() === '' ? undefined : lookup(language, slide),
   );
+  const firstDraft = slides.map((slide, i) => {
+    const draft = firstDraftBySlide?.[i];
+    return slide.trim() !== '' && draft && draft.trim() !== '' ? draft : undefined;
+  });
   const isTranslationNeeded = slides.map(
-    (slide, i) => slide.trim() !== '' && !reviewed[i],
+    (slide, i) => slide.trim() !== '' && !reviewed[i] && !firstDraft[i],
   );
 
   const translatedByText = new Map<string, string>();
   if (isTranslationNeeded.some(Boolean)) {
-    // Reviewed slides feed the model as context for style/terminology consistency.
+    // Reviewed + first-draft slides are already in-language, so they feed the model as
+    // context for style/terminology consistency.
     const translatedContext = slides
-      .map((_, i) => reviewed[i]?.text)
+      .map((_, i) => reviewed[i]?.text ?? firstDraft[i])
       .filter((text): text is string => Boolean(text))
       .join('\n');
 
@@ -90,6 +102,10 @@ export async function translateItemSlides(params: {
     }
     if (slide.trim() === '') {
       return { text: '', status: 'auto', provenance: 'llm' };
+    }
+    const draft = firstDraft[i];
+    if (draft) {
+      return { text: draft, status: 'auto', provenance: 'imported' };
     }
     return {
       text: translatedByText.get(normalizeSlideText(slide)) ?? '',

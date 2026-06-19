@@ -79,6 +79,60 @@ describe('translateItemSlides', () => {
     expect(result[0].status).toBe('reviewed');
   });
 
+  it('uses a first draft as an imported auto entry instead of translating', async () => {
+    const translate = vi.fn(fakeTranslate);
+    const result = await translateItemSlides({
+      slides: ['Praise the Lord', 'Forever and ever'],
+      language: 'French',
+      lookup: makeLookup({}),
+      translate,
+      firstDraftBySlide: ['Louez le Seigneur (existant)', undefined],
+    });
+
+    expect(result[0]).toEqual({
+      text: 'Louez le Seigneur (existant)',
+      status: 'auto',
+      provenance: 'imported',
+    });
+    expect(result[1]).toEqual({ text: '[fr] Forever and ever', status: 'auto', provenance: 'llm' });
+
+    // Only the slide without a draft is sent to the model; the draft feeds context.
+    const todo = translate.mock.calls[0][0];
+    expect(todo.isTranslationNeeded).toEqual([false, true]);
+    expect(todo.translatedContext).toContain('Louez le Seigneur (existant)');
+  });
+
+  it('prefers a reviewed entry over a first draft', async () => {
+    const lookup = makeLookup({
+      [slideTranslationKey('French', 'Praise the Lord')]: {
+        text: 'Louez le Seigneur',
+        status: 'reviewed',
+        provenance: 'human',
+        reviewedAt: 1,
+      },
+    });
+    const result = await translateItemSlides({
+      slides: ['Praise the Lord'],
+      language: 'French',
+      lookup,
+      translate: vi.fn(fakeTranslate),
+      firstDraftBySlide: ['some imported draft'],
+    });
+    expect(result[0]).toEqual({ text: 'Louez le Seigneur', status: 'reviewed', provenance: 'human' });
+  });
+
+  it('does not call the model when every slide has a reviewed entry or a first draft', async () => {
+    const translate = vi.fn(fakeTranslate);
+    await translateItemSlides({
+      slides: ['Hallelujah'],
+      language: 'French',
+      lookup: makeLookup({}),
+      translate,
+      firstDraftBySlide: ['Alléluia'],
+    });
+    expect(translate).not.toHaveBeenCalled();
+  });
+
   it('resolves empty slides to empty auto text without translating them', async () => {
     const translate = vi.fn(fakeTranslate);
     const result = await translateItemSlides({

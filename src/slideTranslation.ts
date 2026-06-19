@@ -13,7 +13,7 @@
 export type SlideStatus = 'reviewed' | 'auto';
 
 /** Where a translation came from. Pure metadata — the data model treats them alike. */
-export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm' | 'llm-agent';
+export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm' | 'llm-agent' | 'imported';
 
 export interface SlideTranslationEntry {
   /** The translated text. */
