@@ -16,6 +16,7 @@ import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import { PostHogErrorBoundary } from "posthog-js/react";
 import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
+import { SlideReviewContainer } from "./SlideReviewContainer";
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -103,8 +104,9 @@ function HomePage() {
             </div>
           );
         })}
-        <div className="text-center mb-4">
+        <div className="text-center mb-4 flex flex-col gap-2">
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedText-French#editor">Note-Taker</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/slideReview#editor">{s.reviewSlidesLink}</a>
         </div>
       </div>
     </div>
@@ -171,6 +173,14 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 
   if (componentStr === 'currentSlide') {
     return <CurrentSlideViewerContainer />;
+  }
+
+  if (componentStr === 'slideReview') {
+    return (
+      <div className={cardClass + " flex-1 overflow-auto bg-white/70 dark:bg-gray-900/70"}>
+        <SlideReviewContainer />
+      </div>
+    );
   }
 
   if (componentStr.startsWith('translatedText-')) {

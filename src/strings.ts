@@ -56,6 +56,23 @@ export interface AppStrings {
   componentTranslatedText: string;
   componentBilingual: string;
   componentCurrentSlide: string;
+
+  // Slide translation review
+  slideReviewTitle: string;
+  slidesInputLabel: string;
+  loadOnAirItem: string;
+  suggestTranslations: string;
+  suggesting: string;
+  save: string;
+  saveAll: string;
+  saving: string;
+  statusReviewed: string;
+  statusUnsaved: string;
+  reviewSourceHeader: string;
+  noSlidesToReview: string;
+  editorOnlyReview: string;
+  reviewSlidesLink: string;
+  unreviewedBadge: string;
 }
 
 export const strings: Record<SupportedLocale, AppStrings> = {
@@ -88,6 +105,21 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
     componentCurrentSlide: 'Current Slide',
+    slideReviewTitle: 'Slide Translation Review',
+    slidesInputLabel: 'Item slides (separate slides with a blank line or --)',
+    loadOnAirItem: 'Load on-air item',
+    suggestTranslations: 'Suggest',
+    suggesting: 'Suggesting…',
+    save: 'Save',
+    saveAll: 'Save all reviewed',
+    saving: 'Saving…',
+    statusReviewed: 'Reviewed',
+    statusUnsaved: 'Unsaved',
+    reviewSourceHeader: 'Source',
+    noSlidesToReview: 'Enter or load an item to review its slides.',
+    editorOnlyReview: 'Open this page with #editor to edit and save translations.',
+    reviewSlidesLink: 'Review Slide Translations',
+    unreviewedBadge: 'unreviewed',
   },
   fr: {
     connecting: 'Connexion\u2026',
@@ -118,6 +150,21 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
     componentCurrentSlide: 'Diapositive actuelle',
+    slideReviewTitle: 'Révision des traductions de diapositives',
+    slidesInputLabel: 'Diapositives de l’élément (séparez par une ligne vide ou --)',
+    loadOnAirItem: 'Charger l’élément à l’antenne',
+    suggestTranslations: 'Suggérer',
+    suggesting: 'Suggestion…',
+    save: 'Enregistrer',
+    saveAll: 'Tout enregistrer',
+    saving: 'Enregistrement…',
+    statusReviewed: 'Révisé',
+    statusUnsaved: 'Non enregistré',
+    reviewSourceHeader: 'Source',
+    noSlidesToReview: 'Saisissez ou chargez un élément pour réviser ses diapositives.',
+    editorOnlyReview: 'Ouvrez cette page avec #editor pour modifier et enregistrer les traductions.',
+    reviewSlidesLink: 'Réviser les traductions de diapositives',
+    unreviewedBadge: 'non révisé',
   },
   es: {
     connecting: 'Conectando\u2026',
@@ -148,6 +195,21 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
     componentCurrentSlide: 'Diapositiva actual',
+    slideReviewTitle: 'Revisi\u00f3n de traducciones de diapositivas',
+    slidesInputLabel: 'Diapositivas del elemento (separe con una l\u00ednea en blanco o --)',
+    loadOnAirItem: 'Cargar elemento al aire',
+    suggestTranslations: 'Sugerir',
+    suggesting: 'Sugiriendo\u2026',
+    save: 'Guardar',
+    saveAll: 'Guardar todo',
+    saving: 'Guardando\u2026',
+    statusReviewed: 'Revisado',
+    statusUnsaved: 'Sin guardar',
+    reviewSourceHeader: 'Fuente',
+    noSlidesToReview: 'Ingrese o cargue un elemento para revisar sus diapositivas.',
+    editorOnlyReview: 'Abra esta p\u00e1gina con #editor para editar y guardar traducciones.',
+    reviewSlidesLink: 'Revisar traducciones de diapositivas',
+    unreviewedBadge: 'sin revisar',
   },
   ht: {
     connecting: 'Koneksyon\u2026',
@@ -178,5 +240,20 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',
     componentCurrentSlide: 'Diapozitiv aktyèl',
+    slideReviewTitle: 'Revizyon Tradiksyon Diapozitiv',
+    slidesInputLabel: 'Diapozitiv eleman an (separe ak yon liy vid oswa --)',
+    loadOnAirItem: 'Chaje eleman k ap pase a',
+    suggestTranslations: 'Sijere',
+    suggesting: 'Ap sijere…',
+    save: 'Anrejistre',
+    saveAll: 'Anrejistre tout',
+    saving: 'Ap anrejistre…',
+    statusReviewed: 'Revize',
+    statusUnsaved: 'Pa anrejistre',
+    reviewSourceHeader: 'Sous',
+    noSlidesToReview: 'Antre oswa chaje yon eleman pou revize diapozitiv li yo.',
+    editorOnlyReview: 'Ouvri paj sa a ak #editor pou modifye ak anrejistre tradiksyon.',
+    reviewSlidesLink: 'Revize Tradiksyon Diapozitiv',
+    unreviewedBadge: 'pa revize',
   },
 };
