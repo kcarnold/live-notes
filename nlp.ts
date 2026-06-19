@@ -126,4 +126,108 @@ ${inputDocument}
         return { sourceText, translatedText, language };
     });
     return translatedBlocks;
-}  
+}
+
+export type AlignReferenceResult = {
+    /** The detected language of the reference (one of allowedLanguages, or 'Unknown'). */
+    language: string;
+    /** Per-source-slide aligned translation, same length/order as sourceSlides ('' if none). */
+    slides: string[];
+};
+
+/**
+ * Align an existing translation (in an unknown language) to a list of source slides.
+ *
+ * Rather than index-matching pre-split segments, the model re-segments the existing
+ * translation to match the source slides and detects its language. Used to turn
+ * Proclaim's existing translation-screen text into a per-slide first draft.
+ */
+export const alignReferenceTranslation = async (
+    provider: GeminiProvider,
+    params: { sourceSlides: string[]; referenceText: string; allowedLanguages: string[] },
+): Promise<AlignReferenceResult> => {
+    const { sourceSlides, referenceText, allowedLanguages } = params;
+
+    const config = {
+        responseMimeType: 'application/json',
+        responseSchema: {
+            type: genAI.Type.OBJECT,
+            required: ["language", "segments"],
+            properties: {
+                language: { type: genAI.Type.STRING },
+                segments: {
+                    type: genAI.Type.ARRAY,
+                    items: {
+                        type: genAI.Type.OBJECT,
+                        required: ["segmentId", "translation"],
+                        properties: {
+                            segmentId: { type: genAI.Type.INTEGER },
+                            translation: { type: genAI.Type.STRING },
+                        },
+                    },
+                },
+            },
+        },
+    };
+
+    const inputDocument = JSON.stringify(
+        sourceSlides.map((text, index) => ({ segmentId: index, text: text.trim() }))
+    );
+
+    const allowedList = allowedLanguages.join(', ');
+    const contents = [
+        {
+            role: 'user',
+            parts: [
+                {
+                    text: `
+You are aligning an existing translation to a list of source slides.
+
+The source text is split into numbered slides:
+<source_slides>
+${inputDocument}
+</source_slides>
+
+Here is an existing translation of this same content, in a single unknown language.
+It may be split differently from the source slides, or not split at all:
+<existing_translation>
+${referenceText}
+</existing_translation>
+
+Tasks:
+1. Detect the language of the existing translation. Respond with exactly one of:
+   ${allowedList}. If it is none of these (for example it is actually in the source
+   language), respond with "Unknown".
+2. For each source slide, return the portion of the existing translation that
+   corresponds to it, re-segmented to match the source slides. Preserve the existing
+   wording; only adjust segmentation and whitespace. If a source slide has no
+   corresponding text, return an empty string.
+
+Respond with only JSON:
+{ "language": "<detected language>", "segments": [{ "segmentId": <id>, "translation": "<text>" }] }
+
+Include exactly one segment per source slide, with segmentIds matching the input.
+  `,
+                },
+            ],
+        },
+    ];
+
+    const response = await provider.apiClient.models.generateContent({
+        model: provider.defaultModel,
+        config,
+        contents,
+    });
+    const jsonResponse = JSON.parse(response.text || '{}');
+    const language: string = jsonResponse.language || 'Unknown';
+    const segments = (jsonResponse.segments ?? []) as Array<{ segmentId: number; translation: string }>;
+
+    const slides = sourceSlides.map(() => '');
+    for (const segment of segments) {
+        if (segment.segmentId >= 0 && segment.segmentId < slides.length) {
+            slides[segment.segmentId] = segment.translation ?? '';
+        }
+    }
+
+    return { language, slides };
+}

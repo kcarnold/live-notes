@@ -11,7 +11,7 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
-import { translateBlock, GeminiProvider } from './nlp.ts';
+import { translateBlock, alignReferenceTranslation, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
 import { SlideLibrary } from './slideLibrary.ts';
 import { translateItemSlides } from './src/slideItemTranslation.ts';
@@ -145,13 +145,36 @@ app.post('/api/slideLibrary', async (req, res) => {
 });
 
 // Translate a whole service item, reusing reviewed library entries and filling the
-// rest with the LLM. Body: { slides: string[], languages: string[] }.
+// rest with the LLM. Body: { slides: string[], languages: string[], reference?: string }.
+// When `reference` (an existing translation in an unknown language) is provided, it is
+// aligned to the source slides and used as a first draft for the language it is in.
 // Returns { translations: { [language]: PerSlideTranslation[] } }.
 app.post('/api/translateItem', async (req, res) => {
   const slides = (req.body?.slides as string[]) ?? [];
   const requestedLanguages = (req.body?.languages as string[]) ?? [];
+  const reference = (req.body?.reference as string | undefined)?.trim();
   if (!Array.isArray(slides) || requestedLanguages.length === 0) {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
+  }
+
+  // Align an existing translation to the source slides (and detect its language) so it
+  // can seed a first draft for the matching language.
+  let firstDraftLanguage: string | undefined;
+  let firstDraftSlides: string[] | undefined;
+  if (reference) {
+    try {
+      const aligned = await alignReferenceTranslation(geminiProvider, {
+        sourceSlides: slides,
+        referenceText: reference,
+        allowedLanguages: requestedLanguages,
+      });
+      if (requestedLanguages.includes(aligned.language)) {
+        firstDraftLanguage = aligned.language;
+        firstDraftSlides = aligned.slides;
+      }
+    } catch (error) {
+      console.error('alignReferenceTranslation failed:', error);
+    }
   }
 
   const lookup = slideLibrary.toLookup();
@@ -162,6 +185,7 @@ app.post('/api/translateItem', async (req, res) => {
         language,
         lookup,
         translate: (todo) => translateBlock(geminiProvider, todo, language),
+        firstDraftBySlide: language === firstDraftLanguage ? firstDraftSlides : undefined,
       });
       return [language, perSlide] as const;
     }),
