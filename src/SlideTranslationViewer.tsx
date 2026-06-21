@@ -68,7 +68,7 @@ export function SlideTranslationViewer({
                       </span>
                     )}
                     {isUnreviewed && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-amber-700/80 text-amber-50">
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-amber-700/80 text-amber-50 opacity-20">
                         {s.unreviewedBadge}
                       </span>
                     )}
