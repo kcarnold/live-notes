@@ -83,14 +83,20 @@ export async function upsertLibraryEntry(input: {
   return data.record;
 }
 
-/** Translate a whole item: per language, reviewed-or-auto for every slide. */
+/**
+ * Translate a whole item: per language, reviewed-or-auto for every slide.
+ *
+ * `reference` is an optional free-text dump (possibly multilingual) the model uses where
+ * it covers a target language and ignores otherwise.
+ */
 export async function translateItem(
   slides: string[],
   languages: string[],
+  reference?: string,
 ): Promise<Record<string, PerSlideTranslation[]>> {
   const data = await postJson<{ translations: Record<string, PerSlideTranslation[]> }>(
     '/api/translateItem',
-    { slides, languages },
+    { slides, languages, reference },
   );
   return data.translations;
 }

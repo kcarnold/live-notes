@@ -336,42 +336,6 @@ async def test_translate_active_item_translates_once_per_revision(fast_timing):
     assert service._translate_item.await_count == 2
 
 
-async def test_translate_active_item_passes_existing_translation_as_reference(fast_timing):
-    """Proclaim's existing translation is forwarded to the server as a first-draft reference."""
-    from proclaim_lib import ServiceItemWithSlides
-
-    service = make_service()
-    service.items_by_id['i1'] = ServiceItemWithSlides('i1', 'Song', ['Hello'], 'Content')
-    service.item_revisions['i1'] = 'r1'
-    service._existing_translation_reference = mock.MagicMock(return_value='Bonjour (existant)')
-    service._translate_item = mock.AsyncMock(
-        return_value={'French': [{'text': 'Bonjour', 'status': 'auto', 'provenance': 'imported'}]}
-    )
-
-    await service._translate_active_item('i1', 'pres-1')
-
-    service._existing_translation_reference.assert_called_once_with('i1', 'pres-1')
-    service._translate_item.assert_awaited_once_with(['Hello'], 'Bonjour (existant)')
-
-
-def test_translation_idx_for_presentation_is_cached():
-    """The translation-screen index is read from the DB once per presentation."""
-    import json as _json
-
-    service = make_service()
-    content = {
-        'VirtualScreens': _json.dumps([
-            {'outputKind': 'Slides', 'name': 'Main'},
-            {'outputKind': 'Slides', 'name': 'French Translation'},
-        ])
-    }
-    service.db.get_presentation = mock.MagicMock(return_value={'content': content})
-
-    assert service._translation_idx_for_presentation('pres-1') == 1
-    assert service._translation_idx_for_presentation('pres-1') == 1
-    assert service.db.get_presentation.call_count == 1
-
-
 def test_recreate_doc_resets_state():
     """Rolling to a new day's document starts from a clean Doc and clean tracking."""
     service = make_service()

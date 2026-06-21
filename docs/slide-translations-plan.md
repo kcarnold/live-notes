@@ -265,21 +265,30 @@ it.
 
 These came out of testing the first build; not yet designed or scheduled.
 
-### Rethink the alignment workflow → one strong-model "sort it out" call
-The per-slide `alignReferenceTranslation` step (Phase C-import) doesn't feel right in
-practice. Direction to explore: replace the alignment/splitting machinery with **a
-single call to the strongest available Gemini** (e.g. `gemini-3.5-flash`) that
-produces the **whole item's first draft at once**, given:
-- the English source (as slides), and
-- the **original Proclaim item text, *unsplit*** — the raw content extracted from the
-  XML, not pre-segmented — offered as *reference the model is encouraged to use when
-  the language matches* (and ignore otherwise).
+### Rethink the alignment workflow → one strong-model "sort it out" call — DONE
+The per-slide `alignReferenceTranslation` step (Phase C-import) didn't feel right in
+practice, so it was replaced. The alignment/splitting machinery is gone; in its place a
+**single `gemini-3.5-flash` call (`draftItemTranslations` in `nlp.ts`) translates the
+whole item into *all* target languages at once** (env-overridable via
+`GEMINI_STRONG_MODEL`; higher `maxOutputTokens`). It is given:
+- the English source (as numbered slides), and
+- an optional free-text **reference dump** — possibly multilingual, arbitrarily
+  segmented — that the model adapts where it covers a target language and ignores
+  otherwise.
 
-Goal: let the operator **dump big, probably-relevant chunks of text into Proclaim
-(potentially in several of our languages at once)** and have the model sort out what
-goes where, rather than us doing brittle index/segment alignment. Open sub-questions:
-- Should that "dump" surface be **Proclaim**, the **review page** (a free-text
-  reference box per item), or **both**?
+Per-slide reviewed-library precedence still lives in the pure `translateItem`
+(`src/slideItemTranslation.ts`); only the misses go to the model, with reviewed slides
+fed as per-language context. `translateBlock` (the hot incremental notes path) is
+untouched and stays on the cheap default model.
+
+**Dump surface decision (user):** the **review page** — a free-text reference box per
+item (local component state), passed to `/api/translateItem`. **Proclaim is out of the
+reference loop** for now: the service still auto-translates the active item from scratch,
+but no longer reads/forwards its translation-screen text. (The `proclaim_lib` helpers
+`get_translation_screen_idx` / `existing_translation_text` remain for if/when Proclaim
+re-enters the loop.)
+
+Still open:
 - Later: give the model **tool access** to look up Bible passages (and human-translated
   liturgical elements) in the target language — this is the natural home for the
   Phase D agent tools, folded into the first-draft call instead of a separate phase.
@@ -300,6 +309,11 @@ Phases A, B, C, and C-import are all implemented and pushed on
 translates the active item lazily rather than pre-translating the whole order;
 `proclaimServiceOrder` is a plain list value, not a `Y.Array`, since the service
 is the sole *seeding* writer.)
+
+**Alignment rethink (post-build).** The brittle per-slide `alignReferenceTranslation` +
+`firstDraftBySlide` path was removed in favor of one strong-model call that drafts the
+whole item into all languages at once, with an optional multilingual reference dump from
+a review-page box. See the (now resolved) "Rethink the alignment workflow" note above.
 
 **Source-of-truth inversion (post-build fix).** The live viewer initially showed stale
 text after a review-screen edit because the library was treated as truth and the Y.Map

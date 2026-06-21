@@ -44,6 +44,7 @@ export function SlideReviewContainer() {
   const translationsMap = useMap('slideTranslations');
 
   const [slidesText, setSlidesText] = useState('');
+  const [referenceText, setReferenceText] = useState('');
   const [slides, setSlides] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<StringArrays>(() => emptyArrays(0));
   const [savedTexts, setSavedTexts] = useState<NullableStringArrays>(() => emptyNullableArrays(0));
@@ -113,7 +114,7 @@ export function SlideReviewContainer() {
     setError(null);
     setMessage(null);
     try {
-      const translations = await translateItem(slideList, [...languages]);
+      const translations = await translateItem(slideList, [...languages], referenceText.trim() || undefined);
       const nextDrafts = emptyArrays(slideList.length);
       const nextSaved = emptyNullableArrays(slideList.length);
       for (const language of languages) {
@@ -131,7 +132,7 @@ export function SlideReviewContainer() {
     } finally {
       setBusy(false);
     }
-  }, [slidesText]);
+  }, [slidesText, referenceText]);
 
   const handleSaveCell = useCallback(
     async (language: string, slideIndex: number) => {
@@ -198,6 +199,15 @@ export function SlideReviewContainer() {
           value={slidesText}
           onChange={(e) => setSlidesText(e.target.value)}
           onBlur={handleCommitFromText}
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
+        {s.referenceLabel}
+        <textarea
+          className="w-full min-h-[4rem] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 text-sm font-mono"
+          value={referenceText}
+          onChange={(e) => setReferenceText(e.target.value)}
         />
       </label>
 

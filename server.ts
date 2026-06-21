@@ -11,10 +11,10 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
-import { translateBlock, alignReferenceTranslation, GeminiProvider } from './nlp.ts';
+import { translateBlock, draftItemTranslations, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
 import { SlideLibrary } from './slideLibrary.ts';
-import { translateItemSlides } from './src/slideItemTranslation.ts';
+import { translateItem } from './src/slideItemTranslation.ts';
 
 import { AccessToken } from 'livekit-server-sdk';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
@@ -42,6 +42,12 @@ const geminiProvider = new GeminiProvider({
   maxTokens: 8192,
   posthog: phClient
 });
+
+// Stronger model for whole-item slide drafting (pre-translation/review): one call
+// translates all slides into all languages and sorts a multilingual reference dump into
+// the right languages, so capability matters more than the latency/cost of the hot
+// incremental notes path (which stays on defaultModel). Override via GEMINI_STRONG_MODEL.
+const STRONG_MODEL = process.env.GEMINI_STRONG_MODEL || 'gemini-3.5-flash';
 
 const ySweetConnectionString = getEnvOrCrash("YSWEET_CONNECTION_STRING");
 console.log('Y-Sweet Connection String:', ySweetConnectionString);
@@ -269,11 +275,11 @@ app.post('/api/slideLibrary', async (req, res) => {
   return res.json({ ok: true, record });
 });
 
-// Translate a whole service item, reusing reviewed library entries and filling the
-// rest with the LLM. Body: { slides: string[], languages: string[], reference?: string }.
-// When `reference` (an existing translation in an unknown language) is provided, it is
-// aligned to the source slides and used as a first draft for the language it is in.
-// Returns { translations: { [language]: PerSlideTranslation[] } }.
+// Translate a whole service item, reusing reviewed library entries and filling the rest
+// with one strong-model call for all languages at once. Body:
+// { slides: string[], languages: string[], reference?: string }. `reference` is a free-text
+// dump (possibly multilingual, arbitrarily segmented) the model uses where it covers a
+// target language and ignores otherwise. Returns { translations: { [language]: PerSlideTranslation[] } }.
 app.post('/api/translateItem', async (req, res) => {
   const slides = (req.body?.slides as string[]) ?? [];
   const requestedLanguages = (req.body?.languages as string[]) ?? [];
@@ -282,41 +288,21 @@ app.post('/api/translateItem', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
   }
 
-  // Align an existing translation to the source slides (and detect its language) so it
-  // can seed a first draft for the matching language.
-  let firstDraftLanguage: string | undefined;
-  let firstDraftSlides: string[] | undefined;
-  if (reference) {
-    try {
-      const aligned = await alignReferenceTranslation(geminiProvider, {
-        sourceSlides: slides,
-        referenceText: reference,
-        allowedLanguages: requestedLanguages,
-      });
-      if (requestedLanguages.includes(aligned.language)) {
-        firstDraftLanguage = aligned.language;
-        firstDraftSlides = aligned.slides;
-      }
-    } catch (error) {
-      console.error('alignReferenceTranslation failed:', error);
-    }
-  }
-
   const lookup = slideLibrary.toLookup();
-  const entries = await Promise.all(
-    requestedLanguages.map(async (language) => {
-      const perSlide = await translateItemSlides({
-        slides,
-        language,
-        lookup,
-        translate: (todo) => translateBlock(geminiProvider, todo, language),
-        firstDraftBySlide: language === firstDraftLanguage ? firstDraftSlides : undefined,
-      });
-      return [language, perSlide] as const;
-    }),
-  );
+  const translations = await translateItem({
+    slides,
+    languages: requestedLanguages,
+    lookup,
+    translate: ({ slides: sourceSlides, targets }) =>
+      draftItemTranslations(geminiProvider, {
+        sourceSlides,
+        targets,
+        referenceText: reference || undefined,
+        model: STRONG_MODEL,
+      }),
+  });
 
-  return res.json({ ok: true, translations: Object.fromEntries(entries) });
+  return res.json({ ok: true, translations });
 });
 
 // TTS request deduplication: Map of cache key -> Promise

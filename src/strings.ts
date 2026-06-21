@@ -79,6 +79,7 @@ export interface AppStrings {
   // Slide translation review
   slideReviewTitle: string;
   slidesInputLabel: string;
+  referenceLabel: string;
   loadOnAirItem: string;
   suggestTranslations: string;
   suggesting: string;
@@ -143,6 +144,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Current Slide',
     slideReviewTitle: 'Slide Translation Review',
     slidesInputLabel: 'Item slides (separate slides with a blank line or --)',
+    referenceLabel: 'Reference text (optional) — paste existing translations in any of the target languages; the model uses what fits and ignores the rest',
     loadOnAirItem: 'Load on-air item',
     suggestTranslations: 'Suggest',
     suggesting: 'Suggesting…',
@@ -205,6 +207,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Diapositive actuelle',
     slideReviewTitle: 'Révision des traductions de diapositives',
     slidesInputLabel: 'Diapositives de l’élément (séparez par une ligne vide ou --)',
+    referenceLabel: 'Texte de référence (facultatif) — collez des traductions existantes dans l’une des langues cibles ; le modèle utilise ce qui convient et ignore le reste',
     loadOnAirItem: 'Charger l’élément à l’antenne',
     suggestTranslations: 'Suggérer',
     suggesting: 'Suggestion…',
@@ -267,6 +270,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Diapositiva actual',
     slideReviewTitle: 'Revisi\u00f3n de traducciones de diapositivas',
     slidesInputLabel: 'Diapositivas del elemento (separe con una l\u00ednea en blanco o --)',
+    referenceLabel: 'Texto de referencia (opcional): pegue traducciones existentes en cualquiera de los idiomas de destino; el modelo usa lo que sirve e ignora el resto',
     loadOnAirItem: 'Cargar elemento al aire',
     suggestTranslations: 'Sugerir',
     suggesting: 'Sugiriendo\u2026',
@@ -329,6 +333,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Diapozitiv aktyèl',
     slideReviewTitle: 'Revizyon Tradiksyon Diapozitiv',
     slidesInputLabel: 'Diapozitiv eleman an (separe ak yon liy vid oswa --)',
+    referenceLabel: 'Tèks referans (opsyonèl) — kole tradiksyon ki egziste deja nan nenpòt nan lang sib yo; modèl la sèvi ak sa ki bon epi li inyore rès la',
     loadOnAirItem: 'Chaje eleman k ap pase a',
     suggestTranslations: 'Sijere',
     suggesting: 'Ap sijere…',

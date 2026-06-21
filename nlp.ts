@@ -128,41 +128,60 @@ ${inputDocument}
     return translatedBlocks;
 }
 
-export type AlignReferenceResult = {
-    /** The detected language of the reference (one of allowedLanguages, or 'Unknown'). */
+export type DraftItemTarget = {
     language: string;
-    /** Per-source-slide aligned translation, same length/order as sourceSlides ('' if none). */
-    slides: string[];
+    /** Per source slide: does this slide still need translating into this language? */
+    isTranslationNeeded: boolean[];
+    /** Already-reviewed translations in this language, joined for style/terminology context. */
+    context: string;
 };
 
 /**
- * Align an existing translation (in an unknown language) to a list of source slides.
+ * Translate a whole item into several languages in a single model call.
  *
- * Rather than index-matching pre-split segments, the model re-segments the existing
- * translation to match the source slides and detects its language. Used to turn
- * Proclaim's existing translation-screen text into a per-slide first draft.
+ * The model receives the numbered source slides, the target languages (each with which
+ * slides still need translating and any already-reviewed translations as context), and
+ * an optional free-text `referenceText` dump that may hold prior translations in one or
+ * more of the target languages (the operator pastes it; it can be multilingual and
+ * arbitrarily segmented). For each language the model translates only the needed slides,
+ * adapting the reference's wording where it covers that language and ignoring it
+ * otherwise. Used for slide pre-translation/review, where full-item context and reference
+ * reuse matter more than latency — hence one strong-model call for all languages at once.
+ *
+ * Returns, per language, a `TranslationBlockResult` for each needed slide (others omitted).
  */
-export const alignReferenceTranslation = async (
+export const draftItemTranslations = async (
     provider: GeminiProvider,
-    params: { sourceSlides: string[]; referenceText: string; allowedLanguages: string[] },
-): Promise<AlignReferenceResult> => {
-    const { sourceSlides, referenceText, allowedLanguages } = params;
+    params: { sourceSlides: string[]; targets: DraftItemTarget[]; referenceText?: string; model?: string },
+): Promise<Record<string, TranslationBlockResult[]>> => {
+    const { sourceSlides, targets, referenceText } = params;
 
     const config = {
         responseMimeType: 'application/json',
+        // All languages × needed slides come back in one response; give it room.
+        maxOutputTokens: 32768,
         responseSchema: {
             type: genAI.Type.OBJECT,
-            required: ["language", "segments"],
+            required: ["languages"],
             properties: {
-                language: { type: genAI.Type.STRING },
-                segments: {
+                languages: {
                     type: genAI.Type.ARRAY,
                     items: {
                         type: genAI.Type.OBJECT,
-                        required: ["segmentId", "translation"],
+                        required: ["language", "segments"],
                         properties: {
-                            segmentId: { type: genAI.Type.INTEGER },
-                            translation: { type: genAI.Type.STRING },
+                            language: { type: genAI.Type.STRING },
+                            segments: {
+                                type: genAI.Type.ARRAY,
+                                items: {
+                                    type: genAI.Type.OBJECT,
+                                    required: ["segmentId", "translation"],
+                                    properties: {
+                                        segmentId: { type: genAI.Type.INTEGER },
+                                        translation: { type: genAI.Type.STRING },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -170,43 +189,58 @@ export const alignReferenceTranslation = async (
         },
     };
 
-    const inputDocument = JSON.stringify(
+    const sourceDocument = JSON.stringify(
         sourceSlides.map((text, index) => ({ segmentId: index, text: text.trim() }))
     );
+    const targetsDocument = JSON.stringify(
+        targets.map((target) => ({
+            language: target.language,
+            translateSegmentIds: sourceSlides
+                .map((_, index) => index)
+                .filter((index) => target.isTranslationNeeded[index]),
+            context: target.context,
+        }))
+    );
 
-    const allowedList = allowedLanguages.join(', ');
+    const referenceSection = referenceText
+        ? `
+The reference material below may contain prior translations of this same content. It can
+mix several of the target languages and may be segmented differently from the source
+slides, or not at all. For each target language, when the reference contains text in that
+language, prefer and adapt its wording for the matching slides; otherwise ignore it.
+
+<reference_material>
+${referenceText}
+</reference_material>
+`
+        : '';
+
     const contents = [
         {
             role: 'user',
             parts: [
                 {
                     text: `
-You are aligning an existing translation to a list of source slides.
+You are translating presentation slides into several languages at once.
 
-The source text is split into numbered slides:
+The source slides are a JSON array of segments:
 <source_slides>
-${inputDocument}
+${sourceDocument}
 </source_slides>
 
-Here is an existing translation of this same content, in a single unknown language.
-It may be split differently from the source slides, or not split at all:
-<existing_translation>
-${referenceText}
-</existing_translation>
-
-Tasks:
-1. Detect the language of the existing translation. Respond with exactly one of:
-   ${allowedList}. If it is none of these (for example it is actually in the source
-   language), respond with "Unknown".
-2. For each source slide, return the portion of the existing translation that
-   corresponds to it, re-segmented to match the source slides. Preserve the existing
-   wording; only adjust segmentation and whitespace. If a source slide has no
-   corresponding text, return an empty string.
-
+Translate into the following target languages. For each language, "translateSegmentIds"
+lists exactly which source slide ids to translate. "context" holds already-approved
+translations in that language, given only as a guide for style and terminology — it is
+not something to translate.
+<targets>
+${targetsDocument}
+</targets>
+${referenceSection}
 Respond with only JSON:
-{ "language": "<detected language>", "segments": [{ "segmentId": <id>, "translation": "<text>" }] }
+{ "languages": [ { "language": "<language>", "segments": [ { "segmentId": <id>, "translation": "<text in that language>" } ] } ] }
 
-Include exactly one segment per source slide, with segmentIds matching the input.
+For each target language, include exactly one segment per id in its "translateSegmentIds",
+with segmentIds matching the source slides. Do not include segments for ids not listed.
   `,
                 },
             ],
@@ -214,20 +248,26 @@ Include exactly one segment per source slide, with segmentIds matching the input
     ];
 
     const response = await provider.apiClient.models.generateContent({
-        model: provider.defaultModel,
+        model: params.model ?? provider.defaultModel,
         config,
         contents,
     });
     const jsonResponse = JSON.parse(response.text || '{}');
-    const language: string = jsonResponse.language || 'Unknown';
-    const segments = (jsonResponse.segments ?? []) as Array<{ segmentId: number; translation: string }>;
+    const languageResults = (jsonResponse.languages ?? []) as Array<{
+        language: string;
+        segments: Array<{ segmentId: number; translation: string }>;
+    }>;
 
-    const slides = sourceSlides.map(() => '');
-    for (const segment of segments) {
-        if (segment.segmentId >= 0 && segment.segmentId < slides.length) {
-            slides[segment.segmentId] = segment.translation ?? '';
-        }
+    const out: Record<string, TranslationBlockResult[]> = {};
+    for (const result of languageResults) {
+        const language = result.language;
+        out[language] = (result.segments ?? [])
+            .filter((segment) => segment.segmentId >= 0 && segment.segmentId < sourceSlides.length)
+            .map((segment) => ({
+                sourceText: sourceSlides[segment.segmentId],
+                translatedText: segment.translation ?? '',
+                language,
+            }));
     }
-
-    return { language, slides };
-}
+    return out;
+};
