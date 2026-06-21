@@ -19,6 +19,7 @@ export interface AppStrings {
 
   // Home page
   chooseLayout: string;
+  chooseLanguage: string;
 
   // Layout names
   layoutSlideAndTranslation: string;
@@ -102,6 +103,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Translation',
     bilingual: 'Bilingual',
     chooseLayout: 'Choose Layout',
+    chooseLanguage: 'Language',
     layoutSlideAndTranslation: 'Slide and Translation',
     layoutBilingualView: 'Bilingual View',
     layoutSlideAndListen: 'Slide and Listen',
@@ -165,6 +167,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Traduction',
     bilingual: 'Bilingue',
     chooseLayout: 'Choisir la mise en page',
+    chooseLanguage: 'Langue',
     layoutSlideAndTranslation: 'Diapositive et traduction',
     layoutBilingualView: 'Vue bilingue',
     layoutSlideAndListen: 'Diapositive et écoute',
@@ -228,6 +231,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Traducci\u00f3n',
     bilingual: 'Biling\u00fce',
     chooseLayout: 'Elegir dise\u00f1o',
+    chooseLanguage: 'Idioma',
     layoutSlideAndTranslation: 'Diapositiva y traducci\u00f3n',
     layoutBilingualView: 'Vista biling\u00fce',
     layoutSlideAndListen: 'Diapositiva y escucha',
@@ -291,6 +295,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Tradiksyon',
     bilingual: 'Bileng',
     chooseLayout: 'Chwazi Dispozisyon',
+    chooseLanguage: 'Lang',
     layoutSlideAndTranslation: 'Diapozitiv ak Tradiksyon',
     layoutBilingualView: 'Vi Bileng',
     layoutSlideAndListen: 'Diapozitiv ak \u00c9coute',

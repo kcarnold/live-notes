@@ -64,29 +64,21 @@ const availableLayouts = [
     key: 'slide-and-translation',
     labelKey: 'layoutSlideAndTranslation' as const,
     layout: [
-      ["currentSlide", "translatedText"]
+      ["translatedSlide", "translatedText"]
     ]
   },
   {
     key: 'slide-and-bilingual',
     labelKey: 'layoutBilingualView' as const,
     layout: [
-      ["currentSlide", "bilingual"]
+      ["translatedSlide", "bilingual"]
     ]
   },
   {
     key: "slide-and-listen",
     labelKey: "layoutSlideAndListen" as const,
     layout: [
-      ["currentSlide", "listen"]
-    ]
-  },
-  {
-    key: 'full',
-    labelKey: 'layoutEverything' as const,
-    layout: [
-      ["sourceText"],
-      ["translatedText", "currentSlide"]
+      ["translatedSlide", "listen"]
     ]
   },
 ];
@@ -95,22 +87,60 @@ const availableLayouts = [
 function HomePage() {
   const s = useStrings();
   const locale = resolveLocale();
-  const defaultLang = languages[0];
+  const [selectedLang, setSelectedLang] = useState<string>(languages[0]);
+
+  const langDisplayNames = new Intl.DisplayNames([locale], { type: 'language' });
+
+  // The listen pane is keyed by BCP-47 code (a larger set than our text-translation
+  // languages). Map the selected language to its code, falling back to the default
+  // listen language if Gemini Live doesn't support it (e.g. Haitian Creole).
+  const listenCode =
+    LISTEN_LANGUAGE_CODES.includes(LANGUAGE_BCP47[selectedLang])
+      ? LANGUAGE_BCP47[selectedLang]
+      : DEFAULT_LISTEN_CODE;
+
+  // Substitute the selected language into a layout component's bare name.
+  const applyLanguage = (component: string): string => {
+    switch (component) {
+      case 'translatedText':
+      case 'bilingual':
+      case 'slideTranslation':
+        return `${component}-${selectedLang}`;
+      case 'listen':
+        return `listen-${listenCode}`;
+      default:
+        return component;
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-950 dark:to-gray-900 text-black dark:text-gray-200">
       <h1 className="text-2xl font-bold mb-6 mt-8">
         {s.chooseLayout}
       </h1>
       <div className="flex flex-col gap-6 w-full max-w-xl">
+        <div className="bg-white/80 dark:bg-gray-800/80 rounded shadow p-4 flex items-center justify-center gap-2">
+          <label htmlFor="home-language" className="font-semibold text-sm">
+            {s.chooseLanguage}
+          </label>
+          <select
+            id="home-language"
+            className="px-2 py-1 rounded text-sm bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700"
+            value={selectedLang}
+            onChange={(e) => setSelectedLang(e.target.value)}
+          >
+            {languages.map((lang) => (
+              <option key={lang} value={lang}>
+                {langDisplayNames.of(LANGUAGE_BCP47[lang]) ?? lang}
+              </option>
+            ))}
+          </select>
+        </div>
         {availableLayouts.map((layout) => {
-          // Convert layout array to human-legible string, adding default language to translatedText components
+          // Convert layout array to a layout string, substituting the selected
+          // language into any language-keyed components.
           const layoutStr = layout.layout.map(row =>
-            row.map(component =>
-              component === 'translatedText' ? `translatedText-${defaultLang}` :
-              component === 'bilingual' ? `bilingual-${defaultLang}` :
-              component === 'listen' ? `listen-${DEFAULT_LISTEN_CODE}` :
-              component
-            ).join(",")
+            row.map(applyLanguage).join(",")
           ).join("|");
           const localeParam = locale !== 'en' ? `?locale=${locale}` : '';
           return (
@@ -131,8 +161,8 @@ function HomePage() {
           );
         })}
         <div className="text-center mb-4 flex flex-col gap-2">
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|bilingual-French#editor">Note-Taker</a> |{" "}
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText,broadcast|bilingual-French#editor">Broadcaster</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText|bilingual-${selectedLang}#editor`}>Note-Taker</a> |{" "}
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText,broadcast|bilingual-${selectedLang}#editor`}>Broadcaster</a>
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/slideReview#editor">{s.reviewSlidesLink}</a>
         </div>
       </div>
