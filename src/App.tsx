@@ -10,6 +10,12 @@ import "./App.css";
 import { useAtom } from "jotai";
 import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
+import {
+  LISTEN_LANGUAGE_CODES,
+  LISTEN_FAVORITES,
+  LISTEN_ORIGINAL_CODE,
+  DEFAULT_LISTEN_CODE,
+} from "./listenLanguages";
 import { LayoutDiagram } from "./LayoutDiagram";
 import type { ClientToken } from "@y-sweet/sdk";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
@@ -18,6 +24,17 @@ import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
 import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
+import { getDocId } from "./getDocId";
+
+// Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
+// pane (listen-{language} / broadcast) is actually rendered, keeping it out of
+// the main bundle and isolating the feature.
+const ListenViewer = React.lazy(() =>
+  import("./ListenViewer").then((m) => ({ default: m.ListenViewer }))
+);
+const BroadcastControl = React.lazy(() =>
+  import("./BroadcastControl").then((m) => ({ default: m.BroadcastControl }))
+);
 
 function ConnectionStatusWidget({
   connectionStatus,
@@ -58,6 +75,13 @@ const availableLayouts = [
     ]
   },
   {
+    key: "slide-and-listen",
+    labelKey: "layoutSlideAndListen" as const,
+    layout: [
+      ["currentSlide", "listen"]
+    ]
+  },
+  {
     key: 'full',
     labelKey: 'layoutEverything' as const,
     layout: [
@@ -84,6 +108,7 @@ function HomePage() {
             row.map(component =>
               component === 'translatedText' ? `translatedText-${defaultLang}` :
               component === 'bilingual' ? `bilingual-${defaultLang}` :
+              component === 'listen' ? `listen-${DEFAULT_LISTEN_CODE}` :
               component
             ).join(",")
           ).join("|");
@@ -106,7 +131,8 @@ function HomePage() {
           );
         })}
         <div className="text-center mb-4 flex flex-col gap-2">
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|translatedText-French#editor">Note-Taker</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|bilingual-French#editor">Note-Taker</a> |{" "}
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText,broadcast|bilingual-French#editor">Broadcaster</a>
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/slideReview#editor">{s.reviewSlidesLink}</a>
         </div>
       </div>
@@ -159,6 +185,35 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
       {languages.map((lang) => (
         <option key={lang} value={lang}>{langDisplayNames.of(LANGUAGE_BCP47[lang]) ?? lang}</option>
       ))}
+    </select>
+  );
+
+  // The listen picker offers the full Gemini-supported language set (keyed by
+  // BCP-47 code), with "Original / English" and favorites pinned on top. Names are
+  // localized via Intl.DisplayNames; the long list is sorted by localized name.
+  const sortedListenLangs = LISTEN_LANGUAGE_CODES
+    .filter((c) => c !== LISTEN_ORIGINAL_CODE && !LISTEN_FAVORITES.includes(c))
+    .sort((a, b) =>
+      (langDisplayNames.of(a) ?? a).localeCompare(langDisplayNames.of(b) ?? b, locale)
+    );
+
+  const listenLanguageSelector = (language: string) => (
+    <select
+      className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
+      value={language}
+      onChange={(e) => onLanguageChange('listen')(e.target.value)}
+    >
+      <option value={LISTEN_ORIGINAL_CODE}>{s.listenOriginal}</option>
+      <optgroup label={s.favorites}>
+        {LISTEN_FAVORITES.map((c) => (
+          <option key={c} value={c}>{langDisplayNames.of(c) ?? c}</option>
+        ))}
+      </optgroup>
+      <optgroup label={s.allLanguages}>
+        {sortedListenLangs.map((c) => (
+          <option key={c} value={c}>{langDisplayNames.of(c) ?? c}</option>
+        ))}
+      </optgroup>
     </select>
   );
 
@@ -215,6 +270,36 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
             </>
           }
         />
+      </div>
+    );
+  }
+
+  if (componentStr.startsWith('listen-')) {
+    const language = componentStr.substring('listen-'.length);
+    const validLanguage =
+      language === LISTEN_ORIGINAL_CODE || LISTEN_LANGUAGE_CODES.includes(language)
+        ? language
+        : DEFAULT_LISTEN_CODE;
+    return (
+      <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-hidden"}>
+        <div className="flex items-center">
+          <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.listenLive}</h2>
+          {listenLanguageSelector(validLanguage)}
+        </div>
+        <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-gray-400">{s.connecting}</div>}>
+          <ListenViewer key={validLanguage} language={validLanguage} />
+        </React.Suspense>
+      </div>
+    );
+  }
+
+  if (componentStr === 'broadcast') {
+    return (
+      <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-hidden"}>
+        <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.broadcast}</h2>
+        <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-gray-400">{s.connecting}</div>}>
+          <BroadcastControl />
+        </React.Suspense>
       </div>
     );
   }
@@ -318,19 +403,13 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
   );
 }
 
-const getTodayLocal = () => {
-    const today = new Date();
-    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-};
-
 const App = () => {
   // We're an editor only if location hash includes #editor
   const isEditor = window.location.hash.includes("editor");
 
-  const searchParams = new URLSearchParams(window.location.search);
-  // Default doc id is `doc-${date}`, where date is today's date
-  // but allow override from the URL search params ?doc=${docId}
-  const docId = searchParams.get("doc") || `doc-${getTodayLocal()}`;
+  // Default doc id is `doc-${today}`, overridable via ?doc=. Shared with the
+  // live-audio panes via getDocId() so the LiveKit room matches the session.
+  const docId = getDocId();
 
   const [, setIsEditor] = useAtom(isEditorAtom);
   React.useEffect(() => {

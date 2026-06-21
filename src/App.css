@@ -62,6 +62,27 @@
       opacity: 0.7;
     }
   }
+
+  /* Newly appended live-transcript paragraphs: gently fade/slide in with a brief
+     highlight that settles, so new text is noticeable without the page jumping. */
+  .transcript-new {
+    animation: transcriptIn 1.6s ease-out;
+  }
+
+  @keyframes transcriptIn {
+    0% {
+      opacity: 0;
+      transform: translateY(0.25rem);
+      background-color: color-mix(in srgb, var(--color-yellow-200) 70%, transparent);
+    }
+    30% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
 }
 
 @layer components {
