@@ -64,21 +64,21 @@ const availableLayouts = [
     key: 'slide-and-translation',
     labelKey: 'layoutSlideAndTranslation' as const,
     layout: [
-      ["translatedSlide", "translatedText"]
+      ["slideTranslation", "translatedText"]
     ]
   },
   {
     key: 'slide-and-bilingual',
     labelKey: 'layoutBilingualView' as const,
     layout: [
-      ["translatedSlide", "bilingual"]
+      ["slideTranslation", "bilingual"]
     ]
   },
   {
     key: "slide-and-listen",
     labelKey: "layoutSlideAndListen" as const,
     layout: [
-      ["translatedSlide", "listen"]
+      ["slideTranslation", "listen"]
     ]
   },
 ];

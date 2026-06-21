@@ -6,7 +6,8 @@ const componentColors: Record<string, string> = {
   translatedText: "bg-purple-200 dark:bg-purple-700",
   bilingual: "bg-pink-200 dark:bg-pink-700",
   currentSlide: "bg-indigo-200 dark:bg-indigo-700",
-  translatedSlide: "bg-indigo-200 dark:bg-indigo-700",
+  slideTranslation: "bg-indigo-200 dark:bg-indigo-700",
+  listen: "bg-green-200 dark:bg-green-700",
 };
 
 export function LayoutDiagram({ layout }: { layout: string[][] }) {
@@ -16,7 +17,8 @@ export function LayoutDiagram({ layout }: { layout: string[][] }) {
     translatedText: s.componentTranslatedText,
     bilingual: s.componentBilingual,
     currentSlide: s.componentCurrentSlide,
-    translatedSlide: s.componentCurrentSlide,
+    slideTranslation: s.componentCurrentSlide,
+    listen: s.componentListen,
   };
   // layout is a 2D array: columns of rows
   // Find the max column height for grid alignment

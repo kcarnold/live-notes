@@ -76,6 +76,7 @@ export interface AppStrings {
   componentTranslatedText: string;
   componentBilingual: string;
   componentCurrentSlide: string;
+  componentListen: string;
 
   // Slide translation review
   slideReviewTitle: string;
@@ -107,6 +108,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     layoutSlideAndTranslation: 'Slide and Translation',
     layoutBilingualView: 'Bilingual View',
     layoutSlideAndListen: 'Slide and Listen',
+      componentListen: 'Listen',
     layoutEverything: 'Everything',
     decreaseFontSize: 'Decrease font size',
     increaseFontSize: 'Increase font size',
@@ -171,6 +173,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     layoutSlideAndTranslation: 'Diapositive et traduction',
     layoutBilingualView: 'Vue bilingue',
     layoutSlideAndListen: 'Diapositive et écoute',
+      componentListen: 'Écouter',
     layoutEverything: 'Tout',
     decreaseFontSize: 'Diminuer la taille du texte',
     increaseFontSize: 'Augmenter la taille du texte',
@@ -235,6 +238,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     layoutSlideAndTranslation: 'Diapositiva y traducci\u00f3n',
     layoutBilingualView: 'Vista biling\u00fce',
     layoutSlideAndListen: 'Diapositiva y escucha',
+      componentListen: 'Escuchar',
     layoutEverything: 'Todo',
     decreaseFontSize: 'Disminuir tama\u00f1o de fuente',
     increaseFontSize: 'Aumentar tama\u00f1o de fuente',
@@ -299,6 +303,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     layoutSlideAndTranslation: 'Diapozitiv ak Tradiksyon',
     layoutBilingualView: 'Vi Bileng',
     layoutSlideAndListen: 'Diapozitiv ak \u00c9coute',
+      componentListen: 'Koute',
     layoutEverything: 'Tout bagay',
     decreaseFontSize: 'Diminye gw\u00f2s\u00e8 l\u00e8t',
     increaseFontSize: 'Ogmante gw\u00f2s\u00e8 l\u00e8t',
