@@ -192,11 +192,18 @@ export const draftItemTranslations = async (
         targets: DraftItemTarget[];
         referenceText?: string;
         model?: string;
+        /**
+         * The presentation item's title. For Bible readings this is the citation itself
+         * (e.g. "Psalm 23") and is often NOT repeated in the slide text — so it is the
+         * model's only cue to look the passage up. Surfaced to the model as a hint.
+         */
+        itemTitle?: string;
         /** Called once per executed Bible lookup, for observability. */
         onToolCall?: (call: BibleToolCall) => void;
     },
 ): Promise<Record<string, TranslationBlockResult[]>> => {
     const { sourceSlides, targets, referenceText, onToolCall } = params;
+    const itemTitle = params.itemTitle?.trim();
     const model = params.model ?? provider.defaultModel;
     // Languages we can actually fetch canonical Scripture for.
     const bibleLanguages = targets
@@ -272,13 +279,22 @@ adaptation such as "based on Psalm 23"). When a slide draws on a Bible passage, 
 lookup_bible_passage tool to fetch the canonical published wording in the target languages
 (${bibleLanguages.join(', ')}), then base your translation on that text — adapting only
 where the slide itself does (responsive readings, pronoun changes, partial quotes). Look up
-every reference you recognize, including inline ones, before producing the final JSON.
+every reference you recognize — the passage named in the item title above, and any inline
+references — before producing the final JSON.
+`
+        : '';
+
+    const itemTitleSection = itemTitle
+        ? `
+This presentation item is titled "${itemTitle}". For a Bible reading the title is the
+citation itself and is usually NOT repeated in the slide text, so treat it as the reference
+for the passage on these slides.
 `
         : '';
 
     const promptHeader = `
 You are translating presentation slides into several languages at once.
-
+${itemTitleSection}
 The source slides are a JSON array of segments:
 <source_slides>
 ${sourceDocument}

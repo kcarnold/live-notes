@@ -285,6 +285,8 @@ app.post('/api/translateItem', async (req, res) => {
   const slides = (req.body?.slides as string[]) ?? [];
   const requestedLanguages = (req.body?.languages as string[]) ?? [];
   const reference = (req.body?.reference as string | undefined)?.trim();
+  // Item title (e.g. a Bible citation like "Psalm 23") — a lookup cue the slide text lacks.
+  const itemTitle = (req.body?.itemTitle as string | undefined)?.trim();
   if (!Array.isArray(slides) || requestedLanguages.length === 0) {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
   }
@@ -301,6 +303,7 @@ app.post('/api/translateItem', async (req, res) => {
         sourceSlides,
         targets,
         referenceText: reference || undefined,
+        itemTitle: itemTitle || undefined,
         model: STRONG_MODEL,
         onToolCall: (call) => {
           bibleLookups.push(call);

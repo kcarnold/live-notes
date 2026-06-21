@@ -45,6 +45,9 @@ export function SlideReviewContainer() {
   const translationsMap = useMap('slideTranslations');
 
   const [slidesText, setSlidesText] = useState('');
+  // Title of the loaded on-air item (e.g. a Bible citation like "Psalm 23"). Passed to the
+  // model as a lookup cue; cleared when the operator edits the slide text by hand.
+  const [itemTitle, setItemTitle] = useState('');
   const [referenceText, setReferenceText] = useState('');
   const [slides, setSlides] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<StringArrays>(() => emptyArrays(0));
@@ -96,13 +99,14 @@ export function SlideReviewContainer() {
   const handleLoadOnAir = useCallback(() => {
     const itemId = statusMap.get('itemId') as string | undefined;
     const presentation = itemId
-      ? (presentationsMap.get(itemId) as { slides?: string[] } | undefined)
+      ? (presentationsMap.get(itemId) as { slides?: string[]; title?: string } | undefined)
       : undefined;
     const itemSlides = (presentation?.slides ?? []).filter((slide) => slide.trim() !== '');
     if (itemSlides.length === 0) {
       setError(s.waitingForProclaim);
       return;
     }
+    setItemTitle(presentation?.title ?? '');
     setSlidesText(itemSlides.join(SLIDE_DELIMITER));
     void commitSlides(itemSlides);
   }, [statusMap, presentationsMap, commitSlides, s.waitingForProclaim]);
@@ -121,6 +125,7 @@ export function SlideReviewContainer() {
         slideList,
         [...languages],
         referenceText.trim() || undefined,
+        itemTitle.trim() || undefined,
       );
       setBibleLookups(lookups);
       const nextDrafts = emptyArrays(slideList.length);
@@ -140,7 +145,7 @@ export function SlideReviewContainer() {
     } finally {
       setBusy(false);
     }
-  }, [slidesText, referenceText]);
+  }, [slidesText, referenceText, itemTitle]);
 
   const handleSaveCell = useCallback(
     async (language: string, slideIndex: number) => {
@@ -205,7 +210,11 @@ export function SlideReviewContainer() {
         <textarea
           className="w-full min-h-[5rem] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 text-sm font-mono"
           value={slidesText}
-          onChange={(e) => setSlidesText(e.target.value)}
+          onChange={(e) => {
+            // A hand-edit means the loaded item title (a Bible citation) no longer applies.
+            setItemTitle('');
+            setSlidesText(e.target.value);
+          }}
           onBlur={handleCommitFromText}
         />
       </label>

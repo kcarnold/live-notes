@@ -102,10 +102,11 @@ export async function translateItem(
   slides: string[],
   languages: string[],
   reference?: string,
+  itemTitle?: string,
 ): Promise<TranslateItemResult> {
   const data = await postJson<{
     translations: Record<string, PerSlideTranslation[]>;
     bibleLookups?: BibleToolCall[];
-  }>('/api/translateItem', { slides, languages, reference });
+  }>('/api/translateItem', { slides, languages, reference, itemTitle });
   return { translations: data.translations, bibleLookups: data.bibleLookups ?? [] };
 }

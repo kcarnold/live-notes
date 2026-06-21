@@ -418,17 +418,23 @@ class ProclaimYjsService:
             logger.warning(f"Could not fetch on-air presentation: {e}")
             return None
 
-    async def _translate_item(self, slides: list) -> Optional[Dict[str, Any]]:
+    async def _translate_item(
+        self, slides: list, item_title: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """Ask the server to translate an item's slides into all target languages.
 
         Returns the ``{language: [{text, status, provenance}, ...]}`` map, or None on
         failure (translation is best-effort; a failure must not drop the session). Any
         reference text for a better first draft is supplied by an operator on the review
-        screen, not by this service.
+        screen, not by this service. ``item_title`` is forwarded as a lookup cue: for a
+        Bible reading the title is the citation (e.g. "Psalm 23") and is usually absent
+        from the slide text, so it's the model's only hint to fetch the passage.
         """
         if not slides or not SLIDE_TRANSLATION_LANGUAGES:
             return None
         body: Dict[str, Any] = {"slides": slides, "languages": SLIDE_TRANSLATION_LANGUAGES}
+        if item_title and item_title != "Unknown":
+            body["itemTitle"] = item_title
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -481,7 +487,7 @@ class ProclaimYjsService:
         if self.translated_revisions.get(item_id) == revision:
             return
 
-        translations = await self._translate_item(item.slides)
+        translations = await self._translate_item(item.slides, item.title)
         if translations:
             self._store_translations(item.slides, translations)
             self.translated_revisions[item_id] = revision
