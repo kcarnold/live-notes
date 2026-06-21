@@ -13,6 +13,7 @@ import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
 import { translateBlock, draftItemTranslations, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
+import type { BibleToolCall } from './bible.ts';
 import { SlideLibrary } from './slideLibrary.ts';
 import { translateItem } from './src/slideItemTranslation.ts';
 
@@ -289,6 +290,8 @@ app.post('/api/translateItem', async (req, res) => {
   }
 
   const lookup = slideLibrary.toLookup();
+  // Bible lookups the model made while drafting — reported to PostHog and the review UI.
+  const bibleLookups: BibleToolCall[] = [];
   const translations = await translateItem({
     slides,
     languages: requestedLanguages,
@@ -299,10 +302,23 @@ app.post('/api/translateItem', async (req, res) => {
         targets,
         referenceText: reference || undefined,
         model: STRONG_MODEL,
+        onToolCall: (call) => {
+          bibleLookups.push(call);
+          phClient.capture({
+            distinctId: 'slide-review',
+            event: 'bible_lookup',
+            properties: {
+              reference: call.reference,
+              ok: call.ok,
+              foundLanguages: call.foundLanguages,
+              missingLanguages: call.missingLanguages,
+            },
+          });
+        },
       }),
   });
 
-  return res.json({ ok: true, translations });
+  return res.json({ ok: true, translations, bibleLookups });
 });
 
 // TTS request deduplication: Map of cache key -> Promise

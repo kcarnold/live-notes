@@ -11,6 +11,7 @@ import {
   lookupLibrary,
   upsertLibraryEntry,
   translateItem,
+  type BibleToolCall,
 } from './slideTranslationApi';
 
 type StringArrays = Record<string, string[]>;
@@ -51,6 +52,7 @@ export function SlideReviewContainer() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bibleLookups, setBibleLookups] = useState<BibleToolCall[]>([]);
 
   // Look up reviewed library entries for these slides and seed drafts from them.
   const loadSavedFor = useCallback(async (slideList: string[]) => {
@@ -113,8 +115,14 @@ export function SlideReviewContainer() {
     setBusy(true);
     setError(null);
     setMessage(null);
+    setBibleLookups([]);
     try {
-      const translations = await translateItem(slideList, [...languages], referenceText.trim() || undefined);
+      const { translations, bibleLookups: lookups } = await translateItem(
+        slideList,
+        [...languages],
+        referenceText.trim() || undefined,
+      );
+      setBibleLookups(lookups);
       const nextDrafts = emptyArrays(slideList.length);
       const nextSaved = emptyNullableArrays(slideList.length);
       for (const language of languages) {
@@ -226,6 +234,31 @@ export function SlideReviewContainer() {
         {message && <span className="text-xs text-green-700 dark:text-green-400">{message}</span>}
         {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
       </div>
+
+      {bibleLookups.length > 0 && (
+        <div className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
+          <span className="font-medium">{s.bibleLookupsLabel}</span>
+          <ul className="flex flex-wrap gap-2">
+            {bibleLookups.map((lookup) => (
+              <li
+                key={`${lookup.reference}-${lookup.foundLanguages.join(',')}-${lookup.missingLanguages.join(',')}`}
+                className={`px-2 py-0.5 rounded border ${
+                  lookup.ok
+                    ? 'border-green-300 text-green-700 dark:border-green-700 dark:text-green-400'
+                    : 'border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400'
+                }`}
+                title={
+                  lookup.ok
+                    ? `${s.bibleLookupFound}: ${lookup.foundLanguages.join(', ')}`
+                    : s.bibleLookupMissing
+                }
+              >
+                {lookup.ok ? '✓' : '⚠'} {lookup.reference}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <SlideReview
         slides={slides}

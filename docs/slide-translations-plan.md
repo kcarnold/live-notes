@@ -289,9 +289,28 @@ but no longer reads/forwards its translation-screen text. (The `proclaim_lib` he
 re-enters the loop.)
 
 Still open:
-- Later: give the model **tool access** to look up Bible passages (and human-translated
-  liturgical elements) in the target language — this is the natural home for the
-  Phase D agent tools, folded into the first-draft call instead of a separate phase.
+- ~~Later: give the model **tool access** to look up Bible passages~~ — **DONE.** See
+  "Bible lookup tool" below. Human-translated liturgical elements (creeds/confessions)
+  are still a future tool.
+
+### Bible lookup tool (Phase D, first slice) — DONE
+`draftItemTranslations` (`nlp.ts`) now exposes a `lookup_bible_passage` function tool. When
+a slide is or quotes Scripture (explicit reading, inline reference, or "based on Psalm 23"),
+the model calls it with a USFM book code + chapter + optional verse range and gets the
+canonical published wording in every target language, then adapts that instead of
+translating from scratch.
+- **`bible.ts`** (new, server) — fetches the no-auth helloao API
+  (`https://bible.helloao.org/api/{translationId}/{BOOK}/{chapter}.json`), caches whole
+  chapters per process, flattens the requested verses to plain text. `BIBLE_TRANSLATIONS`
+  maps language → translation id (`hatbsa` Haitian Creole, `fra_ncl` French, `spa_r09`
+  Spanish — provisional). Pure/unit-tested with a mocked `fetch` (`bible.test.ts`).
+- **Tool-use loop:** Gemini rejects `responseSchema` + tools in one request, so the lookup
+  rounds run schema-free (mode AUTO, capped at 4 rounds) and a final structured call
+  produces the JSON once Scripture is gathered. So the drafting path is now ≥2 model calls.
+- **Observability:** each executed lookup is reported via an `onToolCall` callback. The
+  server logs a PostHog `bible_lookup` event and returns `bibleLookups` from
+  `/api/translateItem`; the **review screen** shows them as ✓/⚠ reference chips under the
+  Suggest button (`SlideReviewContainer`).
 
 ### Review the whole presentation, not just the active item
 The review screen currently works one item at a time (paste / "load on-air"). The

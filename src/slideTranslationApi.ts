@@ -8,6 +8,15 @@ import type {
   SlideTranslationEntry,
 } from './slideTranslation.ts';
 import type { PerSlideTranslation } from './slideItemTranslation.ts';
+import type { BibleToolCall } from '../bible.ts';
+
+export type { BibleToolCall };
+
+export interface TranslateItemResult {
+  translations: Record<string, PerSlideTranslation[]>;
+  /** Bible passages the model looked up while drafting (for review-screen observability). */
+  bibleLookups: BibleToolCall[];
+}
 
 /**
  * Split pasted/edited text into slides, mirroring the Proclaim convention: a line
@@ -93,10 +102,10 @@ export async function translateItem(
   slides: string[],
   languages: string[],
   reference?: string,
-): Promise<Record<string, PerSlideTranslation[]>> {
-  const data = await postJson<{ translations: Record<string, PerSlideTranslation[]> }>(
-    '/api/translateItem',
-    { slides, languages, reference },
-  );
-  return data.translations;
+): Promise<TranslateItemResult> {
+  const data = await postJson<{
+    translations: Record<string, PerSlideTranslation[]>;
+    bibleLookups?: BibleToolCall[];
+  }>('/api/translateItem', { slides, languages, reference });
+  return { translations: data.translations, bibleLookups: data.bibleLookups ?? [] };
 }

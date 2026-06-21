@@ -1,6 +1,7 @@
-import { GoogleGenAI } from '@posthog/ai'; 
-import genAI from '@google/genai'; // for types
+import { GoogleGenAI } from '@posthog/ai';
+import genAI, { FunctionCallingConfigMode, type Content, type Part, type FunctionDeclaration } from '@google/genai'; // for types
 import { PostHog } from 'posthog-node';
+import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
 
 export class GeminiProvider {
   apiClient: GoogleGenAI;
@@ -136,8 +137,40 @@ export type DraftItemTarget = {
     context: string;
 };
 
+/** Function declaration the model uses to fetch canonical Scripture wording. */
+const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
+    name: 'lookup_bible_passage',
+    description:
+        'Look up the canonical wording of a Bible passage in the target languages. Call this ' +
+        'whenever a slide is or quotes Scripture — an explicit Bible reading, a quoted verse, ' +
+        'or an adaptation such as "based on Psalm 23" — so you can base the translation on the ' +
+        'published text rather than translating from scratch. Returns the passage in each ' +
+        'available target language.',
+    parameters: {
+        type: genAI.Type.OBJECT,
+        properties: {
+            book: {
+                type: genAI.Type.STRING,
+                description:
+                    'USFM book code (uppercase 3 chars), e.g. GEN, PSA, ISA, MAT, JHN, ROM, 1CO, REV.',
+            },
+            chapter: { type: genAI.Type.INTEGER, description: 'Chapter number.' },
+            startVerse: {
+                type: genAI.Type.INTEGER,
+                description: 'First verse of the range. Omit to fetch the whole chapter.',
+            },
+            endVerse: {
+                type: genAI.Type.INTEGER,
+                description: 'Last verse of the range. Omit for a single verse (defaults to startVerse).',
+            },
+        },
+        required: ['book', 'chapter'],
+    },
+};
+
 /**
- * Translate a whole item into several languages in a single model call.
+ * Translate a whole item into several languages in a single model call (plus, when a slide
+ * is Scripture, tool-use rounds that fetch the canonical Bible text first).
  *
  * The model receives the numbered source slides, the target languages (each with which
  * slides still need translating and any already-reviewed translations as context), and
@@ -145,18 +178,35 @@ export type DraftItemTarget = {
  * more of the target languages (the operator pastes it; it can be multilingual and
  * arbitrarily segmented). For each language the model translates only the needed slides,
  * adapting the reference's wording where it covers that language and ignoring it
- * otherwise. Used for slide pre-translation/review, where full-item context and reference
- * reuse matter more than latency — hence one strong-model call for all languages at once.
+ * otherwise. It may also call `lookup_bible_passage` to ground Scripture slides in the
+ * published translation; `onToolCall` reports each lookup for observability. Used for slide
+ * pre-translation/review, where full-item context and reference reuse matter more than
+ * latency — hence one strong-model call for all languages at once.
  *
  * Returns, per language, a `TranslationBlockResult` for each needed slide (others omitted).
  */
 export const draftItemTranslations = async (
     provider: GeminiProvider,
-    params: { sourceSlides: string[]; targets: DraftItemTarget[]; referenceText?: string; model?: string },
+    params: {
+        sourceSlides: string[];
+        targets: DraftItemTarget[];
+        referenceText?: string;
+        model?: string;
+        /** Called once per executed Bible lookup, for observability. */
+        onToolCall?: (call: BibleToolCall) => void;
+    },
 ): Promise<Record<string, TranslationBlockResult[]>> => {
-    const { sourceSlides, targets, referenceText } = params;
+    const { sourceSlides, targets, referenceText, onToolCall } = params;
+    const model = params.model ?? provider.defaultModel;
+    // Languages we can actually fetch canonical Scripture for.
+    const bibleLanguages = targets
+        .map((target) => target.language)
+        .filter((language) => BIBLE_TRANSLATIONS[language]);
 
-    const config = {
+    // Structured-output config for the FINAL call only. Gemini rejects responseSchema
+    // combined with function-calling tools, so the tool-use rounds run schema-free and we
+    // ask for the JSON once the model is done gathering Scripture.
+    const finalConfig = {
         responseMimeType: 'application/json',
         // All languages × needed slides come back in one response; give it room.
         maxOutputTokens: 32768,
@@ -215,12 +265,18 @@ ${referenceText}
 `
         : '';
 
-    const contents = [
-        {
-            role: 'user',
-            parts: [
-                {
-                    text: `
+    const bibleSection = bibleLanguages.length > 0
+        ? `
+Some slides are or quote Scripture (an explicit Bible reading, a quoted verse, or an
+adaptation such as "based on Psalm 23"). When a slide draws on a Bible passage, call the
+lookup_bible_passage tool to fetch the canonical published wording in the target languages
+(${bibleLanguages.join(', ')}), then base your translation on that text — adapting only
+where the slide itself does (responsive readings, pronoun changes, partial quotes). Look up
+every reference you recognize, including inline ones, before producing the final JSON.
+`
+        : '';
+
+    const promptHeader = `
 You are translating presentation slides into several languages at once.
 
 The source slides are a JSON array of segments:
@@ -235,22 +291,106 @@ not something to translate.
 <targets>
 ${targetsDocument}
 </targets>
-${referenceSection}
+${referenceSection}`;
+
+    const jsonInstruction = `
 Respond with only JSON:
 { "languages": [ { "language": "<language>", "segments": [ { "segmentId": <id>, "translation": "<text in that language>" } ] } ] }
 
 For each target language, include exactly one segment per id in its "translateSegmentIds",
 with segmentIds matching the source slides. Do not include segments for ids not listed.
-  `,
-                },
-            ],
-        },
-    ];
+`;
 
+    // Tool-use phase: in a throwaway conversation, let the model look up any Scripture it
+    // needs (schema-free, since Gemini rejects responseSchema + tools), feeding each result
+    // back until it stops asking or we hit the round cap. We collect the canonical passages
+    // and hand them to the final structured call as a plain reference block — so the final
+    // call carries no function-call history and stays a clean JSON request.
+    const gatheredPassages: string[] = [];
+    if (bibleLanguages.length > 0) {
+        const tools = [{ functionDeclarations: [BIBLE_LOOKUP_TOOL] }];
+        const MAX_TOOL_ROUNDS = 4;
+        const toolContents: Content[] = [
+            {
+                role: 'user',
+                parts: [{ text: `${promptHeader}${bibleSection}` }],
+            },
+        ];
+        for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            const toolResponse = await provider.apiClient.models.generateContent({
+                model,
+                config: {
+                    tools,
+                    toolConfig: {
+                        functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
+                    },
+                },
+                contents: toolContents,
+            });
+            const calls = toolResponse.functionCalls ?? [];
+            const modelContent = toolResponse.candidates?.[0]?.content;
+            if (modelContent) toolContents.push(modelContent);
+            if (calls.length === 0) break;
+
+            const responseParts: Part[] = [];
+            for (const call of calls) {
+                if (call.name !== BIBLE_LOOKUP_TOOL.name) continue;
+                const args = (call.args ?? {}) as Partial<BibleLookupArgs>;
+                let responsePayload: Record<string, unknown>;
+                if (!args.book || typeof args.chapter !== 'number') {
+                    responsePayload = { error: 'book and chapter are required' };
+                } else {
+                    const result = await lookupBiblePassage(
+                        {
+                            book: args.book,
+                            chapter: args.chapter,
+                            startVerse: args.startVerse,
+                            endVerse: args.endVerse,
+                        },
+                        bibleLanguages,
+                    );
+                    onToolCall?.(result.call);
+                    if (result.call.ok) {
+                        for (const [language, text] of Object.entries(result.passages)) {
+                            gatheredPassages.push(`${result.reference} (${language}):\n${text}`);
+                        }
+                        responsePayload = { reference: result.reference, passages: result.passages };
+                    } else {
+                        responsePayload = {
+                            reference: result.reference,
+                            error: `No canonical text found for ${result.reference}`,
+                        };
+                    }
+                }
+                responseParts.push({
+                    functionResponse: { name: call.name, response: responsePayload },
+                });
+            }
+            if (responseParts.length === 0) break;
+            toolContents.push({ role: 'user', parts: responseParts });
+        }
+    }
+
+    const scriptureSection = gatheredPassages.length > 0
+        ? `
+The canonical published wording of the Scripture passages on these slides, per language, is
+below. For any slide that is or quotes Scripture, base your translation on the matching
+canonical text — adapting only where the slide itself does (responsive readings, pronoun
+changes, partial quotes).
+
+<scripture>
+${gatheredPassages.join('\n\n')}
+</scripture>
+`
+        : '';
+
+    // Final structured call: a clean JSON request (no tools / no function-call history).
     const response = await provider.apiClient.models.generateContent({
-        model: params.model ?? provider.defaultModel,
-        config,
-        contents,
+        model,
+        config: finalConfig,
+        contents: [
+            { role: 'user', parts: [{ text: `${promptHeader}${scriptureSection}${jsonInstruction}` }] },
+        ],
     });
     const jsonResponse = JSON.parse(response.text || '{}');
     const languageResults = (jsonResponse.languages ?? []) as Array<{

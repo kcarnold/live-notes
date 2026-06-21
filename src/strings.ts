@@ -85,6 +85,9 @@ export interface AppStrings {
   loadOnAirItem: string;
   suggestTranslations: string;
   suggesting: string;
+  bibleLookupsLabel: string;
+  bibleLookupFound: string;
+  bibleLookupMissing: string;
   save: string;
   saveAll: string;
   saving: string;
@@ -152,6 +155,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     loadOnAirItem: 'Load on-air item',
     suggestTranslations: 'Suggest',
     suggesting: 'Suggesting…',
+    bibleLookupsLabel: 'Bible lookups',
+    bibleLookupFound: 'Found in',
+    bibleLookupMissing: 'No canonical text found',
     save: 'Save',
     saveAll: 'Save all reviewed',
     saving: 'Saving…',
@@ -217,6 +223,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     loadOnAirItem: 'Charger l’élément à l’antenne',
     suggestTranslations: 'Suggérer',
     suggesting: 'Suggestion…',
+    bibleLookupsLabel: 'Recherches bibliques',
+    bibleLookupFound: 'Trouvé en',
+    bibleLookupMissing: 'Aucun texte canonique trouvé',
     save: 'Enregistrer',
     saveAll: 'Tout enregistrer',
     saving: 'Enregistrement…',
@@ -282,6 +291,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     loadOnAirItem: 'Cargar elemento al aire',
     suggestTranslations: 'Sugerir',
     suggesting: 'Sugiriendo\u2026',
+    bibleLookupsLabel: 'Consultas b\u00edblicas',
+    bibleLookupFound: 'Encontrado en',
+    bibleLookupMissing: 'No se encontr\u00f3 texto can\u00f3nico',
     save: 'Guardar',
     saveAll: 'Guardar todo',
     saving: 'Guardando\u2026',
@@ -347,6 +359,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     loadOnAirItem: 'Chaje eleman k ap pase a',
     suggestTranslations: 'Sijere',
     suggesting: 'Ap sijere…',
+    bibleLookupsLabel: 'Rechèch biblik',
+    bibleLookupFound: 'Jwenn nan',
+    bibleLookupMissing: 'Pa jwenn tèks kanonik',
     save: 'Anrejistre',
     saveAll: 'Anrejistre tout',
     saving: 'Ap anrejistre…',
