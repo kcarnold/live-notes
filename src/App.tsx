@@ -61,6 +61,13 @@ function ConnectionStatusWidget({
 // Layouts: each is an array of arrays of component keys
 const availableLayouts = [
   {
+    key: "slide-and-listen",
+    labelKey: "layoutSlideAndListen" as const,
+    layout: [
+      ["slideTranslation", "listen"]
+    ]
+  },
+  {
     key: 'slide-and-translation',
     labelKey: 'layoutSlideAndTranslation' as const,
     layout: [
@@ -72,13 +79,6 @@ const availableLayouts = [
     labelKey: 'layoutBilingualView' as const,
     layout: [
       ["slideTranslation", "bilingual"]
-    ]
-  },
-  {
-    key: "slide-and-listen",
-    labelKey: "layoutSlideAndListen" as const,
-    layout: [
-      ["slideTranslation", "listen"]
     ]
   },
 ];
