@@ -143,6 +143,8 @@ function HomePage() {
 function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace: (newName: string) => void }) {
   const [fontSize, setFontSize] = useAtom(fontSizeAtom);
   const ydoc = useYDoc();
+  // eslint-disable-next-line react-hooks/immutability, @typescript-eslint/no-explicit-any
+  (window as any).ydoc = ydoc; // Expose YDoc on window for debugging
   const s = useStrings();
   const locale = resolveLocale();
 
