@@ -4,6 +4,7 @@ import { useAtomValue } from 'jotai';
 
 import { isEditorAtom, languages } from './configAtoms';
 import { useStrings } from './useLocale';
+import { slideTranslationKey } from './slideTranslation';
 import { SlideReview } from './SlideReview';
 import {
   parseSlidesInput,
@@ -40,6 +41,7 @@ export function SlideReviewContainer() {
   const isEditor = useAtomValue(isEditorAtom);
   const statusMap = useMap('proclaimStatus');
   const presentationsMap = useMap('proclaimPresentations');
+  const translationsMap = useMap('slideTranslations');
 
   const [slidesText, setSlidesText] = useState('');
   const [slides, setSlides] = useState<string[]>([]);
@@ -140,6 +142,16 @@ export function SlideReviewContainer() {
       setError(null);
       try {
         const record = await upsertLibraryEntry({ language, sourceText, text });
+        // Push the reviewed entry into the live (per-day) slideTranslations map so the
+        // viewer updates immediately. Keys are content-addressed, so this lands on any
+        // on-screen slide with matching text. Otherwise the only writer is the Proclaim
+        // service, which won't re-push an item whose slide content hasn't changed.
+        translationsMap.set(slideTranslationKey(language, sourceText), {
+          text: record.text,
+          status: record.status,
+          provenance: record.provenance,
+          reviewedAt: record.reviewedAt,
+        });
         setSavedTexts((prev) => {
           const next = { ...prev, [language]: [...(prev[language] ?? [])] };
           next[language][slideIndex] = record.text;
@@ -151,7 +163,7 @@ export function SlideReviewContainer() {
         setBusy(false);
       }
     },
-    [drafts, slides],
+    [drafts, slides, translationsMap],
   );
 
   const handleDraftChange = useCallback(

@@ -48,17 +48,33 @@ value = { text, status: 'reviewed' | 'auto', provenance: 'human'|'bible'|'creed'
 - **Fallback / surprise** = no `reviewed` entry for the live slide → translate live,
   store as `status:'auto'`, display with an "unreviewed" badge; one edit promotes it
   to `reviewed`.
-- **Review UI** is a *projection* over this store (item's slides × languages), not a
-  separate source of truth — pre-translation and live fallback read/write the same
-  store, so there is no reconciliation problem.
+- **Review UI** is a *projection* over this store (item's slides × languages).
+  Pre-translation and live fallback read/write the same content-addressed keys, so
+  there is no positional reconciliation problem.
 
-**Two tiers:**
-1. **Persistent library** (server-side, survives the per-day doc): canonical +
-   reviewed entries, reused across all services. Source of truth for `reviewed`.
-2. **Per-day Y.Doc `slideTranslations` Y.Map**: live working copy for the current
-   service (reviewed entries pulled from the library + `auto` fallbacks). Viewers
-   read only this, exactly like they read `proclaimPresentations`/`proclaimStatus`
-   today.
+**Two tiers (and which one is the source of truth):**
+1. **Per-day Y.Doc `slideTranslations` Y.Map** — **source of truth for the live
+   service.** Viewers read only this, exactly like `proclaimPresentations`/
+   `proclaimStatus`. Anyone may write it: the review screen writes `reviewed` edits
+   here *immediately* (so the live viewer updates without a round-trip through any
+   other store), and the Python service seeds it.
+2. **Persistent library** (server-side, file-backed, survives the per-day doc):
+   canonical + reviewed entries reused across all services. It is **persistence +
+   cross-day cache, not the live source of truth.** Reviewed edits are written
+   *back* to it for tomorrow's reuse; a fresh per-day doc is *seeded* from it.
+
+> **Why this orientation (correction to the original plan).** The first build treated
+> the library as the source of truth and the Y.Map as a projection rebuilt from it on
+> item activation (revision-cached). That put the library→Y.Map sync **on the
+> user-visible read path**: a review-screen Save updated only the library, the service
+> never re-pushed an unchanged item, and the live viewer showed stale text (observed
+> bug). Inverting it — Y.Map is truth, library is write-back persistence — moves the
+> only remaining sync (Y.Map→library) **off the visible path**, so its staleness or
+> failure degrades to "we re-translate next month" instead of "wrong text on screen
+> now." It also makes multiple writers a non-issue: writing a shared CRDT is what Yjs
+> is *for*, not a smell. Two physical stores still exist (the library provides the
+> cross-day persistence the ephemeral per-day doc cannot); inversion doesn't collapse
+> them, it just points truth at the store the consumer actually reads.
 
 **Source text** for translation is the **original-language (Main screen) content**,
 not Proclaim's translation screen. Proclaim's translation screen is a **single
@@ -136,12 +152,19 @@ Ships standalone value: lets you pre-translate and review immediately.
   us" bug regardless of translation.
 
 ### Phase C — Live translated display + fallback
-- **Single writer** populates the per-day `slideTranslations` Y.Map: the Python
-  service, after pushing an item, calls `/api/translateItem` and writes per-slide
-  results (reviewed-from-library or `auto`). This keeps web clients pure readers,
-  consistent with current Proclaim data flow. (Interim option if Python wiring is
-  deferred: the live container calls `/api/translateItem` and writes the map —
-  writes are idempotent.)
+- **Writers to the per-day `slideTranslations` Y.Map** (the Y.Map is the live source
+  of truth — see "Two tiers" above):
+  - The **Python service** *seeds* it: after pushing an item it calls
+    `/api/translateItem` and writes per-slide results (reviewed-from-library or
+    `auto`). The seed is **fill/refresh-but-protect-reviewed** — it writes fresh keys
+    and overwrites prior `auto` entries, but **never clobbers a `reviewed` entry**
+    (`_store_translations` skips keys whose existing status is `reviewed`), so it can't
+    downgrade a live human edit on a later activation.
+  - The **review screen** writes `reviewed` edits directly into the map on Save
+    (`SlideReviewContainer.handleSaveCell`), keyed by `slideTranslationKey(language,
+    sourceText)`, *and* POSTs to `/api/slideLibrary` so the edit persists across days.
+    Because keys are content-addressed, the edit lands on any on-screen slide with
+    matching text — the live viewer updates with no round-trip through the service.
 - **New live view** `slideTranslation-{language}` (container + pure component
   modeled on `CurrentSlideViewer`): reads `proclaimStatus` + `proclaimPresentations`
   (current slide source text) + `slideTranslations` (translation + status), resolves
@@ -238,9 +261,50 @@ it.
   draft matches that wording (re-segmented), badged unreviewed; Save in the review
   screen promotes it to `reviewed`.
 
+## Open questions / next iteration
+
+These came out of testing the first build; not yet designed or scheduled.
+
+### Rethink the alignment workflow → one strong-model "sort it out" call
+The per-slide `alignReferenceTranslation` step (Phase C-import) doesn't feel right in
+practice. Direction to explore: replace the alignment/splitting machinery with **a
+single call to the strongest available Gemini** (e.g. `gemini-3.5-flash`) that
+produces the **whole item's first draft at once**, given:
+- the English source (as slides), and
+- the **original Proclaim item text, *unsplit*** — the raw content extracted from the
+  XML, not pre-segmented — offered as *reference the model is encouraged to use when
+  the language matches* (and ignore otherwise).
+
+Goal: let the operator **dump big, probably-relevant chunks of text into Proclaim
+(potentially in several of our languages at once)** and have the model sort out what
+goes where, rather than us doing brittle index/segment alignment. Open sub-questions:
+- Should that "dump" surface be **Proclaim**, the **review page** (a free-text
+  reference box per item), or **both**?
+- Later: give the model **tool access** to look up Bible passages (and human-translated
+  liturgical elements) in the target language — this is the natural home for the
+  Phase D agent tools, folded into the first-draft call instead of a separate phase.
+
+### Review the whole presentation, not just the active item
+The review screen currently works one item at a time (paste / "load on-air"). The
+intended workflow was **whole-service review**: 
+- show the **full service order**, let the operator **pick which item to expand**, and
+- **summarize each item by review coverage** (e.g. reviewed vs. unreviewed slide counts
+  per language) so it's obvious what still needs attention before a service.
+
+The data already exists: `proclaimServiceOrder` + per-item slides are pushed, and
+coverage is a library/`slideTranslations` lookup per slide.
+
 ## Status
 Phases A, B, C, and C-import are all implemented and pushed on
 `claude/slide-translation-architecture-lv8x3u`. (Phase B note: the live writer
 translates the active item lazily rather than pre-translating the whole order;
 `proclaimServiceOrder` is a plain list value, not a `Y.Array`, since the service
-is the sole writer.)
+is the sole *seeding* writer.)
+
+**Source-of-truth inversion (post-build fix).** The live viewer initially showed stale
+text after a review-screen edit because the library was treated as truth and the Y.Map
+as a rebuilt projection. Fixed by making the **Y.Map the live source of truth**: the
+review screen writes `reviewed` edits straight into `slideTranslations` (and still
+POSTs to the library for persistence), and the Python service's seed now
+**protects existing `reviewed` entries** rather than overwriting them. See "Two tiers"
+and Phase C above.

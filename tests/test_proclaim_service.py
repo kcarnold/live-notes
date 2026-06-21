@@ -280,6 +280,37 @@ def test_store_translations_writes_content_addressed_keys():
     assert slide_translation_key('French', '') not in service.slide_translations_map
 
 
+def test_store_translations_never_clobbers_reviewed_entries():
+    """A reviewed entry (e.g. a live review-screen edit) survives a re-seed; autos refill."""
+    from proclaim_lib import slide_translation_key
+
+    service = make_service()
+    hello_key = slide_translation_key('French', 'Hello')
+    world_key = slide_translation_key('French', 'World')
+    # Simulate a human edit written live: a reviewed entry, plus a stale auto.
+    service.slide_translations_map[hello_key] = {
+        'text': 'Bonjour (édité)', 'status': 'reviewed', 'provenance': 'human'
+    }
+    service.slide_translations_map[world_key] = {
+        'text': 'Monde (ancien)', 'status': 'auto', 'provenance': 'llm'
+    }
+
+    service._store_translations(
+        ['Hello', 'World'],
+        {
+            'French': [
+                {'text': 'Bonjour (re-traduit)', 'status': 'auto', 'provenance': 'llm'},
+                {'text': 'Monde (nouveau)', 'status': 'auto', 'provenance': 'llm'},
+            ]
+        },
+    )
+
+    # Reviewed entry untouched; the prior auto is refilled.
+    assert service.slide_translations_map[hello_key]['text'] == 'Bonjour (édité)'
+    assert service.slide_translations_map[hello_key]['status'] == 'reviewed'
+    assert service.slide_translations_map[world_key]['text'] == 'Monde (nouveau)'
+
+
 async def test_translate_active_item_translates_once_per_revision(fast_timing):
     """The active item is translated only when its revision changes."""
     from proclaim_lib import ServiceItemWithSlides, slide_translation_key

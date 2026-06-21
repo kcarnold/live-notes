@@ -479,13 +479,25 @@ class ProclaimYjsService:
             return None
 
     def _store_translations(self, slides: list, translations: Dict[str, Any]) -> None:
-        """Write per-slide translation results into the slideTranslations map."""
+        """Seed per-slide translation results into the slideTranslations map.
+
+        The Yjs map is the source of truth for the live session; this service only
+        *seeds* it (warms a fresh per-day doc from the library, fills in `auto`
+        fallbacks). It must never clobber a `reviewed` entry — those are written live
+        from the review screen and POSTed back to the library for persistence, so a
+        re-derived value here would only ever downgrade a human edit. Fresh keys and
+        prior `auto` entries are (re)filled.
+        """
         with self.ydoc.transaction():
             for language, per_slide in translations.items():
                 for slide, entry in zip(slides, per_slide):
                     if not slide.strip() or not entry:
                         continue
-                    self.slide_translations_map[slide_translation_key(language, slide)] = {
+                    key = slide_translation_key(language, slide)
+                    existing = self.slide_translations_map[key] if key in self.slide_translations_map else None
+                    if existing is not None and existing.get('status') == 'reviewed':
+                        continue
+                    self.slide_translations_map[key] = {
                         'text': entry.get('text', ''),
                         'status': entry.get('status', 'auto'),
                         'provenance': entry.get('provenance', 'llm'),
