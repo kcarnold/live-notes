@@ -7,6 +7,14 @@
  * 2. Subscribes to the organizer's audio track
  * 3. Pipes PCM audio frames to Gemini Live API via WebSocket
  * 4. Receives translated audio back and publishes it as a new track
+ *
+ * The Gemini session is periodically terminated by the server (duration/context
+ * limits, routine resets). To keep the audio from cutting out, the bridge listens
+ * for the `goAway` warning and reconnects make-before-break — it opens a
+ * replacement socket while the old one is still serving audio, then swaps once the
+ * new one is ready. Unexpected closures fall back to a backoff reconnect. The
+ * whole lifecycle is reported via the injected `recordEvent` telemetry sink so we
+ * can see how often sessions drop and how long any gap lasts.
  */
 
 import {
@@ -27,6 +35,54 @@ import WebSocket from "ws";
 import type { TranscriptWriter } from "./transcript-writer.ts";
 
 export type BridgeStatus = "starting" | "active" | "error" | "closed";
+
+/** Records a telemetry event. Implemented in the server over the PostHog client. */
+export type RecordEvent = (
+  event: string,
+  properties: Record<string, unknown>
+) => void;
+
+/** What prompted a reconnect, for telemetry. */
+export type ReconnectTrigger = "goaway" | "close";
+
+// Exponential-backoff bounds for failed Gemini reconnect attempts (mirrors the
+// Proclaim service's convention; see PROCLAIM_INTEGRATION.md).
+const RECONNECT_BACKOFF = { initialMs: 1_000, maxMs: 30_000 };
+
+/**
+ * Parse the `timeLeft` from a Gemini `goAway` message into milliseconds. The wire
+ * shape is unconfirmed for the translate model (the raw value is logged), so this
+ * tolerates a protobuf Duration string ("10s", "10.5s"), a bare number of seconds,
+ * or an expanded `{ seconds, nanos }` object. Returns null if it can't be parsed.
+ */
+export function parseGoAwayTimeLeftMs(raw: unknown): number | null {
+  if (raw == null) return null;
+  if (typeof raw === "number") return isFinite(raw) ? Math.round(raw * 1000) : null;
+  if (typeof raw === "string") {
+    const m = raw.trim().match(/^([\d.]+)\s*s?$/);
+    return m ? Math.round(parseFloat(m[1]) * 1000) : null;
+  }
+  if (typeof raw === "object") {
+    const o = raw as { seconds?: number | string; nanos?: number | string };
+    const secs = o.seconds != null ? Number(o.seconds) : NaN;
+    if (isNaN(secs)) return null;
+    return Math.round(secs * 1000 + Number(o.nanos ?? 0) / 1e6);
+  }
+  return null;
+}
+
+/**
+ * Equal-jitter exponential backoff: half the capped delay plus a random half, so
+ * concurrent bridges don't reconnect in lockstep. Result is in [cap/2, cap] where
+ * cap = min(maxMs, initialMs * 2^attempt).
+ */
+export function nextBackoffMs(
+  attempt: number,
+  opts: { initialMs: number; maxMs: number } = RECONNECT_BACKOFF
+): number {
+  const cap = Math.min(opts.maxMs, opts.initialMs * 2 ** Math.max(0, attempt));
+  return Math.round(cap / 2 + Math.random() * (cap / 2));
+}
 
 export class TranslationBridge {
   private room: Room | null = null;
@@ -55,10 +111,21 @@ export class TranslationBridge {
   private readonly livekitApiKey: string;
   private readonly livekitApiSecret: string;
 
+  // Whether the *current* (this.geminiWs) socket has finished setup and can take audio.
   private geminiSetupComplete: boolean = false;
   private organizerIdentity: string;
   private lastAudioFrameTime: number = 0;
   private captureChain: Promise<void> = Promise.resolve();
+
+  // Reconnect state. `pendingWs` is a replacement socket being established (during
+  // a make-before-break swap or a backoff retry); `reconnecting` guards against
+  // launching two overlapping reconnects (e.g. goAway then the actual close).
+  private pendingWs: WebSocket | null = null;
+  private reconnecting: boolean = false;
+  private reconnectCount: number = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private sessionConnectedAt: number = 0;
+  private framesDroppedWhileDown: number = 0;
 
   // Persists finalized transcript segments into the shared Yjs doc.
   private readonly writer: TranscriptWriter | null;
@@ -66,6 +133,8 @@ export class TranslationBridge {
   // via Gemini input transcription. Only the primary bridge does, so the same
   // English text isn't appended once per running language.
   private readonly writesSourceTranscript: boolean;
+  // Telemetry sink (PostHog, injected by the server). Null in tests / when unset.
+  private readonly recordEvent: RecordEvent | null;
 
   // The source (input) transcript is published under this language code.
   static readonly SOURCE_CODE = "en";
@@ -81,6 +150,7 @@ export class TranslationBridge {
       livekitApiSecret: string;
       writer?: TranscriptWriter | null;
       writesSourceTranscript?: boolean;
+      recordEvent?: RecordEvent | null;
     }
   ) {
     this.sessionId = sessionId;
@@ -93,6 +163,16 @@ export class TranslationBridge {
     this.livekitApiSecret = config.livekitApiSecret;
     this.writer = config.writer ?? null;
     this.writesSourceTranscript = config.writesSourceTranscript ?? false;
+    this.recordEvent = config.recordEvent ?? null;
+  }
+
+  /** Emit a telemetry event tagged with this bridge's language and identity. */
+  private record(event: string, properties: Record<string, unknown> = {}): void {
+    this.recordEvent?.(event, {
+      targetLanguage: this.targetLanguage,
+      identity: this.identity,
+      ...properties,
+    });
   }
 
   async start(): Promise<void> {
@@ -129,6 +209,17 @@ export class TranslationBridge {
       `[TranslationBridge:${this.targetLanguage}] Stopping bridge`
     );
     this.status = "closed";
+
+    // Stop any in-flight reconnect so it doesn't resurrect the socket after teardown.
+    this.reconnecting = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.pendingWs) {
+      this.pendingWs.close();
+      this.pendingWs = null;
+    }
 
     if (this.geminiWs) {
       this.geminiWs.close();
@@ -212,56 +303,17 @@ export class TranslationBridge {
     );
   }
 
+  private geminiWsUrl(): string {
+    return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.geminiApiKey}`;
+  }
+
+  /** Open the initial Gemini socket and resolve once its setup completes. */
   private async connectGemini(): Promise<void> {
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.geminiApiKey}`;
-
     return new Promise<void>((resolve, reject) => {
-      this.geminiWs = new WebSocket(wsUrl);
+      const ws = new WebSocket(this.geminiWsUrl());
+      this.geminiWs = ws;
+      this.wireGeminiSocket(ws, { role: "initial", onInitialError: reject });
 
-      this.geminiWs.on("open", () => {
-        console.log(
-          `[TranslationBridge:${this.targetLanguage}] Gemini WebSocket connected`
-        );
-        this.sendGeminiSetup();
-      });
-
-      this.geminiWs.on("message", (data: WebSocket.Data) => {
-        this.handleGeminiMessage(data);
-        if (!this.geminiSetupComplete) {
-          // Wait for setup complete message
-          // resolve will be called in handleGeminiMessage
-        }
-      });
-
-      this.geminiWs.on("error", (error) => {
-        console.error(
-          `[TranslationBridge:${this.targetLanguage}] Gemini WebSocket error:`,
-          error
-        );
-        if (!this.geminiSetupComplete) {
-          reject(error);
-        }
-      });
-
-      this.geminiWs.on("close", (code: number, reason: Buffer) => {
-        const reasonStr = reason.toString();
-        console.log(
-          `[TranslationBridge:${this.targetLanguage}] Gemini WebSocket closed`,
-          { code, reason: reasonStr }
-        );
-        if (!this.geminiSetupComplete) {
-          reject(new Error(`Gemini WebSocket closed before setup: code=${code} reason=${reasonStr}`));
-        } else if (this.status === "active") {
-          // Auto-reconnect on GoAway or unexpected closure
-          console.log(
-            `[TranslationBridge:${this.targetLanguage}] Reconnecting Gemini WebSocket...`
-          );
-          this.geminiSetupComplete = false;
-          this.reconnectGemini();
-        }
-      });
-
-      // Store resolve for use when setup complete arrives
       const checkSetup = setInterval(() => {
         if (this.geminiSetupComplete) {
           clearInterval(checkSetup);
@@ -269,7 +321,6 @@ export class TranslationBridge {
         }
       }, 100);
 
-      // Timeout after 15 seconds
       setTimeout(() => {
         if (!this.geminiSetupComplete) {
           clearInterval(checkSetup);
@@ -280,66 +331,191 @@ export class TranslationBridge {
   }
 
   /**
-   * Reconnect the Gemini WebSocket after a GoAway or unexpected closure.
-   * Reuses the existing LiveKit room + audio pipeline.
+   * Attach handlers to a Gemini socket. Used for both the initial connection and
+   * reconnect replacements, so their behavior never diverges. A "pending"
+   * replacement is swapped in as the active socket once its setup completes
+   * (make-before-break); content messages from any socket that isn't the current
+   * `this.geminiWs` are ignored.
    */
-  private async reconnectGemini(): Promise<void> {
-    try {
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.geminiApiKey}`;
+  private wireGeminiSocket(
+    ws: WebSocket,
+    opts: {
+      role: "initial" | "pending";
+      trigger?: ReconnectTrigger;
+      attempt?: number;
+      onInitialError?: (err: Error) => void;
+    }
+  ): void {
+    let openedAt = 0;
+    let ready = false;
 
-      this.geminiWs = new WebSocket(wsUrl);
+    ws.on("open", () => {
+      openedAt = Date.now();
+      console.log(
+        `[TranslationBridge:${this.targetLanguage}] Gemini WebSocket open (${opts.role})`
+      );
+      this.sendGeminiSetup(ws);
+    });
 
-      this.geminiWs.on("open", () => {
-        console.log(
-          `[TranslationBridge:${this.targetLanguage}] Gemini WebSocket reconnected`
-        );
-        this.sendGeminiSetup();
-      });
-
-      this.geminiWs.on("message", (data: WebSocket.Data) => {
-        if (!this.geminiSetupComplete) {
-          const msg = JSON.parse(data.toString());
-          if (msg.setupComplete) {
-            console.log(
-              `[TranslationBridge:${this.targetLanguage}] Gemini reconnect setup complete`
-            );
-            this.geminiSetupComplete = true;
-            return;
-          }
-        }
-        this.handleGeminiMessage(data);
-      });
-
-      this.geminiWs.on("error", (error) => {
+    ws.on("message", (data: WebSocket.Data) => {
+      let message: Record<string, unknown>;
+      try {
+        message = JSON.parse(data.toString());
+      } catch (error) {
         console.error(
-          `[TranslationBridge:${this.targetLanguage}] Gemini reconnect error:`,
+          `[TranslationBridge:${this.targetLanguage}] Error parsing Gemini message:`,
           error
         );
-      });
+        return;
+      }
 
-      this.geminiWs.on("close", (code: number, reason: Buffer) => {
-        const reasonStr = reason.toString();
+      if (!ready) {
         console.log(
-          `[TranslationBridge:${this.targetLanguage}] Gemini reconnected WS closed`,
-          { code, reason: reasonStr }
+          `[TranslationBridge:${this.targetLanguage}] Gemini message (pre-setup, ${opts.role}):`,
+          JSON.stringify(message).slice(0, 500)
         );
-        if (this.status === "active") {
-          setTimeout(() => {
-            this.geminiSetupComplete = false;
-            this.reconnectGemini();
-          }, 1000);
-        }
-      });
-    } catch (error) {
+      }
+
+      if (message.setupComplete) {
+        ready = true;
+        this.onSocketReady(ws, opts.role, openedAt ? Date.now() - openedAt : 0, opts.trigger);
+        return;
+      }
+
+      // Only the active socket's content drives audio/transcript output.
+      if (ws !== this.geminiWs) return;
+      this.processServerContent(message);
+    });
+
+    ws.on("error", (error) => {
       console.error(
-        `[TranslationBridge:${this.targetLanguage}] Gemini reconnect failed:`,
+        `[TranslationBridge:${this.targetLanguage}] Gemini WebSocket error (${opts.role}):`,
         error
       );
-      this.status = "error";
-    }
+      if (opts.role === "initial" && !ready) {
+        opts.onInitialError?.(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+
+    ws.on("close", (code: number, reason: Buffer) => {
+      const reasonStr = reason.toString();
+      const wasActive = ws === this.geminiWs;
+      const wasPending = ws === this.pendingWs;
+      console.log(
+        `[TranslationBridge:${this.targetLanguage}] Gemini WebSocket closed (${opts.role})`,
+        { code, reason: reasonStr, wasActive, wasPending }
+      );
+      this.record("gemini_session_closed", {
+        code,
+        reason: reasonStr,
+        role: opts.role,
+        wasActive,
+        wasPending,
+        socketLifetimeMs: openedAt ? Date.now() - openedAt : 0,
+        framesSent: this.framesSentToGemini,
+        framesReceived: this.framesReceivedFromGemini,
+        totalReconnects: this.reconnectCount,
+      });
+
+      if (opts.role === "initial" && !ready) {
+        opts.onInitialError?.(
+          new Error(`Gemini WebSocket closed before setup: code=${code} reason=${reasonStr}`)
+        );
+        return;
+      }
+
+      if (this.status !== "active") return;
+
+      if (wasActive) {
+        // The live session died (with or without a goAway). Stop sending audio to
+        // the dead socket and reconnect (no-op if a goAway replacement is already
+        // in flight).
+        this.geminiSetupComplete = false;
+        this.beginReconnect("close");
+      } else if (wasPending) {
+        // A replacement died before it could take over — retry with backoff,
+        // keeping `reconnecting` set so we don't also start a parallel attempt.
+        this.pendingWs = null;
+        const attempt = (opts.attempt ?? 0) + 1;
+        const trigger = opts.trigger ?? "close";
+        const backoffMs = nextBackoffMs(attempt);
+        this.record("gemini_reconnect_retry", { trigger, attempt, backoffMs });
+        this.reconnectTimer = setTimeout(() => this.openReplacement(trigger, attempt), backoffMs);
+      }
+      // A stale socket we already swapped away from: nothing to do.
+    });
   }
 
-  private sendGeminiSetup(): void {
+  /** Promote a socket to active once its setup completes. */
+  private onSocketReady(
+    ws: WebSocket,
+    role: "initial" | "pending",
+    setupLatencyMs: number,
+    trigger?: ReconnectTrigger
+  ): void {
+    this.sessionConnectedAt = Date.now();
+    this.geminiSetupComplete = true;
+
+    if (role === "pending") {
+      const old = this.geminiWs;
+      this.geminiWs = ws;
+      this.pendingWs = null;
+      this.reconnecting = false;
+      this.reconnectCount++;
+      if (old && old !== ws) {
+        try {
+          old.close();
+        } catch {
+          // already closing
+        }
+      }
+      console.log(
+        `[TranslationBridge:${this.targetLanguage}] Gemini reconnect setup complete — swapped in (trigger=${trigger}, total=${this.reconnectCount})`
+      );
+      this.record("gemini_session_setup_complete", {
+        isReconnect: true,
+        trigger,
+        totalReconnects: this.reconnectCount,
+        setupLatencyMs,
+      });
+    } else {
+      console.log(
+        `[TranslationBridge:${this.targetLanguage}] Gemini setup complete`
+      );
+      this.record("gemini_session_setup_complete", {
+        isReconnect: false,
+        totalReconnects: 0,
+        setupLatencyMs,
+      });
+    }
+
+    this.flushDroppedFrames();
+  }
+
+  /** Start a reconnect unless one is already in flight. */
+  private beginReconnect(trigger: ReconnectTrigger): void {
+    if (this.reconnecting || this.status !== "active") return;
+    this.reconnecting = true;
+    this.openReplacement(trigger, 0);
+  }
+
+  /** Open a replacement socket; it swaps in once its setup completes. */
+  private openReplacement(trigger: ReconnectTrigger, attempt: number): void {
+    this.reconnectTimer = null;
+    if (this.status !== "active") {
+      this.reconnecting = false;
+      return;
+    }
+    console.log(
+      `[TranslationBridge:${this.targetLanguage}] Opening replacement Gemini socket (trigger=${trigger}, attempt=${attempt})`
+    );
+    this.record("gemini_reconnect_attempt", { trigger, attempt });
+    const ws = new WebSocket(this.geminiWsUrl());
+    this.pendingWs = ws;
+    this.wireGeminiSocket(ws, { role: "pending", trigger, attempt });
+  }
+
+  private sendGeminiSetup(ws: WebSocket): void {
     const setupMessage = {
       setup: {
         model: `models/${this.geminiModel}`,
@@ -367,65 +543,84 @@ export class TranslationBridge {
       JSON.stringify(setupMessage, null, 2)
     );
 
-    this.geminiWs!.send(JSON.stringify(setupMessage));
+    ws.send(JSON.stringify(setupMessage));
   }
 
-  private handleGeminiMessage(data: WebSocket.Data): void {
-    try {
-      const message = JSON.parse(data.toString());
+  /** Handle a content message from the active Gemini socket. */
+  private processServerContent(message: Record<string, unknown>): void {
+    // goAway: the server warns before terminating. Reconnect now (make-before-break)
+    // so the replacement is ready before this socket actually closes.
+    const goAway = (message.goAway ?? message.go_away) as
+      | { timeLeft?: unknown; time_left?: unknown }
+      | undefined;
+    if (goAway) {
+      const raw = goAway.timeLeft ?? goAway.time_left;
+      const timeLeftMs = parseGoAwayTimeLeftMs(raw);
+      const sessionAgeMs = this.sessionConnectedAt ? Date.now() - this.sessionConnectedAt : null;
+      console.log(`[TranslationBridge:${this.targetLanguage}] Gemini goAway received`, {
+        raw,
+        timeLeftMs,
+        sessionAgeMs,
+      });
+      this.record("gemini_goaway", {
+        timeLeftRaw: typeof raw === "string" ? raw : JSON.stringify(raw ?? null),
+        timeLeftMs,
+        sessionAgeMs,
+      });
+      this.beginReconnect("goaway");
+      return;
+    }
 
-      // Log all messages before setup is complete for debugging
-      if (!this.geminiSetupComplete) {
-        console.log(
-          `[TranslationBridge:${this.targetLanguage}] Gemini message (pre-setup):`,
-          JSON.stringify(message).slice(0, 500)
-        );
-      }
+    // sessionResumptionUpdate: we don't resume yet, but record whether the translate
+    // model even offers a handle — informs whether session resumption is worth adding.
+    const sru = message.sessionResumptionUpdate ?? message.session_resumption_update;
+    if (sru) {
+      const o = sru as { resumable?: boolean; newHandle?: string; new_handle?: string };
+      this.record("gemini_session_resumption_update", {
+        resumable: !!o.resumable,
+        hasHandle: !!(o.newHandle ?? o.new_handle),
+      });
+    }
 
-      // Handle setup complete
-      if (message.setupComplete) {
-        console.log(
-          `[TranslationBridge:${this.targetLanguage}] Gemini setup complete`
-        );
-        this.geminiSetupComplete = true;
-        return;
-      }
+    const serverContent = (message as { serverContent?: { modelTurn?: { parts?: Array<{ inlineData?: { data?: string } }> }; outputTranscription?: { text?: string }; inputTranscription?: { text?: string } } }).serverContent;
+    const parts = serverContent?.modelTurn?.parts;
 
-      // Handle audio response
-      const serverContent = message?.serverContent;
-      const parts = serverContent?.modelTurn?.parts;
-
-      if (parts?.length) {
-        for (const part of parts) {
-          if (part.inlineData?.data) {
-            this.framesReceivedFromGemini++;
-            if (this.framesReceivedFromGemini <= 3 || this.framesReceivedFromGemini % 100 === 0) {
-              console.log(
-                `[TranslationBridge:${this.targetLanguage}] Received audio frame #${this.framesReceivedFromGemini} from Gemini (${part.inlineData.data.length} bytes base64)`
-              );
-            }
-            // Queue frame for sequential capture (avoid promise pile-up)
-            this.queueAudioFrame(part.inlineData.data);
+    if (parts?.length) {
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          this.framesReceivedFromGemini++;
+          if (this.framesReceivedFromGemini <= 3 || this.framesReceivedFromGemini % 100 === 0) {
+            console.log(
+              `[TranslationBridge:${this.targetLanguage}] Received audio frame #${this.framesReceivedFromGemini} from Gemini (${part.inlineData.data.length} bytes base64)`
+            );
           }
+          // Queue frame for sequential capture (avoid promise pile-up)
+          this.queueAudioFrame(part.inlineData.data);
         }
       }
+    }
 
-      // Transcription (target language): Gemini Live Translate streams a continuous
-      // flow of deltas with no turnComplete, so persist each delta straight into the
-      // shared Yjs transcript, which is the single source of truth for viewers.
-      if (serverContent?.outputTranscription?.text) {
-        this.writer?.appendDelta(this.targetLanguage, serverContent.outputTranscription.text);
-      }
+    // Transcription (target language): Gemini Live Translate streams a continuous
+    // flow of deltas with no turnComplete, so persist each delta straight into the
+    // shared Yjs transcript, which is the single source of truth for viewers.
+    if (serverContent?.outputTranscription?.text) {
+      this.writer?.appendDelta(this.targetLanguage, serverContent.outputTranscription.text);
+    }
 
-      // Input transcription (source language / English) — only on the primary bridge.
-      if (this.writesSourceTranscript && serverContent?.inputTranscription?.text) {
-        this.writer?.appendDelta(TranslationBridge.SOURCE_CODE, serverContent.inputTranscription.text);
-      }
-    } catch (error) {
-      console.error(
-        `[TranslationBridge:${this.targetLanguage}] Error parsing Gemini message:`,
-        error
+    // Input transcription (source language / English) — only on the primary bridge.
+    if (this.writesSourceTranscript && serverContent?.inputTranscription?.text) {
+      this.writer?.appendDelta(TranslationBridge.SOURCE_CODE, serverContent.inputTranscription.text);
+    }
+  }
+
+  /** Report (and reset) any input audio dropped while the socket was down. */
+  private flushDroppedFrames(): void {
+    if (this.framesDroppedWhileDown > 0) {
+      console.log(
+        `[TranslationBridge:${this.targetLanguage}] Dropped ${this.framesDroppedWhileDown} input audio frames while reconnecting`
       );
+      this.record("gemini_input_dropped", { frames: this.framesDroppedWhileDown });
+      this.framesDroppedWhileDown = 0;
     }
   }
 
@@ -455,9 +650,12 @@ export class TranslationBridge {
 
       const now = Date.now();
       if (this.lastAudioFrameTime && now - this.lastAudioFrameTime > 2000) {
+        const gapMs = now - this.lastAudioFrameTime;
         console.log(
-          `[TranslationBridge:${this.targetLanguage}] Audio resumed after ${now - this.lastAudioFrameTime}ms gap (frame #${this.framesReceivedFromGemini})`
+          `[TranslationBridge:${this.targetLanguage}] Audio resumed after ${gapMs}ms gap (frame #${this.framesReceivedFromGemini})`
         );
+        // The user-visible "hang" duration — the headline metric for this work.
+        this.record("gemini_audio_gap", { gapMs });
       }
       this.lastAudioFrameTime = now;
     } catch (error: unknown) {
@@ -594,6 +792,9 @@ export class TranslationBridge {
       this.geminiWs.readyState !== WebSocket.OPEN ||
       !this.geminiSetupComplete
     ) {
+      // Socket is down (e.g. mid-reconnect): this speech is lost. Count it so the
+      // gap's impact is visible; flushed as a telemetry event when we recover.
+      this.framesDroppedWhileDown++;
       return;
     }
 
