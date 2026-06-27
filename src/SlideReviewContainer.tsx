@@ -54,7 +54,6 @@ export function SlideReviewContainer() {
   // Title of the loaded on-air item (e.g. a Bible citation like "Psalm 23"). Passed to the
   // model as a lookup cue; cleared when the operator edits the slide text by hand.
   const [itemTitle, setItemTitle] = useState('');
-  const [referenceText, setReferenceText] = useState('');
   const [slides, setSlides] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<StringArrays>(() => emptyArrays(0));
   const [savedTexts, setSavedTexts] = useState<NullableStringArrays>(() => emptyNullableArrays(0));
@@ -78,7 +77,9 @@ export function SlideReviewContainer() {
       conversation.slidesHash !== livePresentation.slidesHash,
   );
 
-  // Look up reviewed library entries for these slides and seed drafts from them.
+  // Seed the grid for these slides: `savedTexts` marks reviewed library entries; `drafts`
+  // pre-fill from the reviewed entry, else from the live slideTranslations cache (so an item
+  // the work-ahead worker auto-translated shows its text immediately, with no model call).
   const loadSavedFor = useCallback(async (slideList: string[]) => {
     const nextSaved = emptyNullableArrays(slideList.length);
     const nextDrafts = emptyArrays(slideList.length);
@@ -86,12 +87,18 @@ export function SlideReviewContainer() {
       languages.map(async (language) => {
         const entries = await lookupLibrary(language, slideList);
         nextSaved[language] = entries.map((entry) => entry?.text ?? null);
-        nextDrafts[language] = entries.map((entry) => entry?.text ?? '');
+        nextDrafts[language] = entries.map((entry, i) => {
+          if (entry?.text) return entry.text;
+          const cached = translationsMap.get(slideTranslationKey(language, slideList[i])) as
+            | { text?: string }
+            | undefined;
+          return cached?.text ?? '';
+        });
       }),
     );
     setSavedTexts(nextSaved);
     setDrafts(nextDrafts);
-  }, []);
+  }, [translationsMap]);
 
   const commitSlides = useCallback(
     async (slideList: string[]) => {
@@ -164,7 +171,6 @@ export function SlideReviewContainer() {
       const { translations, bibleLookups: lookups, conversationId: newId } = await translateItem(
         slideList,
         [...languages],
-        referenceText.trim() || undefined,
         itemTitle.trim() || undefined,
         selectedItemId || undefined,
       );
@@ -190,7 +196,7 @@ export function SlideReviewContainer() {
     } finally {
       setBusy(false);
     }
-  }, [slidesText, referenceText, itemTitle, selectedItemId]);
+  }, [slidesText, itemTitle, selectedItemId]);
 
   // Apply translations the agent revised during a follow-up: write them live to the
   // slideTranslations map (content-addressed, so they land on the matching slides) and reflect
@@ -317,15 +323,6 @@ export function SlideReviewContainer() {
             setSlidesText(e.target.value);
           }}
           onBlur={handleCommitFromText}
-        />
-      </label>
-
-      <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
-        {s.referenceLabel}
-        <textarea
-          className="w-full min-h-[4rem] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 text-sm font-mono"
-          value={referenceText}
-          onChange={(e) => setReferenceText(e.target.value)}
         />
       </label>
 

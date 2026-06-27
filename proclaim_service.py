@@ -69,6 +69,8 @@ from proclaim_lib import (
     service_item_signatures,
     slide_translation_key,
     slides_hash,
+    get_translation_screen_idx,
+    existing_translation_text,
 )
 
 # Configure logging (default level, can be overridden by --debug flag)
@@ -229,6 +231,12 @@ class ProclaimYjsService:
         # translate each content version once (and re-attempt when slides change underneath
         # us) without re-hitting the server on every scan.
         self.translated_hashes: Dict[str, str] = {}
+        # Current presentation id (from status) and the translation-screen index we computed
+        # for it, so the worker can pull each item's existing translation as grounding without
+        # recomputing the screen index every time.
+        self.current_presentation_id: Optional[str] = None
+        self._translation_screen_pres_id: Optional[str] = None
+        self._translation_screen_idx: Optional[int] = None
 
     @staticmethod
     def _get_date_based_doc_id() -> str:
@@ -270,6 +278,9 @@ class ProclaimYjsService:
         self.items_by_id = {}
         self.item_revisions = {}
         self.translated_hashes = {}
+        self.current_presentation_id = None
+        self._translation_screen_pres_id = None
+        self._translation_screen_idx = None
         logger.info(f"Recreated Yjs document for {self.doc_id}")
 
     def _maybe_roll_doc_date(self) -> None:
@@ -423,18 +434,23 @@ class ProclaimYjsService:
             return None
 
     async def _translate_item(
-        self, slides: list, item_title: Optional[str] = None, item_id: Optional[str] = None
+        self,
+        slides: list,
+        item_title: Optional[str] = None,
+        item_id: Optional[str] = None,
+        existing_translation: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Ask the server to translate an item's slides into all target languages.
 
         Returns the ``{language: [{text, status, provenance}, ...]}`` map, or None on
-        failure (translation is best-effort; a failure must not drop the session). Any
-        reference text for a better first draft is supplied by an operator on the review
-        screen, not by this service. ``item_title`` is forwarded as a lookup cue: for a
-        Bible reading the title is the citation (e.g. "Psalm 23") and is usually absent
-        from the slide text, so it's the model's only hint to fetch the passage.
-        ``item_id`` keys the agent conversation server-side so the review screen can pull
-        it up by item.
+        failure (translation is best-effort; a failure must not drop the session).
+        ``item_title`` is forwarded as a lookup cue: for a Bible reading the title is the
+        citation (e.g. "Psalm 23") and is usually absent from the slide text, so it's the
+        model's only hint to fetch the passage. ``item_id`` keys the agent conversation
+        server-side so the review screen can pull it up by item. ``existing_translation`` is
+        any translation already present in Proclaim's translation screen — passed as
+        grounding the model can keep where good and correct where not (it may itself be
+        machine-generated).
         """
         if not slides or not SLIDE_TRANSLATION_LANGUAGES:
             return None
@@ -443,6 +459,8 @@ class ProclaimYjsService:
             body["itemTitle"] = item_title
         if item_id:
             body["itemId"] = item_id
+        if existing_translation:
+            body["existingTranslation"] = existing_translation
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -480,6 +498,31 @@ class ProclaimYjsService:
                         'status': entry.get('status', 'auto'),
                         'provenance': entry.get('provenance', 'llm'),
                     }
+
+    def _existing_translation_for(self, item_id: str) -> Optional[str]:
+        """Proclaim's own translation-screen text for an item, joined, or None.
+
+        The translation-screen index is a presentation-level property, so we compute it once
+        per presentation and cache it. Best-effort: any DB/parse problem yields None (the
+        item is just translated without this grounding).
+        """
+        presentation_id = self.current_presentation_id
+        if not presentation_id:
+            return None
+        try:
+            if self._translation_screen_pres_id != presentation_id:
+                presentation = self.db.get_presentation(presentation_id)
+                content = presentation.get('content') if presentation else None
+                self._translation_screen_idx = (
+                    get_translation_screen_idx(content) if content else None
+                )
+                self._translation_screen_pres_id = presentation_id
+            if self._translation_screen_idx is None:
+                return None
+            return existing_translation_text(self.db, item_id, self._translation_screen_idx)
+        except Exception as e:
+            logger.debug(f"No existing translation for {item_id}: {e}")
+            return None
 
     def _item_has_missing_translation(self, item: ServiceItemWithSlides) -> bool:
         """True if any non-empty slide lacks a translation in any target language.
@@ -529,7 +572,8 @@ class ProclaimYjsService:
                 self.translated_hashes[item_id] = current_hash
                 continue
 
-            translations = await self._translate_item(item.slides, item.title, item_id)
+            existing = self._existing_translation_for(item_id)
+            translations = await self._translate_item(item.slides, item.title, item_id, existing)
             # Mark attempted even on failure so we don't hammer the same content; a real
             # content change produces a new hash and another attempt.
             self.translated_hashes[item_id] = current_hash
@@ -630,6 +674,10 @@ class ProclaimYjsService:
                 continue
 
             off_air_since = None
+
+            # Remember the current presentation so the translation worker can locate the
+            # right translation screen for existing-translation grounding.
+            self.current_presentation_id = status.get('presentationId') or self.current_presentation_id
 
             # Refresh the full service order periodically, or immediately when the
             # active item isn't in our cache yet (e.g. right after connecting).

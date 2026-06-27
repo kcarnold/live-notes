@@ -339,7 +339,7 @@ async def test_translate_pending_items_translates_misses_active_first(fast_timin
 
     translated = []
 
-    async def fake_translate(slides, title=None, item_id=None):
+    async def fake_translate(slides, title=None, item_id=None, existing_translation=None):
         translated.append(item_id)
         return {
             lang: [{'text': f'{lang}:{slides[0]}', 'status': 'auto', 'provenance': 'llm'}]
@@ -396,6 +396,50 @@ async def test_translate_pending_items_attempts_each_content_once(fast_timing):
     service.items_by_id['i1'] = ServiceItemWithSlides('i1', 'X', ['Hello there'], 'Content')
     assert await service._translate_pending_items() is True
     assert service._translate_item.await_count == 2
+
+
+def test_existing_translation_screen_idx_cached_per_presentation():
+    """The translation-screen index is computed once per presentation, reused per item."""
+    service = make_service()
+    service.current_presentation_id = 'pres-1'
+    service.db.get_presentation = mock.MagicMock(return_value={'content': {'VirtualScreens': '[]'}})
+
+    with mock.patch.object(ps, 'get_translation_screen_idx', return_value=2) as gti, \
+         mock.patch.object(ps, 'existing_translation_text', side_effect=lambda db, item, idx: f'{item}:{idx}'):
+        assert service._existing_translation_for('i1') == 'i1:2'
+        assert service._existing_translation_for('i2') == 'i2:2'
+
+    # Screen index (and the DB read for it) computed once for the presentation.
+    assert gti.call_count == 1
+    assert service.db.get_presentation.call_count == 1
+
+
+async def test_existing_translation_passed_to_translate(fast_timing):
+    """The worker forwards Proclaim's existing translation as grounding to the server."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    service.items_by_id = {'i1': ServiceItemWithSlides('i1', 'Song', ['Hello'], 'Content')}
+    service.service_order_map['order'] = ['i1']
+    service.current_presentation_id = 'pres-1'
+    service.db.get_presentation = mock.MagicMock(return_value={'content': {'VirtualScreens': '[]'}})
+
+    captured = {}
+
+    async def fake_translate(slides, title=None, item_id=None, existing_translation=None):
+        captured['existing'] = existing_translation
+        return {
+            lang: [{'text': 'x', 'status': 'auto', 'provenance': 'llm'}]
+            for lang in ps.SLIDE_TRANSLATION_LANGUAGES
+        }
+
+    service._translate_item = fake_translate
+
+    with mock.patch.object(ps, 'get_translation_screen_idx', return_value=1), \
+         mock.patch.object(ps, 'existing_translation_text', return_value='Bonjou'):
+        await service._translate_pending_items()
+
+    assert captured['existing'] == 'Bonjou'
 
 
 def test_recreate_doc_resets_state():

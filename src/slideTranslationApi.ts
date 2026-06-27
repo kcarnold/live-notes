@@ -132,7 +132,6 @@ export async function upsertLibraryEntry(input: {
 export async function translateItem(
   slides: string[],
   languages: string[],
-  reference?: string,
   itemTitle?: string,
   itemId?: string,
 ): Promise<TranslateItemResult> {
@@ -140,7 +139,7 @@ export async function translateItem(
     translations: Record<string, PerSlideTranslation[]>;
     bibleLookups?: BibleToolCall[];
     conversationId: string;
-  }>('/api/translateItem', { slides, languages, reference, itemTitle, itemId });
+  }>('/api/translateItem', { slides, languages, itemTitle, itemId });
   return {
     translations: data.translations,
     bibleLookups: data.bibleLookups ?? [],

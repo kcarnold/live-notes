@@ -11,7 +11,7 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
-import { translateBlock, draftItemTranslations, runSlideTranslationAgent, GeminiProvider } from './nlp.ts';
+import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
 import { BIBLE_TRANSLATIONS, type BibleToolCall } from './bible.ts';
 import { SlideLibrary } from './slideLibrary.ts';
@@ -51,6 +51,15 @@ const geminiProvider = new GeminiProvider({
 // the right languages, so capability matters more than the latency/cost of the hot
 // incremental notes path (which stays on defaultModel). Override via GEMINI_STRONG_MODEL.
 const STRONG_MODEL = process.env.GEMINI_STRONG_MODEL || 'gemini-3.5-flash';
+
+// General context injected into every slide-translation prompt: the setting and the intent
+// of the translations. Steers register and reminds the model these are for understanding,
+// not singing or literal liturgical reading. Override with SLIDE_TRANSLATION_CONTEXT.
+const SLIDE_TRANSLATION_CONTEXT = process.env.SLIDE_TRANSLATION_CONTEXT ||
+  'These slides are shown at a Presbyterian Church in America (PCA) worship service. The ' +
+  'translations are provided alongside the service so non-English speakers can follow along — ' +
+  'they are for understanding and reference, not for congregational singing or as an official ' +
+  'literal/liturgical rendering. Aim for clear, natural, reverent wording in each target language.';
 
 const ySweetConnectionString = getEnvOrCrash("YSWEET_CONNECTION_STRING");
 console.log('Y-Sweet Connection String:', ySweetConnectionString);
@@ -296,6 +305,9 @@ app.post('/api/translateItem', async (req, res) => {
   const slides = (req.body?.slides as string[]) ?? [];
   const requestedLanguages = (req.body?.languages as string[]) ?? [];
   const reference = (req.body?.reference as string | undefined)?.trim();
+  // An existing translation from the presentation software (possibly machine-generated) —
+  // grounding the model can keep where good and correct where not.
+  const existingTranslation = (req.body?.existingTranslation as string | undefined)?.trim();
   // Item title (e.g. a Bible citation like "Psalm 23") — a lookup cue the slide text lacks.
   const itemTitle = (req.body?.itemTitle as string | undefined)?.trim();
   // Conversation key: the Proclaim itemId when this came from a service item (so the review
@@ -319,6 +331,8 @@ app.post('/api/translateItem', async (req, res) => {
         sourceSlides,
         targets,
         referenceText: reference || undefined,
+        existingTranslation: existingTranslation || undefined,
+        generalContext: SLIDE_TRANSLATION_CONTEXT,
         itemTitle: itemTitle || undefined,
         model: STRONG_MODEL,
         onToolCall: (call) => {
@@ -341,16 +355,30 @@ app.post('/api/translateItem', async (req, res) => {
   });
 
   // Persist the conversation so the review screen can show the agent's reasoning/tool calls
-  // and post follow-ups. Stored even when no model call was needed (all slides reviewed) so
-  // a GET by this key still returns the item context.
+  // and post follow-ups. When no model call was needed (every slide already cached/reviewed),
+  // seed a context-only conversation — slides + current translations + general context — so a
+  // later follow-up resumes with real context instead of replying blind, without spending a
+  // model call now.
   const conversationId = conversationKey(itemId, slides);
+  const seededMessages: Content[] = conversationMessages.length > 0
+    ? conversationMessages
+    : [{
+        role: 'user',
+        parts: [{
+          text: buildSeedConversationPrompt({
+            slides,
+            translations,
+            generalContext: SLIDE_TRANSLATION_CONTEXT,
+          }),
+        }],
+      }];
   slideConversations.upsert({
     itemId: conversationId,
     itemTitle: itemTitle || '',
     slides,
     slidesHash: slidesHash(slides),
     languages: requestedLanguages,
-    messages: conversationMessages,
+    messages: seededMessages,
     status: 'idle',
   });
 

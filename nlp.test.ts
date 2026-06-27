@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { draftItemTranslations, GeminiProvider } from './nlp.ts';
+import { draftItemTranslations, buildSeedConversationPrompt, GeminiProvider } from './nlp.ts';
 
 /**
  * A provider whose model calls `set_translations` with the given args, then ends its turn.
@@ -109,6 +109,24 @@ describe('draftItemTranslations', () => {
     expect(call.contents[0].parts[0].text).not.toContain('reference_material');
   });
 
+  it('includes the general context and a cautious existing-translation section', async () => {
+    const { provider, generateContent } = fakeSilentProvider();
+
+    await draftItemTranslations(provider, {
+      sourceSlides: ['Hello'],
+      targets: [{ language: 'French', isTranslationNeeded: [true], context: '' }],
+      generalContext: 'PCA church; translations are for understanding, not singing.',
+      existingTranslation: 'Bonjour (peut-être généré par machine)',
+    });
+
+    const prompt = generateContent.mock.calls[0][0].contents[0].parts[0].text as string;
+    expect(prompt).toContain('PCA church');
+    expect(prompt).toContain('existing_translation');
+    expect(prompt).toContain('Bonjour (peut-être généré par machine)');
+    // Framed cautiously, distinct from the trusted reference paste.
+    expect(prompt).toContain('may itself be machine-generated');
+  });
+
   it('ignores out-of-range segmentIds and tolerates a minimal response', async () => {
     const { provider } = fakeAgentProvider({
       languages: [
@@ -154,5 +172,21 @@ describe('draftItemTranslations', () => {
     expect(captured?.map((c) => c.role)).toEqual(['user', 'model', 'user', 'model']);
     expect(captured?.[1].parts?.[0].functionCall?.name).toBe('set_translations');
     expect(captured?.[2].parts?.[0].functionResponse?.name).toBe('set_translations');
+  });
+});
+
+describe('buildSeedConversationPrompt', () => {
+  it('carries slides, current translations, and context for a no-agent follow-up', () => {
+    const prompt = buildSeedConversationPrompt({
+      slides: ['Hello', 'World'],
+      translations: { French: [{ text: 'Bonjour' }, { text: 'Monde' }] },
+      generalContext: 'PCA church setting.',
+    });
+
+    expect(prompt).toContain('PCA church setting.');
+    expect(prompt).toContain('Hello');
+    expect(prompt).toContain('Bonjour');
+    // Tells the resumed agent how to apply revisions.
+    expect(prompt).toContain('set_translations');
   });
 });

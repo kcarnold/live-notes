@@ -350,10 +350,19 @@ const buildSlideTranslationPrompt = (params: {
     sourceSlides: string[];
     targets: DraftItemTarget[];
     referenceText?: string;
+    existingTranslation?: string;
+    generalContext?: string;
     itemTitle?: string;
     bibleLanguages: string[];
 }): string => {
-    const { sourceSlides, targets, referenceText, itemTitle, bibleLanguages } = params;
+    const { sourceSlides, targets, referenceText, existingTranslation, generalContext, itemTitle, bibleLanguages } = params;
+
+    const contextSection = generalContext
+        ? `
+Context for these translations:
+${generalContext}
+`
+        : '';
 
     const sourceDocument = JSON.stringify(
         sourceSlides.map((text, index) => ({ segmentId: index, text: text.trim() }))
@@ -378,6 +387,19 @@ language, prefer and adapt its wording for the matching slides; otherwise ignore
 <reference_material>
 ${referenceText}
 </reference_material>
+`
+        : '';
+
+    const existingTranslationSection = existingTranslation
+        ? `
+An existing translation for these slides is shown below (pulled from the presentation
+software). It may itself be machine-generated and imperfect: keep its wording where it is
+accurate and natural, but correct it where it is wrong, awkward, or mistranslated — do not
+treat it as authoritative. It may be segmented differently from the source slides.
+
+<existing_translation>
+${existingTranslation}
+</existing_translation>
 `
         : '';
 
@@ -412,7 +434,7 @@ keep quiet when there is nothing useful to say.
 
     return `
 You are translating presentation slides into several languages at once.
-${itemTitleSection}
+${contextSection}${itemTitleSection}
 The source slides are a JSON array of segments:
 <source_slides>
 ${sourceDocument}
@@ -425,7 +447,47 @@ not something to translate.
 <targets>
 ${targetsDocument}
 </targets>
-${referenceSection}${bibleSection}${toolInstruction}`;
+${referenceSection}${existingTranslationSection}${bibleSection}${toolInstruction}`;
+};
+
+/**
+ * Build the seed prompt stored for an item when every slide was already cached (so no agent
+ * ran). It carries the general context, the slides, and the current per-language
+ * translations so a later follow-up resumes with real context instead of replying blind —
+ * without spending a model call up front.
+ */
+export const buildSeedConversationPrompt = (params: {
+    slides: string[];
+    translations: Record<string, { text: string }[]>;
+    generalContext?: string;
+}): string => {
+    const { slides, translations, generalContext } = params;
+    const contextSection = generalContext ? `\nContext for these translations:\n${generalContext}\n` : '';
+    const slidesDocument = JSON.stringify(
+        slides.map((text, index) => ({ segmentId: index, text: text.trim() }))
+    );
+    const current = JSON.stringify(
+        Object.entries(translations).map(([language, perSlide]) => ({
+            language,
+            segments: perSlide.map((entry, index) => ({ segmentId: index, translation: entry?.text ?? '' })),
+        }))
+    );
+    return `
+You are reviewing presentation slide translations into several languages.
+${contextSection}
+The source slides are a JSON array of segments:
+<source_slides>
+${slidesDocument}
+</source_slides>
+
+These slides are already translated as follows:
+<current_translations>
+${current}
+</current_translations>
+
+Await the reviewer's feedback. When asked to change something, call the set_translations
+tool with the revised segments (one entry per affected language, segmentIds matching the
+source slides). Only speak up when there is something useful to say.`;
 };
 
 /**
@@ -446,6 +508,13 @@ export const draftItemTranslations = async (
         sourceSlides: string[];
         targets: DraftItemTarget[];
         referenceText?: string;
+        /**
+         * An existing translation pulled from the presentation software. Possibly itself
+         * machine-generated, so framed cautiously — kept where good, corrected where not.
+         */
+        existingTranslation?: string;
+        /** General context describing the setting and intent of the translations. */
+        generalContext?: string;
         model?: string;
         /**
          * The presentation item's title. For Bible readings this is the citation itself
@@ -459,7 +528,7 @@ export const draftItemTranslations = async (
         onConversation?: (messages: Content[]) => void;
     },
 ): Promise<Record<string, TranslationBlockResult[]>> => {
-    const { sourceSlides, targets, referenceText, onToolCall, onConversation } = params;
+    const { sourceSlides, targets, referenceText, existingTranslation, generalContext, onToolCall, onConversation } = params;
     const itemTitle = params.itemTitle?.trim();
     const model = params.model ?? provider.defaultModel;
     // Languages we can actually fetch canonical Scripture for.
@@ -471,6 +540,8 @@ export const draftItemTranslations = async (
         sourceSlides,
         targets,
         referenceText,
+        existingTranslation,
+        generalContext,
         itemTitle,
         bibleLanguages,
     });
