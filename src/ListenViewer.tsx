@@ -5,9 +5,9 @@
 // to this pane and never disturbs the outline / slide views.
 //
 // The transcript is read from the shared Yjs doc (`liveTranscript-{code}`), which
-// the server-side translator bridge writes. That gives late joiners the full
-// history and keeps the text visually stable; only the in-progress (interim) line
-// arrives ephemerally over the LiveKit data channel.
+// the server-side translator bridge writes (one delta at a time, as a continuous
+// stream). That gives late joiners the full history and is the single source of
+// truth — there is no separate ephemeral interim line.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LiveKitRoom,
@@ -16,7 +16,7 @@ import {
   useRemoteParticipants,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
-import { Track, RoomEvent } from "livekit-client";
+import { Track } from "livekit-client";
 import { LANGUAGE_BCP47, useStrings } from "./useLocale";
 import { useAsPlainText } from "./yjsUtils";
 import { LISTEN_ORIGINAL_CODE, DEFAULT_LISTEN_CODE } from "./listenLanguages";
@@ -41,12 +41,6 @@ interface TokenResp {
   token?: string;
   serverUrl?: string;
   error?: string;
-}
-interface TranscriptionMsg {
-  type?: string;
-  language?: string;
-  text?: string;
-  interim?: boolean;
 }
 
 // One finalized transcript paragraph. Mounting fresh (only appended segments do)
@@ -78,7 +72,6 @@ function ListenInner({
   const room = useRoomContext();
   const remoteParticipants = useRemoteParticipants();
   const [finalized] = useAsPlainText(`liveTranscript-${langCode}`);
-  const [interim, setInterim] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
 
@@ -101,31 +94,6 @@ function ListenInner({
       }
     }
   }, [room, translatorIdentity, isOriginal, remoteParticipants]);
-
-  // The in-progress line is ephemeral: replace (don't append) on each message,
-  // and clear when the bridge sends an empty interim at turn completion.
-  useEffect(() => {
-    if (!room) return;
-    const handleData = (
-      payload: Uint8Array,
-      _participant: unknown,
-      _kind: unknown,
-      topic: string | undefined
-    ) => {
-      if (topic !== "transcription") return;
-      try {
-        const data = JSON.parse(new TextDecoder().decode(payload)) as TranscriptionMsg;
-        if (data.type !== "transcription" || data.language !== langCode) return;
-        setInterim(data.text ?? "");
-      } catch {
-        // ignore non-transcription payloads
-      }
-    };
-    room.on(RoomEvent.DataReceived, handleData);
-    return () => {
-      room.off(RoomEvent.DataReceived, handleData);
-    };
-  }, [room, langCode]);
 
   const segments = useMemo(
     () => finalized.split("\n\n").map((t) => t.trim()).filter(Boolean),
@@ -167,7 +135,7 @@ function ListenInner({
     };
   }, [docId, releaseTarget]);
 
-  const hasContent = segments.length > 0 || interim;
+  const hasContent = segments.length > 0;
 
   return (
     <>
@@ -196,9 +164,6 @@ function ListenInner({
                 isNew={i >= baselineCount}
               />
             ))}
-            {interim && (
-              <p className="my-2 italic text-gray-400 dark:text-gray-500">{interim}</p>
-            )}
           </div>
         ) : (
           <span className="italic text-gray-400">{s.waitingForSpeech}</span>
