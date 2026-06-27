@@ -62,6 +62,7 @@ def fast_timing(monkeypatch):
     monkeypatch.setattr(ps, "OFF_AIR_DISCONNECT_AFTER", 0.005)
     monkeypatch.setattr(ps, "RECONNECT_BACKOFF_INITIAL", 0.001)
     monkeypatch.setattr(ps, "RECONNECT_BACKOFF_MAX", 0.002)
+    monkeypatch.setattr(ps, "TRANSLATION_SCAN_INTERVAL", 0.001)
     # Ping every poll so the health-check path is exercised within the test window.
     monkeypatch.setattr(ps, "WS_PING_INTERVAL", 0.0)
 
@@ -311,28 +312,89 @@ def test_store_translations_never_clobbers_reviewed_entries():
     assert service.slide_translations_map[world_key]['text'] == 'Monde (nouveau)'
 
 
-async def test_translate_active_item_translates_once_per_revision(fast_timing):
-    """The active item is translated only when its revision changes."""
+def test_translation_scan_order_rotates_active_first():
+    """The scan visits the active item first, then upcoming, then past."""
+    service = make_service()
+    service.service_order_map['order'] = ['i1', 'i2', 'i3', 'i4']
+
+    service.status_map['itemId'] = 'i3'
+    assert service._translation_scan_order() == ['i3', 'i4', 'i1', 'i2']
+
+    # An active id not in the order (or none) => order as-is.
+    service.status_map['itemId'] = 'unknown'
+    assert service._translation_scan_order() == ['i1', 'i2', 'i3', 'i4']
+
+
+async def test_translate_pending_items_translates_misses_active_first(fast_timing):
+    """Pending items are translated, active item first; content-addressed keys are filled."""
     from proclaim_lib import ServiceItemWithSlides, slide_translation_key
 
     service = make_service()
-    service.items_by_id['i1'] = ServiceItemWithSlides('i1', 'Song', ['Hello'], 'Content')
-    service.item_revisions['i1'] = 'r1'
-    service._translate_item = mock.AsyncMock(
-        return_value={'French': [{'text': 'Bonjour', 'status': 'auto', 'provenance': 'llm'}]}
-    )
+    service.items_by_id = {
+        'i1': ServiceItemWithSlides('i1', 'Past', ['Past slide'], 'Content'),
+        'i2': ServiceItemWithSlides('i2', 'Active', ['Active slide'], 'Content'),
+    }
+    service.service_order_map['order'] = ['i1', 'i2']
+    service.status_map['itemId'] = 'i2'  # active is i2, so it should go first
 
-    await service._translate_active_item('i1')
+    translated = []
+
+    async def fake_translate(slides, title=None, item_id=None):
+        translated.append(item_id)
+        return {
+            lang: [{'text': f'{lang}:{slides[0]}', 'status': 'auto', 'provenance': 'llm'}]
+            for lang in ps.SLIDE_TRANSLATION_LANGUAGES
+        }
+
+    service._translate_item = fake_translate
+
+    assert await service._translate_pending_items() is True
+    assert translated == ['i2']  # active first, even though it's later in the order
+    for lang in ps.SLIDE_TRANSLATION_LANGUAGES:
+        assert slide_translation_key(lang, 'Active slide') in service.slide_translations_map
+
+    # The remaining (past) item is picked up next.
+    assert await service._translate_pending_items() is True
+    assert translated == ['i2', 'i1']
+
+    # Everything covered now => no work.
+    assert await service._translate_pending_items() is False
+
+
+async def test_translate_pending_items_skips_fully_covered(fast_timing):
+    """An item already translated in every language isn't sent to the server."""
+    from proclaim_lib import ServiceItemWithSlides, slide_translation_key, slides_hash
+
+    service = make_service()
+    service.items_by_id = {'i1': ServiceItemWithSlides('i1', 'X', ['Hello'], 'Content')}
+    service.service_order_map['order'] = ['i1']
+    for lang in ps.SLIDE_TRANSLATION_LANGUAGES:
+        service.slide_translations_map[slide_translation_key(lang, 'Hello')] = {
+            'text': 'x', 'status': 'auto', 'provenance': 'llm'
+        }
+    service._translate_item = mock.AsyncMock(return_value=None)
+
+    assert await service._translate_pending_items() is False
+    service._translate_item.assert_not_awaited()
+    assert service.translated_hashes['i1'] == slides_hash(['Hello'])
+
+
+async def test_translate_pending_items_attempts_each_content_once(fast_timing):
+    """A failed/partial translation isn't retried until the slide content changes."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    service.items_by_id = {'i1': ServiceItemWithSlides('i1', 'X', ['Hello'], 'Content')}
+    service.service_order_map['order'] = ['i1']
+    service._translate_item = mock.AsyncMock(return_value=None)  # translation fails
+
+    assert await service._translate_pending_items() is True
+    assert await service._translate_pending_items() is False  # same content => no retry
     assert service._translate_item.await_count == 1
-    assert service.slide_translations_map[slide_translation_key('French', 'Hello')]['text'] == 'Bonjour'
 
-    # Same revision => no re-translation.
-    await service._translate_active_item('i1')
-    assert service._translate_item.await_count == 1
-
-    # Changed revision => re-translate.
-    service.item_revisions['i1'] = 'r2'
-    await service._translate_active_item('i1')
+    # Slide content changes underneath us => a fresh attempt.
+    service.items_by_id['i1'] = ServiceItemWithSlides('i1', 'X', ['Hello there'], 'Content')
+    assert await service._translate_pending_items() is True
     assert service._translate_item.await_count == 2
 
 

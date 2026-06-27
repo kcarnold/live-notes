@@ -9,12 +9,43 @@ import type {
 } from './slideTranslation.ts';
 import type { PerSlideTranslation } from './slideItemTranslation.ts';
 import type { BibleToolCall } from '../bible.ts';
+import type { Content } from '@google/genai';
 
 export type { BibleToolCall };
+export type { Content };
 
 export interface TranslateItemResult {
   translations: Record<string, PerSlideTranslation[]>;
   /** Bible passages the model looked up while drafting (for review-screen observability). */
+  bibleLookups: BibleToolCall[];
+  /** Key under which the agent conversation was stored (itemId, or a content hash). */
+  conversationId: string;
+}
+
+export type SlideConversationStatus = 'running' | 'idle' | 'error';
+
+/** The server-side agent conversation for one item (raw Gemini history + snapshot). */
+export interface SlideConversation {
+  itemId: string;
+  itemTitle: string;
+  slides: string[];
+  slidesHash: string;
+  languages: string[];
+  messages: Content[];
+  status: SlideConversationStatus;
+  updatedAt: number;
+}
+
+/** A translation the agent revised during a follow-up, for the browser to write to Yjs. */
+export interface ConversationTranslationUpdate {
+  language: string;
+  sourceText: string;
+  text: string;
+}
+
+export interface ConversationMessageResult {
+  conversation: SlideConversation;
+  updatedTranslations: ConversationTranslationUpdate[];
   bibleLookups: BibleToolCall[];
 }
 
@@ -103,10 +134,47 @@ export async function translateItem(
   languages: string[],
   reference?: string,
   itemTitle?: string,
+  itemId?: string,
 ): Promise<TranslateItemResult> {
   const data = await postJson<{
     translations: Record<string, PerSlideTranslation[]>;
     bibleLookups?: BibleToolCall[];
-  }>('/api/translateItem', { slides, languages, reference, itemTitle });
-  return { translations: data.translations, bibleLookups: data.bibleLookups ?? [] };
+    conversationId: string;
+  }>('/api/translateItem', { slides, languages, reference, itemTitle, itemId });
+  return {
+    translations: data.translations,
+    bibleLookups: data.bibleLookups ?? [],
+    conversationId: data.conversationId,
+  };
+}
+
+/** Fetch the stored agent conversation for an item, or null if there isn't one. */
+export async function fetchConversation(itemId: string): Promise<SlideConversation | null> {
+  const response = await fetch(`/api/slideConversation?itemId=${encodeURIComponent(itemId)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`/api/slideConversation failed: ${response.status}`);
+  const data = (await response.json()) as { conversation: SlideConversation };
+  return data.conversation;
+}
+
+/** Send a follow-up message; resumes the agent and returns any revised translations. */
+export async function sendConversationMessage(
+  itemId: string,
+  text: string,
+): Promise<ConversationMessageResult> {
+  const data = await postJson<{
+    conversation: SlideConversation;
+    updatedTranslations?: ConversationTranslationUpdate[];
+    bibleLookups?: BibleToolCall[];
+  }>('/api/slideConversation/message', { itemId, text });
+  return {
+    conversation: data.conversation,
+    updatedTranslations: data.updatedTranslations ?? [],
+    bibleLookups: data.bibleLookups ?? [],
+  };
+}
+
+/** Append a reviewer note (e.g. a manual edit) to the conversation; no agent run. */
+export async function postConversationNote(itemId: string, text: string): Promise<void> {
+  await postJson('/api/slideConversation/note', { itemId, text });
 }

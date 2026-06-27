@@ -11,11 +11,13 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
-import { translateBlock, draftItemTranslations, GeminiProvider } from './nlp.ts';
+import { translateBlock, draftItemTranslations, runSlideTranslationAgent, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
-import type { BibleToolCall } from './bible.ts';
+import { BIBLE_TRANSLATIONS, type BibleToolCall } from './bible.ts';
 import { SlideLibrary } from './slideLibrary.ts';
 import { translateItem } from './src/slideItemTranslation.ts';
+import { SlideConversationStore, slidesHash } from './slideConversationStore.ts';
+import type { Content } from '@google/genai';
 
 import { AccessToken } from 'livekit-server-sdk';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
@@ -77,6 +79,15 @@ const SLIDE_LIBRARY_PATH =
 const slideLibrary = new SlideLibrary(SLIDE_LIBRARY_PATH);
 await slideLibrary.load();
 console.log(`Slide translation library: ${SLIDE_LIBRARY_PATH} (${slideLibrary.list().length} entries)`);
+
+// Per-item agent conversations (in-memory, ephemeral). The agent runs here, so the
+// conversation lives here; the review screen pulls it down and posts follow-ups.
+const slideConversations = new SlideConversationStore();
+
+/** Stable conversation key: the Proclaim itemId when present, else a content hash. */
+function conversationKey(itemId: string | undefined, slides: string[]): string {
+  return itemId && itemId.trim() ? itemId.trim() : `hash:${slidesHash(slides)}`;
+}
 
 const app = express();
 app.use(express.static("dist"));
@@ -287,6 +298,9 @@ app.post('/api/translateItem', async (req, res) => {
   const reference = (req.body?.reference as string | undefined)?.trim();
   // Item title (e.g. a Bible citation like "Psalm 23") — a lookup cue the slide text lacks.
   const itemTitle = (req.body?.itemTitle as string | undefined)?.trim();
+  // Conversation key: the Proclaim itemId when this came from a service item (so the review
+  // screen can find it by itemId), else a content hash for ad-hoc pastes.
+  const itemId = (req.body?.itemId as string | undefined)?.trim();
   if (!Array.isArray(slides) || requestedLanguages.length === 0) {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
   }
@@ -294,6 +308,8 @@ app.post('/api/translateItem', async (req, res) => {
   const lookup = slideLibrary.toLookup();
   // Bible lookups the model made while drafting — reported to PostHog and the review UI.
   const bibleLookups: BibleToolCall[] = [];
+  // The raw agent history, captured so we can persist it for review + follow-ups.
+  let conversationMessages: Content[] = [];
   const translations = await translateItem({
     slides,
     languages: requestedLanguages,
@@ -318,10 +334,94 @@ app.post('/api/translateItem', async (req, res) => {
             },
           });
         },
+        onConversation: (messages) => {
+          conversationMessages = messages;
+        },
       }),
   });
 
-  return res.json({ ok: true, translations, bibleLookups });
+  // Persist the conversation so the review screen can show the agent's reasoning/tool calls
+  // and post follow-ups. Stored even when no model call was needed (all slides reviewed) so
+  // a GET by this key still returns the item context.
+  const conversationId = conversationKey(itemId, slides);
+  slideConversations.upsert({
+    itemId: conversationId,
+    itemTitle: itemTitle || '',
+    slides,
+    slidesHash: slidesHash(slides),
+    languages: requestedLanguages,
+    messages: conversationMessages,
+    status: 'idle',
+  });
+
+  return res.json({ ok: true, translations, bibleLookups, conversationId });
+});
+
+// Fetch the stored agent conversation for an item (review screen). 404 when unknown.
+app.get('/api/slideConversation', (req, res) => {
+  const itemId = (req.query?.itemId as string | undefined)?.trim();
+  if (!itemId) return res.status(400).json({ ok: false, error: 'Missing itemId' });
+  const conversation = slideConversations.get(itemId);
+  if (!conversation) return res.status(404).json({ ok: false, error: 'No conversation' });
+  return res.json({ ok: true, conversation });
+});
+
+// Send a follow-up message to an item's agent and resume the loop. The model may answer in
+// text and/or revise translations via set_translations; revised entries are returned for the
+// browser to write into the slideTranslations Y.Map (the server stays a non-Yjs-writer).
+app.post('/api/slideConversation/message', async (req, res) => {
+  const itemId = (req.body?.itemId as string | undefined)?.trim();
+  const text = (req.body?.text as string | undefined)?.trim();
+  if (!itemId || !text) {
+    return res.status(400).json({ ok: false, error: 'Missing itemId or text' });
+  }
+  const conversation = slideConversations.get(itemId);
+  if (!conversation) return res.status(404).json({ ok: false, error: 'No conversation' });
+
+  conversation.messages.push({ role: 'user', parts: [{ text }] });
+  slideConversations.setStatus(itemId, 'running');
+  const bibleLanguages = conversation.languages.filter((language) => BIBLE_TRANSLATIONS[language]);
+  const bibleLookups: BibleToolCall[] = [];
+  try {
+    const result = await runSlideTranslationAgent(geminiProvider, {
+      sourceSlides: conversation.slides,
+      messages: conversation.messages, // mutated in place
+      model: STRONG_MODEL,
+      bibleLanguages,
+      onToolCall: (call) => bibleLookups.push(call),
+    });
+    slideConversations.setStatus(itemId, 'idle');
+
+    // Flatten revised translations for the browser to apply (auto / llm-agent provenance).
+    const updatedTranslations: Array<{ language: string; sourceText: string; text: string }> = [];
+    for (const [language, blocks] of Object.entries(result.translations)) {
+      for (const block of blocks) {
+        updatedTranslations.push({ language, sourceText: block.sourceText, text: block.translatedText });
+      }
+    }
+    return res.json({ ok: true, conversation, updatedTranslations, bibleLookups });
+  } catch (err) {
+    slideConversations.setStatus(itemId, 'error');
+    console.error('slideConversation/message failed:', err);
+    if (err instanceof Error) phClient.captureException(err);
+    return res.status(500).json({ ok: false, error: 'Agent run failed' });
+  }
+});
+
+// Record a reviewer's manual edit as a note in the conversation, so the next follow-up has
+// that context. No agent run — the edit itself is written to Yjs/library by the browser.
+app.post('/api/slideConversation/note', (req, res) => {
+  const itemId = (req.body?.itemId as string | undefined)?.trim();
+  const text = (req.body?.text as string | undefined)?.trim();
+  if (!itemId || !text) {
+    return res.status(400).json({ ok: false, error: 'Missing itemId or text' });
+  }
+  const updated = slideConversations.appendMessage(itemId, {
+    role: 'user',
+    parts: [{ text }],
+  });
+  if (!updated) return res.status(404).json({ ok: false, error: 'No conversation' });
+  return res.json({ ok: true, conversation: updated });
 });
 
 // TTS request deduplication: Map of cache key -> Promise

@@ -98,6 +98,13 @@ export interface AppStrings {
   editorOnlyReview: string;
   reviewSlidesLink: string;
   unreviewedBadge: string;
+  conversationHeader: string;
+  noConversation: string;
+  followUpPlaceholder: string;
+  sendMessage: string;
+  selectItemLabel: string;
+  sourceChangedWarning: string;
+  agentThinking: string;
 }
 
 export const strings: Record<SupportedLocale, AppStrings> = {
@@ -168,6 +175,13 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Open this page with #editor to edit and save translations.',
     reviewSlidesLink: 'Review Slide Translations',
     unreviewedBadge: 'unreviewed',
+    conversationHeader: 'Agent conversation',
+    noConversation: 'No conversation yet — Suggest to start one.',
+    followUpPlaceholder: 'Ask a question or give feedback…',
+    sendMessage: 'Send',
+    selectItemLabel: 'Service item',
+    sourceChangedWarning: 'Source slides changed since this was translated.',
+    agentThinking: 'Agent is working…',
   },
   fr: {
     connecting: 'Connexion\u2026',
@@ -236,6 +250,13 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Ouvrez cette page avec #editor pour modifier et enregistrer les traductions.',
     reviewSlidesLink: 'Réviser les traductions de diapositives',
     unreviewedBadge: 'non révisé',
+    conversationHeader: 'Conversation avec l’agent',
+    noConversation: 'Aucune conversation pour l’instant — cliquez sur Suggérer pour en démarrer une.',
+    followUpPlaceholder: 'Posez une question ou donnez un retour…',
+    sendMessage: 'Envoyer',
+    selectItemLabel: 'Élément du service',
+    sourceChangedWarning: 'Les diapositives source ont changé depuis cette traduction.',
+    agentThinking: 'L’agent travaille…',
   },
   es: {
     connecting: 'Conectando\u2026',
@@ -304,6 +325,13 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Abra esta p\u00e1gina con #editor para editar y guardar traducciones.',
     reviewSlidesLink: 'Revisar traducciones de diapositivas',
     unreviewedBadge: 'sin revisar',
+    conversationHeader: 'Conversación con el agente',
+    noConversation: 'Aún no hay conversación — pulse Sugerir para iniciar una.',
+    followUpPlaceholder: 'Haga una pregunta o dé su opinión…',
+    sendMessage: 'Enviar',
+    selectItemLabel: 'Elemento del servicio',
+    sourceChangedWarning: 'Las diapositivas de origen cambiaron desde esta traducción.',
+    agentThinking: 'El agente está trabajando…',
   },
   ht: {
     connecting: 'Koneksyon\u2026',
@@ -372,5 +400,12 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Ouvri paj sa a ak #editor pou modifye ak anrejistre tradiksyon.',
     reviewSlidesLink: 'Revize Tradiksyon Diapozitiv',
     unreviewedBadge: 'pa revize',
+    conversationHeader: 'Konvèsasyon ak ajan an',
+    noConversation: 'Poko gen konvèsasyon — klike Sijere pou kòmanse youn.',
+    followUpPlaceholder: 'Poze yon kesyon oswa bay yon kòmantè…',
+    sendMessage: 'Voye',
+    selectItemLabel: 'Eleman sèvis la',
+    sourceChangedWarning: 'Diapozitiv sous yo chanje depi tradiksyon sa a.',
+    agentThinking: 'Ajan an ap travay…',
   },
 };

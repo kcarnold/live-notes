@@ -4,14 +4,19 @@ import { useAtomValue } from 'jotai';
 
 import { isEditorAtom, languages } from './configAtoms';
 import { useStrings } from './useLocale';
-import { slideTranslationKey } from './slideTranslation';
+import { normalizeSlideText, slideTranslationKey } from './slideTranslation';
 import { SlideReview } from './SlideReview';
+import { SlideConversationPanel } from './SlideConversationPanel';
 import {
   parseSlidesInput,
   lookupLibrary,
   upsertLibraryEntry,
   translateItem,
+  fetchConversation,
+  sendConversationMessage,
+  postConversationNote,
   type BibleToolCall,
+  type SlideConversation,
 } from './slideTranslationApi';
 
 type StringArrays = Record<string, string[]>;
@@ -43,6 +48,7 @@ export function SlideReviewContainer() {
   const statusMap = useMap('proclaimStatus');
   const presentationsMap = useMap('proclaimPresentations');
   const translationsMap = useMap('slideTranslations');
+  const serviceOrderMap = useMap('proclaimServiceOrder');
 
   const [slidesText, setSlidesText] = useState('');
   // Title of the loaded on-air item (e.g. a Bible citation like "Psalm 23"). Passed to the
@@ -56,6 +62,21 @@ export function SlideReviewContainer() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [bibleLookups, setBibleLookups] = useState<BibleToolCall[]>([]);
+  // The currently selected service item (empty for an ad-hoc paste), the conversation key the
+  // server is using for this item, and the agent conversation we've pulled down.
+  const [selectedItemId, setSelectedItemId] = useState<string>('');
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<SlideConversation | null>(null);
+
+  // The full service order (for the item picker) and a staleness flag for the selected item.
+  const serviceOrder = (serviceOrderMap.get('order') as string[] | undefined) ?? [];
+  const livePresentation = selectedItemId
+    ? (presentationsMap.get(selectedItemId) as { slidesHash?: string } | undefined)
+    : undefined;
+  const sourceChanged = Boolean(
+    conversation && livePresentation?.slidesHash &&
+      conversation.slidesHash !== livePresentation.slidesHash,
+  );
 
   // Look up reviewed library entries for these slides and seed drafts from them.
   const loadSavedFor = useCallback(async (slideList: string[]) => {
@@ -96,20 +117,39 @@ export function SlideReviewContainer() {
     void commitSlides(parseSlidesInput(slidesText));
   }, [commitSlides, slidesText]);
 
+  // Load a service item's slides into the editor and pull down its agent conversation (if the
+  // Proclaim service or a prior Suggest already produced one). Used by both the picker and the
+  // "load on-air" button.
+  const handleSelectItem = useCallback(
+    (itemId: string) => {
+      const presentation = itemId
+        ? (presentationsMap.get(itemId) as { slides?: string[]; title?: string } | undefined)
+        : undefined;
+      const itemSlides = (presentation?.slides ?? []).filter((slide) => slide.trim() !== '');
+      if (itemSlides.length === 0) {
+        setError(s.waitingForProclaim);
+        return;
+      }
+      setSelectedItemId(itemId);
+      setConversationId(itemId);
+      setItemTitle(presentation?.title ?? '');
+      setSlidesText(itemSlides.join(SLIDE_DELIMITER));
+      void commitSlides(itemSlides);
+      void fetchConversation(itemId)
+        .then(setConversation)
+        .catch(() => setConversation(null));
+    },
+    [presentationsMap, commitSlides, s.waitingForProclaim],
+  );
+
   const handleLoadOnAir = useCallback(() => {
     const itemId = statusMap.get('itemId') as string | undefined;
-    const presentation = itemId
-      ? (presentationsMap.get(itemId) as { slides?: string[]; title?: string } | undefined)
-      : undefined;
-    const itemSlides = (presentation?.slides ?? []).filter((slide) => slide.trim() !== '');
-    if (itemSlides.length === 0) {
+    if (!itemId) {
       setError(s.waitingForProclaim);
       return;
     }
-    setItemTitle(presentation?.title ?? '');
-    setSlidesText(itemSlides.join(SLIDE_DELIMITER));
-    void commitSlides(itemSlides);
-  }, [statusMap, presentationsMap, commitSlides, s.waitingForProclaim]);
+    handleSelectItem(itemId);
+  }, [statusMap, handleSelectItem, s.waitingForProclaim]);
 
   const handleSuggest = useCallback(async () => {
     // Parse fresh from the textarea so we never translate a stale slide set.
@@ -121,11 +161,12 @@ export function SlideReviewContainer() {
     setMessage(null);
     setBibleLookups([]);
     try {
-      const { translations, bibleLookups: lookups } = await translateItem(
+      const { translations, bibleLookups: lookups, conversationId: newId } = await translateItem(
         slideList,
         [...languages],
         referenceText.trim() || undefined,
         itemTitle.trim() || undefined,
+        selectedItemId || undefined,
       );
       setBibleLookups(lookups);
       const nextDrafts = emptyArrays(slideList.length);
@@ -140,12 +181,64 @@ export function SlideReviewContainer() {
       }
       setDrafts(nextDrafts);
       setSavedTexts(nextSaved);
+      // Pull down the agent conversation the server just stored under this key.
+      setConversationId(newId);
+      const conv = await fetchConversation(newId);
+      setConversation(conv);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [slidesText, referenceText, itemTitle]);
+  }, [slidesText, referenceText, itemTitle, selectedItemId]);
+
+  // Apply translations the agent revised during a follow-up: write them live to the
+  // slideTranslations map (content-addressed, so they land on the matching slides) and reflect
+  // them in the editable drafts.
+  const applyUpdates = useCallback(
+    (updates: Array<{ language: string; sourceText: string; text: string }>) => {
+      if (updates.length === 0) return;
+      for (const update of updates) {
+        translationsMap.set(slideTranslationKey(update.language, update.sourceText), {
+          text: update.text,
+          status: 'auto',
+          provenance: 'llm-agent',
+        });
+      }
+      setDrafts((prev) => {
+        const next: StringArrays = { ...prev };
+        for (const update of updates) {
+          const idx = slides.findIndex(
+            (slide) => normalizeSlideText(slide) === normalizeSlideText(update.sourceText),
+          );
+          if (idx < 0) continue;
+          next[update.language] = [...(next[update.language] ?? [])];
+          next[update.language][idx] = update.text;
+        }
+        return next;
+      });
+    },
+    [translationsMap, slides],
+  );
+
+  const handleSendFollowup = useCallback(
+    async (text: string) => {
+      if (!conversationId) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await sendConversationMessage(conversationId, text);
+        setConversation(result.conversation);
+        if (result.bibleLookups.length > 0) setBibleLookups(result.bibleLookups);
+        applyUpdates(result.updatedTranslations);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [conversationId, applyUpdates],
+  );
 
   const handleSaveCell = useCallback(
     async (language: string, slideIndex: number) => {
@@ -171,13 +264,21 @@ export function SlideReviewContainer() {
           next[language][slideIndex] = record.text;
           return next;
         });
+        // Surface the manual edit back to the agent as a note, so a later follow-up has the
+        // reviewer's wording in context. Best-effort; never blocks the save.
+        if (conversationId) {
+          void postConversationNote(
+            conversationId,
+            `Manual edit — ${language} slide ${slideIndex + 1}: ${record.text}`,
+          ).catch(() => {});
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [drafts, slides, translationsMap],
+    [drafts, slides, translationsMap, conversationId],
   );
 
   const handleDraftChange = useCallback(
@@ -229,6 +330,25 @@ export function SlideReviewContainer() {
       </label>
 
       <div className="flex items-center gap-2 flex-wrap">
+        {serviceOrder.length > 0 && (
+          <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+            {s.selectItemLabel}
+            <select
+              className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-1 text-sm"
+              value={selectedItemId}
+              onChange={(e) => {
+                if (e.target.value) handleSelectItem(e.target.value);
+              }}
+            >
+              <option value="" />
+              {serviceOrder.map((id) => (
+                <option key={id} value={id}>
+                  {(presentationsMap.get(id) as { title?: string } | undefined)?.title ?? id}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button type="button" className={secondaryButtonClass} onClick={handleLoadOnAir} disabled={busy}>
           {s.loadOnAirItem}
         </button>
@@ -269,6 +389,10 @@ export function SlideReviewContainer() {
         </div>
       )}
 
+      {sourceChanged && (
+        <span className="text-xs text-amber-700 dark:text-amber-400">{s.sourceChangedWarning}</span>
+      )}
+
       <SlideReview
         slides={slides}
         languages={languages}
@@ -278,6 +402,13 @@ export function SlideReviewContainer() {
         busy={busy}
         onDraftChange={handleDraftChange}
         onSaveCell={(language, slideIndex) => void handleSaveCell(language, slideIndex)}
+      />
+
+      <SlideConversationPanel
+        conversation={conversation}
+        busy={busy}
+        editable={isEditor}
+        onSend={(text) => void handleSendFollowup(text)}
       />
     </div>
   );

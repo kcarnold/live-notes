@@ -168,75 +168,35 @@ const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
     },
 };
 
-/**
- * Translate a whole item into several languages in a single model call (plus, when a slide
- * is Scripture, tool-use rounds that fetch the canonical Bible text first).
- *
- * The model receives the numbered source slides, the target languages (each with which
- * slides still need translating and any already-reviewed translations as context), and
- * an optional free-text `referenceText` dump that may hold prior translations in one or
- * more of the target languages (the operator pastes it; it can be multilingual and
- * arbitrarily segmented). For each language the model translates only the needed slides,
- * adapting the reference's wording where it covers that language and ignoring it
- * otherwise. It may also call `lookup_bible_passage` to ground Scripture slides in the
- * published translation; `onToolCall` reports each lookup for observability. Used for slide
- * pre-translation/review, where full-item context and reference reuse matter more than
- * latency — hence one strong-model call for all languages at once.
- *
- * Returns, per language, a `TranslationBlockResult` for each needed slide (others omitted).
- */
-export const draftItemTranslations = async (
-    provider: GeminiProvider,
-    params: {
-        sourceSlides: string[];
-        targets: DraftItemTarget[];
-        referenceText?: string;
-        model?: string;
-        /**
-         * The presentation item's title. For Bible readings this is the citation itself
-         * (e.g. "Psalm 23") and is often NOT repeated in the slide text — so it is the
-         * model's only cue to look the passage up. Surfaced to the model as a hint.
-         */
-        itemTitle?: string;
-        /** Called once per executed Bible lookup, for observability. */
-        onToolCall?: (call: BibleToolCall) => void;
-    },
-): Promise<Record<string, TranslationBlockResult[]>> => {
-    const { sourceSlides, targets, referenceText, onToolCall } = params;
-    const itemTitle = params.itemTitle?.trim();
-    const model = params.model ?? provider.defaultModel;
-    // Languages we can actually fetch canonical Scripture for.
-    const bibleLanguages = targets
-        .map((target) => target.language)
-        .filter((language) => BIBLE_TRANSLATIONS[language]);
-
-    // Structured-output config for the FINAL call only. Gemini rejects responseSchema
-    // combined with function-calling tools, so the tool-use rounds run schema-free and we
-    // ask for the JSON once the model is done gathering Scripture.
-    const finalConfig = {
-        responseMimeType: 'application/json',
-        // All languages × needed slides come back in one response; give it room.
-        maxOutputTokens: 32768,
-        responseSchema: {
-            type: genAI.Type.OBJECT,
-            required: ["languages"],
-            properties: {
-                languages: {
-                    type: genAI.Type.ARRAY,
-                    items: {
-                        type: genAI.Type.OBJECT,
-                        required: ["language", "segments"],
-                        properties: {
-                            language: { type: genAI.Type.STRING },
-                            segments: {
-                                type: genAI.Type.ARRAY,
-                                items: {
-                                    type: genAI.Type.OBJECT,
-                                    required: ["segmentId", "translation"],
-                                    properties: {
-                                        segmentId: { type: genAI.Type.INTEGER },
-                                        translation: { type: genAI.Type.STRING },
-                                    },
+/** Function declaration the model uses to record the finished translations. */
+const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
+    name: 'set_translations',
+    description:
+        'Record the finished translations. Call this once the translations are ready, with ' +
+        'one entry per target language and exactly one segment per requested slide id. You ' +
+        'may call it again to revise (e.g. after reviewer feedback). Add a per-segment ' +
+        '"note" ONLY when there is a genuine caveat, ambiguity, or choice the reviewer should ' +
+        'know about — otherwise omit it.',
+    parameters: {
+        type: genAI.Type.OBJECT,
+        required: ['languages'],
+        properties: {
+            languages: {
+                type: genAI.Type.ARRAY,
+                items: {
+                    type: genAI.Type.OBJECT,
+                    required: ['language', 'segments'],
+                    properties: {
+                        language: { type: genAI.Type.STRING },
+                        segments: {
+                            type: genAI.Type.ARRAY,
+                            items: {
+                                type: genAI.Type.OBJECT,
+                                required: ['segmentId', 'translation'],
+                                properties: {
+                                    segmentId: { type: genAI.Type.INTEGER },
+                                    translation: { type: genAI.Type.STRING },
+                                    note: { type: genAI.Type.STRING },
                                 },
                             },
                         },
@@ -244,7 +204,156 @@ export const draftItemTranslations = async (
                 },
             },
         },
-    };
+    },
+};
+
+/** Safety cap on agent turns (Bible lookups + set_translations + a closing note). */
+const MAX_AGENT_ROUNDS = 8;
+
+/** Parse a `set_translations` tool call's args into per-language results. */
+const parseSetTranslations = (
+    args: Record<string, unknown> | undefined,
+    sourceSlides: string[],
+): Record<string, TranslationBlockResult[]> => {
+    const out: Record<string, TranslationBlockResult[]> = {};
+    const languageResults = ((args?.languages as unknown[]) ?? []) as Array<{
+        language: string;
+        segments: Array<{ segmentId: number; translation: string; note?: string }>;
+    }>;
+    for (const result of languageResults) {
+        const language = result.language;
+        if (!language) continue;
+        out[language] = (result.segments ?? [])
+            .filter((segment) => segment.segmentId >= 0 && segment.segmentId < sourceSlides.length)
+            .map((segment) => ({
+                sourceText: sourceSlides[segment.segmentId],
+                translatedText: segment.translation ?? '',
+                language,
+            }));
+    }
+    return out;
+};
+
+export type SlideAgentRunResult = {
+    /** Translations from the most recent `set_translations` call this run (empty if none). */
+    translations: Record<string, TranslationBlockResult[]>;
+    /** The full updated conversation (raw Gemini Content, replay-safe — keep verbatim). */
+    messages: Content[];
+    /** Whether the model called `set_translations` during this run. */
+    setTranslationsCalled: boolean;
+};
+
+/**
+ * Drive the slide-translation agent loop over a conversation until the model ends its turn.
+ *
+ * The model has two tools: `lookup_bible_passage` (grounds Scripture slides in the published
+ * text) and `set_translations` (records the structured output). Both run in one loop — and,
+ * unlike the old two-call design, `set_translations` is NOT a hard stop: it is executed like
+ * any tool and the model is allowed to end its turn naturally (a turn with no function
+ * calls), so it can add a closing note or ask a clarifying question instead of translating.
+ *
+ * `messages` is mutated in place and returned; pass a continuing history to resume from
+ * reviewer feedback. `onToolCall` reports each Bible lookup for observability.
+ */
+export const runSlideTranslationAgent = async (
+    provider: GeminiProvider,
+    params: {
+        sourceSlides: string[];
+        messages: Content[];
+        model?: string;
+        bibleLanguages: string[];
+        onToolCall?: (call: BibleToolCall) => void;
+    },
+): Promise<SlideAgentRunResult> => {
+    const { sourceSlides, messages, bibleLanguages, onToolCall } = params;
+    const model = params.model ?? provider.defaultModel;
+
+    const functionDeclarations: FunctionDeclaration[] = [SET_TRANSLATIONS_TOOL];
+    if (bibleLanguages.length > 0) functionDeclarations.unshift(BIBLE_LOOKUP_TOOL);
+    const tools = [{ functionDeclarations }];
+
+    let translations: Record<string, TranslationBlockResult[]> = {};
+    let setTranslationsCalled = false;
+
+    for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
+        const response = await provider.apiClient.models.generateContent({
+            model,
+            config: {
+                tools,
+                toolConfig: {
+                    functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
+                },
+            },
+            contents: messages,
+        });
+        const calls = response.functionCalls ?? [];
+        const modelContent = response.candidates?.[0]?.content;
+        // Keep the model turn verbatim (incl. any thought signatures) so a later resume
+        // replays the agent's reasoning faithfully.
+        if (modelContent) messages.push(modelContent);
+        if (calls.length === 0) break; // model ended its turn
+
+        const responseParts: Part[] = [];
+        for (const call of calls) {
+            if (call.name === SET_TRANSLATIONS_TOOL.name) {
+                translations = parseSetTranslations(
+                    call.args as Record<string, unknown> | undefined,
+                    sourceSlides,
+                );
+                setTranslationsCalled = true;
+                responseParts.push({
+                    functionResponse: { name: call.name, response: { ok: true } },
+                });
+            } else if (call.name === BIBLE_LOOKUP_TOOL.name) {
+                const args = (call.args ?? {}) as Partial<BibleLookupArgs>;
+                let responsePayload: Record<string, unknown>;
+                if (!args.book || typeof args.chapter !== 'number') {
+                    responsePayload = { error: 'book and chapter are required' };
+                } else {
+                    const result = await lookupBiblePassage(
+                        {
+                            book: args.book,
+                            chapter: args.chapter,
+                            startVerse: args.startVerse,
+                            endVerse: args.endVerse,
+                        },
+                        bibleLanguages,
+                    );
+                    onToolCall?.(result.call);
+                    responsePayload = result.call.ok
+                        ? { reference: result.reference, passages: result.passages }
+                        : { reference: result.reference, error: `No canonical text found for ${result.reference}` };
+                }
+                responseParts.push({
+                    functionResponse: { name: call.name, response: responsePayload },
+                });
+            } else {
+                responseParts.push({
+                    functionResponse: { name: call.name ?? 'unknown', response: { error: 'unknown tool' } },
+                });
+            }
+        }
+        messages.push({ role: 'user', parts: responseParts });
+    }
+
+    return { translations, messages, setTranslationsCalled };
+};
+
+/**
+ * Build the opening user prompt for the slide-translation agent: the numbered source slides,
+ * the target languages (each with which slides still need translating and any reviewed
+ * translations as style/terminology context), an optional multilingual `referenceText` dump,
+ * Bible-grounding instructions when any target language has a canonical translation, and the
+ * instruction to record results via the `set_translations` tool.
+ */
+const buildSlideTranslationPrompt = (params: {
+    sourceSlides: string[];
+    targets: DraftItemTarget[];
+    referenceText?: string;
+    itemTitle?: string;
+    bibleLanguages: string[];
+}): string => {
+    const { sourceSlides, targets, referenceText, itemTitle, bibleLanguages } = params;
 
     const sourceDocument = JSON.stringify(
         sourceSlides.map((text, index) => ({ segmentId: index, text: text.trim() }))
@@ -280,7 +389,7 @@ lookup_bible_passage tool to fetch the canonical published wording in the target
 (${bibleLanguages.join(', ')}), then base your translation on that text — adapting only
 where the slide itself does (responsive readings, pronoun changes, partial quotes). Look up
 every reference you recognize — the passage named in the item title above, and any inline
-references — before producing the final JSON.
+references — before recording the final translations.
 `
         : '';
 
@@ -292,7 +401,16 @@ for the passage on these slides.
 `
         : '';
 
-    const promptHeader = `
+    const toolInstruction = `
+When the translations are ready, call the set_translations tool. For each target language
+include exactly one segment per id in its "translateSegmentIds", with segmentIds matching
+the source slides; do not include ids that were not requested. Do not reply with the
+translations as plain text — record them via the tool. If something genuinely needs the
+reviewer's attention, you may also write a short message or attach a per-segment "note", but
+keep quiet when there is nothing useful to say.
+`;
+
+    return `
 You are translating presentation slides into several languages at once.
 ${itemTitleSection}
 The source slides are a JSON array of segments:
@@ -307,123 +425,64 @@ not something to translate.
 <targets>
 ${targetsDocument}
 </targets>
-${referenceSection}`;
+${referenceSection}${bibleSection}${toolInstruction}`;
+};
 
-    const jsonInstruction = `
-Respond with only JSON:
-{ "languages": [ { "language": "<language>", "segments": [ { "segmentId": <id>, "translation": "<text in that language>" } ] } ] }
+/**
+ * Translate a whole item into several languages in one agent loop.
+ *
+ * The model receives the numbered source slides, the target languages (each with which
+ * slides still need translating and any already-reviewed translations as context), and an
+ * optional free-text `referenceText` dump that may hold prior translations in one or more of
+ * the target languages. It may call `lookup_bible_passage` to ground Scripture, then records
+ * results via `set_translations`. `onToolCall` reports each Bible lookup; `onConversation`
+ * receives the full raw agent history (for server-side persistence + the review screen).
+ *
+ * Returns, per language, a `TranslationBlockResult` for each translated slide.
+ */
+export const draftItemTranslations = async (
+    provider: GeminiProvider,
+    params: {
+        sourceSlides: string[];
+        targets: DraftItemTarget[];
+        referenceText?: string;
+        model?: string;
+        /**
+         * The presentation item's title. For Bible readings this is the citation itself
+         * (e.g. "Psalm 23") and is often NOT repeated in the slide text — so it is the
+         * model's only cue to look the passage up. Surfaced to the model as a hint.
+         */
+        itemTitle?: string;
+        /** Called once per executed Bible lookup, for observability. */
+        onToolCall?: (call: BibleToolCall) => void;
+        /** Receives the full agent conversation (raw Gemini Content) once drafting completes. */
+        onConversation?: (messages: Content[]) => void;
+    },
+): Promise<Record<string, TranslationBlockResult[]>> => {
+    const { sourceSlides, targets, referenceText, onToolCall, onConversation } = params;
+    const itemTitle = params.itemTitle?.trim();
+    const model = params.model ?? provider.defaultModel;
+    // Languages we can actually fetch canonical Scripture for.
+    const bibleLanguages = targets
+        .map((target) => target.language)
+        .filter((language) => BIBLE_TRANSLATIONS[language]);
 
-For each target language, include exactly one segment per id in its "translateSegmentIds",
-with segmentIds matching the source slides. Do not include segments for ids not listed.
-`;
-
-    // Tool-use phase: in a throwaway conversation, let the model look up any Scripture it
-    // needs (schema-free, since Gemini rejects responseSchema + tools), feeding each result
-    // back until it stops asking or we hit the round cap. We collect the canonical passages
-    // and hand them to the final structured call as a plain reference block — so the final
-    // call carries no function-call history and stays a clean JSON request.
-    const gatheredPassages: string[] = [];
-    if (bibleLanguages.length > 0) {
-        const tools = [{ functionDeclarations: [BIBLE_LOOKUP_TOOL] }];
-        const MAX_TOOL_ROUNDS = 4;
-        const toolContents: Content[] = [
-            {
-                role: 'user',
-                parts: [{ text: `${promptHeader}${bibleSection}` }],
-            },
-        ];
-        for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-            const toolResponse = await provider.apiClient.models.generateContent({
-                model,
-                config: {
-                    tools,
-                    toolConfig: {
-                        functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
-                    },
-                },
-                contents: toolContents,
-            });
-            const calls = toolResponse.functionCalls ?? [];
-            const modelContent = toolResponse.candidates?.[0]?.content;
-            if (modelContent) toolContents.push(modelContent);
-            if (calls.length === 0) break;
-
-            const responseParts: Part[] = [];
-            for (const call of calls) {
-                if (call.name !== BIBLE_LOOKUP_TOOL.name) continue;
-                const args = (call.args ?? {}) as Partial<BibleLookupArgs>;
-                let responsePayload: Record<string, unknown>;
-                if (!args.book || typeof args.chapter !== 'number') {
-                    responsePayload = { error: 'book and chapter are required' };
-                } else {
-                    const result = await lookupBiblePassage(
-                        {
-                            book: args.book,
-                            chapter: args.chapter,
-                            startVerse: args.startVerse,
-                            endVerse: args.endVerse,
-                        },
-                        bibleLanguages,
-                    );
-                    onToolCall?.(result.call);
-                    if (result.call.ok) {
-                        for (const [language, text] of Object.entries(result.passages)) {
-                            gatheredPassages.push(`${result.reference} (${language}):\n${text}`);
-                        }
-                        responsePayload = { reference: result.reference, passages: result.passages };
-                    } else {
-                        responsePayload = {
-                            reference: result.reference,
-                            error: `No canonical text found for ${result.reference}`,
-                        };
-                    }
-                }
-                responseParts.push({
-                    functionResponse: { name: call.name, response: responsePayload },
-                });
-            }
-            if (responseParts.length === 0) break;
-            toolContents.push({ role: 'user', parts: responseParts });
-        }
-    }
-
-    const scriptureSection = gatheredPassages.length > 0
-        ? `
-The canonical published wording of the Scripture passages on these slides, per language, is
-below. For any slide that is or quotes Scripture, base your translation on the matching
-canonical text — adapting only where the slide itself does (responsive readings, pronoun
-changes, partial quotes).
-
-<scripture>
-${gatheredPassages.join('\n\n')}
-</scripture>
-`
-        : '';
-
-    // Final structured call: a clean JSON request (no tools / no function-call history).
-    const response = await provider.apiClient.models.generateContent({
-        model,
-        config: finalConfig,
-        contents: [
-            { role: 'user', parts: [{ text: `${promptHeader}${scriptureSection}${jsonInstruction}` }] },
-        ],
+    const prompt = buildSlideTranslationPrompt({
+        sourceSlides,
+        targets,
+        referenceText,
+        itemTitle,
+        bibleLanguages,
     });
-    const jsonResponse = JSON.parse(response.text || '{}');
-    const languageResults = (jsonResponse.languages ?? []) as Array<{
-        language: string;
-        segments: Array<{ segmentId: number; translation: string }>;
-    }>;
+    const messages: Content[] = [{ role: 'user', parts: [{ text: prompt }] }];
 
-    const out: Record<string, TranslationBlockResult[]> = {};
-    for (const result of languageResults) {
-        const language = result.language;
-        out[language] = (result.segments ?? [])
-            .filter((segment) => segment.segmentId >= 0 && segment.segmentId < sourceSlides.length)
-            .map((segment) => ({
-                sourceText: sourceSlides[segment.segmentId],
-                translatedText: segment.translation ?? '',
-                language,
-            }));
-    }
-    return out;
+    const result = await runSlideTranslationAgent(provider, {
+        sourceSlides,
+        messages,
+        model,
+        bibleLanguages,
+        onToolCall,
+    });
+    onConversation?.(result.messages);
+    return result.translations;
 };
