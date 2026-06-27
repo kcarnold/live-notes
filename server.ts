@@ -14,6 +14,9 @@ import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 import { translateBlock, GeminiProvider } from './nlp.ts';
 import type { TranslationTodo } from './nlp.ts';
 
+import { AccessToken } from 'livekit-server-sdk';
+import TranslationSessionManager from './live-audio/translation-session-manager.ts';
+
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
   const value = process.env[name];
@@ -87,6 +90,128 @@ app.post('/api/ys-auth', async (req, res) => {
   })
   res.send(clientToken)
 })
+
+
+// ---------------------------------------------------------------------------
+// Live speech-to-speech translation (Gemini Live + LiveKit)
+//
+// Self-contained, opt-in feature. If the LIVEKIT_* env vars are unset these
+// routes return 503 and the rest of the app is unaffected. The LiveKit room
+// name is the Y-Sweet doc id, so audio rooms line up 1:1 with outline sessions.
+// The speaker (editor) always joins as ORGANIZER_IDENTITY; per-language
+// translator bots subscribe to that identity.
+// ---------------------------------------------------------------------------
+const ORGANIZER_IDENTITY = 'organizer-host';
+
+function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } | null {
+  const url = process.env.LIVEKIT_URL;
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  if (!url || !apiKey || !apiSecret) return null;
+  return { url, apiKey, apiSecret };
+}
+
+// Give the translation manager what it needs to persist transcripts into Yjs and
+// reap idle translator bots. No-op for transcript/reaper if LiveKit is unconfigured.
+{
+  const lk = getLiveKitConfig();
+  if (lk) {
+    TranslationSessionManager.getInstance().init({ documentManager, livekit: lk, telemetry: phClient });
+  }
+}
+
+// Issue a LiveKit access token. role 'organizer' => can publish (the speaker);
+// anything else => subscribe-only attendee (a listener).
+app.post('/api/livekit/token', async (req, res) => {
+  try {
+    const lk = getLiveKitConfig();
+    if (!lk) return res.status(503).json({ error: 'LiveKit not configured' });
+
+    const room = req.body?.room as string | undefined;
+    const identity = req.body?.identity as string | undefined;
+    const role = (req.body?.role as string | undefined) ?? 'attendee';
+    if (!room || !identity) {
+      return res.status(400).json({ error: 'Missing room or identity' });
+    }
+
+    const isOrganizer = role === 'organizer';
+    const at = new AccessToken(lk.apiKey, lk.apiSecret, { identity, name: identity, ttl: '4h' });
+    at.addGrant({
+      roomJoin: true,
+      room,
+      canPublish: isOrganizer,
+      canSubscribe: true,
+      canPublishData: isOrganizer,
+    });
+    const token = await at.toJwt();
+    return res.json({ token, serverUrl: lk.url });
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('LiveKit token error:', error);
+    return res.status(500).json({ error: 'Failed to issue LiveKit token' });
+  }
+});
+
+// Request (or reuse) a translator bot for a language in a room. The bot spins
+// up a Gemini Live session and publishes translated audio as `translator-<code>`.
+app.post('/api/livekit/translate', async (req, res) => {
+  try {
+    if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
+
+    const sessionId = req.body?.sessionId as string | undefined;
+    const targetLanguage = req.body?.targetLanguage as string | undefined; // BCP-47 code, e.g. "fr"
+    if (!sessionId || !targetLanguage) {
+      return res.status(400).json({ error: 'Missing sessionId or targetLanguage' });
+    }
+
+    const manager = TranslationSessionManager.getInstance();
+    const bridge = await manager.getOrCreate(sessionId, targetLanguage, ORGANIZER_IDENTITY);
+    return res.json({
+      translatorIdentity: bridge.identity,
+      status: bridge.status,
+      targetLanguage: bridge.targetLanguage,
+    });
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('LiveKit translate error:', error);
+    return res.status(500).json({ error: 'Failed to start translation: ' + (error as Error).message });
+  }
+});
+
+// List active translator bots + listener counts for a room (drives the speaker dashboard).
+app.get('/api/livekit/translate/status', (req, res) => {
+  try {
+    if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
+    const sessionId = req.query?.sessionId as string | undefined;
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+    const manager = TranslationSessionManager.getInstance();
+    return res.json({ translations: manager.getActiveTranslations(sessionId) });
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('LiveKit status error:', error);
+    return res.status(500).json({ error: 'Failed to get translation status' });
+  }
+});
+
+// Decrement a language's listener count; the bot tears down at zero.
+// POST so navigator.sendBeacon can call it on page unload.
+app.post('/api/livekit/translate/unsubscribe', async (req, res) => {
+  try {
+    if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
+    const sessionId = req.body?.sessionId as string | undefined;
+    const targetLanguage = req.body?.targetLanguage as string | undefined;
+    if (!sessionId || !targetLanguage) {
+      return res.status(400).json({ error: 'Missing sessionId or targetLanguage' });
+    }
+    const manager = TranslationSessionManager.getInstance();
+    await manager.unsubscribe(sessionId, targetLanguage);
+    return res.json({ success: true });
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('LiveKit unsubscribe error:', error);
+    return res.status(500).json({ error: 'Failed to unsubscribe' });
+  }
+});
 
 
 app.post('/api/requestTranslatedBlocks', async (req, res) => {

@@ -24,6 +24,7 @@ export interface AppStrings {
   layoutSlideAndTranslation: string;
   layoutBilingualView: string;
   layoutEverything: string;
+  layoutSlideAndListen: string;
 
   // Font size controls
   decreaseFontSize: string;
@@ -48,6 +49,24 @@ export interface AppStrings {
   next: string;
   untitledPresentation: string;
 
+  // Live audio translation (Gemini Live + LiveKit)
+  listenLive: string;
+  liveListening: string;
+  waitingForSpeaker: string;
+  waitingForSpeech: string;
+  liveAudioError: string;
+  retry: string;
+  broadcast: string;
+  startBroadcast: string;
+  listeners: string;
+  activeTranslations: string;
+  noActiveTranslations: string;
+  broadcastEditorOnly: string;
+  listenOriginal: string;
+  favorites: string;
+  allLanguages: string;
+  micLevel: string;
+
   // Navigation
   goHome: string;
 
@@ -67,6 +86,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Choose Layout',
     layoutSlideAndTranslation: 'Slide and Translation',
     layoutBilingualView: 'Bilingual View',
+    layoutSlideAndListen: 'Slide and Listen',
     layoutEverything: 'Everything',
     decreaseFontSize: 'Decrease font size',
     increaseFontSize: 'Increase font size',
@@ -77,6 +97,22 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Error: ',
     noContent: 'No content yet',
     notTranslated: '(not translated)',
+    listenLive: 'Listen live',
+    liveListening: 'Listening live',
+    waitingForSpeaker: 'Waiting for the speaker…',
+    waitingForSpeech: 'Waiting for translated speech…',
+    liveAudioError: 'Live audio unavailable',
+    retry: 'Retry',
+    broadcast: 'Broadcast',
+    startBroadcast: 'Start broadcasting',
+    listeners: 'listeners',
+    activeTranslations: 'Active translations',
+    noActiveTranslations: 'None yet — listeners can request them',
+    broadcastEditorOnly: 'Broadcasting is available in editor mode (#editor).',
+    listenOriginal: 'Original / English',
+    favorites: 'Favorites',
+    allLanguages: 'All languages',
+    micLevel: 'Mic level',
     noSlides: 'No slides available',
     waitingForProclaim: 'Waiting for Proclaim data...',
     isProclaimRunning: 'Is the Proclaim service running?',
@@ -97,6 +133,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Choisir la mise en page',
     layoutSlideAndTranslation: 'Diapositive et traduction',
     layoutBilingualView: 'Vue bilingue',
+    layoutSlideAndListen: 'Diapositive et écoute',
     layoutEverything: 'Tout',
     decreaseFontSize: 'Diminuer la taille du texte',
     increaseFontSize: 'Augmenter la taille du texte',
@@ -107,6 +144,22 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Erreur\u00a0: ',
     noContent: 'Aucun contenu pour l\u2019instant',
     notTranslated: '(non traduit)',
+    listenLive: 'Écouter en direct',
+    liveListening: 'Écoute en direct',
+    waitingForSpeaker: 'En attente de l’orateur…',
+    waitingForSpeech: 'En attente de la traduction vocale…',
+    liveAudioError: 'Audio en direct indisponible',
+    retry: 'Réessayer',
+    broadcast: 'Diffusion',
+    startBroadcast: 'Démarrer la diffusion',
+    listeners: 'auditeurs',
+    activeTranslations: 'Traductions actives',
+    noActiveTranslations: 'Aucune pour l’instant— les auditeurs peuvent en demander',
+    broadcastEditorOnly: 'La diffusion est disponible en mode éditeur (#editor).',
+    listenOriginal: 'Original / Anglais',
+    favorites: 'Favoris',
+    allLanguages: 'Toutes les langues',
+    micLevel: 'Niveau du micro',
     noSlides: 'Aucune diapositive disponible',
     waitingForProclaim: 'En attente des donn\u00e9es Proclaim\u2026',
     isProclaimRunning: 'Le service Proclaim est-il actif\u00a0?',
@@ -127,6 +180,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Elegir dise\u00f1o',
     layoutSlideAndTranslation: 'Diapositiva y traducci\u00f3n',
     layoutBilingualView: 'Vista biling\u00fce',
+    layoutSlideAndListen: 'Diapositiva y escucha',
     layoutEverything: 'Todo',
     decreaseFontSize: 'Disminuir tama\u00f1o de fuente',
     increaseFontSize: 'Aumentar tama\u00f1o de fuente',
@@ -137,6 +191,22 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Error: ',
     noContent: 'Sin contenido a\u00fan',
     notTranslated: '(no traducido)',
+    listenLive: 'Escuchar en vivo',
+    liveListening: 'Escuchando en vivo',
+    waitingForSpeaker: 'Esperando al orador…',
+    waitingForSpeech: 'Esperando la traducción hablada…',
+    liveAudioError: 'Audio en vivo no disponible',
+    retry: 'Reintentar',
+    broadcast: 'Transmisión',
+    startBroadcast: 'Iniciar transmisión',
+    listeners: 'oyentes',
+    activeTranslations: 'Traducciones activas',
+    noActiveTranslations: 'Ninguna aún— los oyentes pueden solicitarlas',
+    broadcastEditorOnly: 'La transmisión está disponible en modo editor (#editor).',
+    listenOriginal: 'Original / Inglés',
+    favorites: 'Favoritos',
+    allLanguages: 'Todos los idiomas',
+    micLevel: 'Nivel del micrófono',
     noSlides: 'No hay diapositivas disponibles',
     waitingForProclaim: 'Esperando datos de Proclaim\u2026',
     isProclaimRunning: '\u00bfEst\u00e1 ejecut\u00e1ndose el servicio Proclaim?',
@@ -157,6 +227,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     chooseLayout: 'Chwazi Dispozisyon',
     layoutSlideAndTranslation: 'Diapozitiv ak Tradiksyon',
     layoutBilingualView: 'Vi Bileng',
+    layoutSlideAndListen: 'Diapozitiv ak \u00c9coute',
     layoutEverything: 'Tout bagay',
     decreaseFontSize: 'Diminye gw\u00f2s\u00e8 l\u00e8t',
     increaseFontSize: 'Ogmante gw\u00f2s\u00e8 l\u00e8t',
@@ -167,6 +238,22 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Er\u00e8\u00a0: ',
     noContent: 'Pa gen kontni pou kounye a',
     notTranslated: '(pa tradui)',
+    listenLive: 'Koute an dirèk',
+    liveListening: 'Ap koute an dirèk',
+    waitingForSpeaker: 'N ap tann moun k ap pale a…',
+    waitingForSpeech: 'N ap tann tradiksyon vokal la…',
+    liveAudioError: 'Odyo an dirèk pa disponib',
+    retry: 'Reeseye',
+    broadcast: 'Difizyon',
+    startBroadcast: 'Kòmanse difizyon',
+    listeners: 'moun k ap koute',
+    activeTranslations: 'Tradiksyon aktif',
+    noActiveTranslations: 'Pa gen okenn pou kounye a— moun k ap koute ka mande yo',
+    broadcastEditorOnly: 'Difizyon disponib nan mòd editè (#editor).',
+    listenOriginal: 'Orijinal / Angle',
+    favorites: 'Favori',
+    allLanguages: 'Tout lang yo',
+    micLevel: 'Nivo mikwo',
     noSlides: 'Pa gen diapozitiv disponib',
     waitingForProclaim: 'Ap tann done Proclaim\u2026',
     isProclaimRunning: '\u00c8ske s\u00e8vis Proclaim la ap kouri?',
