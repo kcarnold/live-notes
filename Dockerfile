@@ -34,6 +34,7 @@ ARG VITE_PUBLIC_POSTHOG_KEY
 ARG VITE_PUBLIC_POSTHOG_HOST
 ARG POSTHOG_CLI_ENV_ID
 ARG POSTHOG_CLI_HOST
+ARG GIT_SHA=unknown
 
 ENV NODE_ENV=production
 ENV VITE_PUBLIC_POSTHOG_KEY=${VITE_PUBLIC_POSTHOG_KEY}
@@ -55,8 +56,8 @@ RUN --mount=type=secret,id=posthog_cli_token \
           POSTHOG_ARGS="--host $POSTHOG_CLI_HOST $POSTHOG_ARGS"; \
         fi && \
         export POSTHOG_CLI_TOKEN && \
-        posthog-cli $POSTHOG_ARGS sourcemap inject --directory ./dist --project live-outline && \
-        posthog-cli sourcemap upload --directory ./dist ; \
+        posthog-cli $POSTHOG_ARGS sourcemap inject --directory ./dist --project live-outline --release-name live-outline --release-version ${GIT_SHA} && \
+        posthog-cli $POSTHOG_ARGS sourcemap upload --directory ./dist --release-name live-outline --release-version ${GIT_SHA} ; \
       fi; \
     fi
 
