@@ -215,7 +215,7 @@ class TranslationSessionManager {
     const telemetry = this.telemetry;
     const recordEvent = telemetry
       ? (event: string, properties: Record<string, unknown>) =>
-          telemetry.capture({ distinctId: sessionId, event, properties: { sessionId, ...properties } })
+          telemetry.capture({ distinctId: sessionId, event, properties: { ...properties, sessionId } })
       : null;
 
     const config = {
