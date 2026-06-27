@@ -114,11 +114,11 @@ class TranslationSessionManager {
   /**
    * Ensure translation is running for a language and return its bridge.
    *
-   * Side effects that keep the English transcript available cheaply:
-   *  - ensures the default/primary bridge (DEFAULT_LANGUAGE) is running while
-   *    anyone is listening — it is the sole writer of the source transcript;
-   *  - on the first bridge for a session (a fresh talk), clears any stale
-   *    transcript left in the day-scoped doc by a previous service.
+   * Always keeps the English transcript available cheaply by ensuring the
+   * default/primary bridge (DEFAULT_LANGUAGE) runs while anyone is listening —
+   * it is the sole writer of the source transcript. The transcript is never
+   * cleared here: it accumulates in the day-scoped doc for accountability, so a
+   * transient drop-to-zero-listeners and rejoin can't wipe a live talk.
    */
   async getOrCreate(
     sessionId: string,
@@ -129,14 +129,7 @@ class TranslationSessionManager {
     // has finished joining the LiveKit room.
     this.lastHealthyAt.set(sessionId, Date.now());
 
-    const existingMap = this.translations.get(sessionId);
-    const isFirstBridge = !existingMap || existingMap.size === 0;
-
     const writer = this.getOrCreateWriter(sessionId);
-    if (writer && isFirstBridge) {
-      // Clear before any bridge can append, so a new talk starts clean.
-      await writer.clearAll();
-    }
 
     // Always keep the default bridge alive (the source-transcript writer).
     const defaultBridge = await this.ensureBridge(
