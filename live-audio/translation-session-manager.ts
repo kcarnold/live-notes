@@ -16,6 +16,18 @@ import { TranscriptWriter } from "./transcript-writer.ts";
 import { TranslationBridge } from "./translation-bridge.ts";
 import type { BridgeStatus } from "./translation-bridge.ts";
 
+/**
+ * Minimal telemetry client (structurally satisfied by the PostHog node client).
+ * Kept local so the translation layer doesn't depend on posthog-node directly.
+ */
+export interface TelemetryClient {
+  capture(args: {
+    distinctId: string;
+    event: string;
+    properties?: Record<string, unknown>;
+  }): void;
+}
+
 export interface TranslationInfo {
   language: string;
   translatorIdentity: string;
@@ -74,6 +86,7 @@ class TranslationSessionManager {
 
   private documentManager: DocumentManager | null = null;
   private livekitConfig: LiveKitConfig | null = null;
+  private telemetry: TelemetryClient | null = null;
   private reaperTimer: ReturnType<typeof setInterval> | null = null;
 
   private constructor() {}
@@ -89,9 +102,14 @@ class TranslationSessionManager {
    * Provide the dependencies the manager needs to persist transcripts and reap
    * idle bots. Called once from the server at boot.
    */
-  init(opts: { documentManager: DocumentManager; livekit: LiveKitConfig }): void {
+  init(opts: {
+    documentManager: DocumentManager;
+    livekit: LiveKitConfig;
+    telemetry?: TelemetryClient;
+  }): void {
     this.documentManager = opts.documentManager;
     this.livekitConfig = opts.livekit;
+    this.telemetry = opts.telemetry ?? null;
     this.startReaper();
   }
 
@@ -192,6 +210,14 @@ class TranslationSessionManager {
       this.translations.set(sessionId, languageMap);
     }
 
+    // Per-session telemetry sink: tag every bridge event with the session as the
+    // distinctId so a talk's full reconnect history groups together in PostHog.
+    const telemetry = this.telemetry;
+    const recordEvent = telemetry
+      ? (event: string, properties: Record<string, unknown>) =>
+          telemetry.capture({ distinctId: sessionId, event, properties: { ...properties, sessionId } })
+      : null;
+
     const config = {
       geminiApiKey: process.env.GEMINI_API_KEY!,
       livekitUrl: this.livekitConfig?.url ?? process.env.LIVEKIT_URL ?? process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "ws://localhost:7880",
@@ -199,6 +225,7 @@ class TranslationSessionManager {
       livekitApiSecret: this.livekitConfig?.apiSecret ?? process.env.LIVEKIT_API_SECRET!,
       writer,
       writesSourceTranscript: opts.writesSourceTranscript,
+      recordEvent,
     };
 
     console.log(`[SessionManager] Creating new bridge for ${targetLanguage} in session ${sessionId}`);

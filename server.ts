@@ -116,7 +116,7 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
 {
   const lk = getLiveKitConfig();
   if (lk) {
-    TranslationSessionManager.getInstance().init({ documentManager, livekit: lk });
+    TranslationSessionManager.getInstance().init({ documentManager, livekit: lk, telemetry: phClient });
   }
 }
 
