@@ -66,9 +66,6 @@ export class TranslationBridge {
   // via Gemini input transcription. Only the primary bridge does, so the same
   // English text isn't appended once per running language.
   private readonly writesSourceTranscript: boolean;
-  // Accumulators for the current turn's transcription, flushed on turnComplete.
-  private outputTurnBuffer: string = "";
-  private inputTurnBuffer: string = "";
 
   // The source (input) transcript is published under this language code.
   static readonly SOURCE_CODE = "en";
@@ -413,32 +410,16 @@ export class TranslationBridge {
         }
       }
 
-      // Output transcription (target language): accumulate the turn, stream it as
-      // an ephemeral interim line, and persist the finalized segment on turn end.
+      // Transcription (target language): Gemini Live Translate streams a continuous
+      // flow of deltas with no turnComplete, so persist each delta straight into the
+      // shared Yjs transcript, which is the single source of truth for viewers.
       if (serverContent?.outputTranscription?.text) {
-        this.outputTurnBuffer += serverContent.outputTranscription.text;
-        this.publishInterim(this.targetLanguage, this.outputTurnBuffer);
+        this.writer?.appendDelta(this.targetLanguage, serverContent.outputTranscription.text);
       }
 
       // Input transcription (source language / English) — only on the primary bridge.
       if (this.writesSourceTranscript && serverContent?.inputTranscription?.text) {
-        this.inputTurnBuffer += serverContent.inputTranscription.text;
-        this.publishInterim(TranslationBridge.SOURCE_CODE, this.inputTurnBuffer);
-      }
-
-      // On turn completion, flush finalized segments into Yjs and clear the interim
-      // lines (the finalized text now arrives via Yjs).
-      if (serverContent?.turnComplete) {
-        if (this.outputTurnBuffer.trim()) {
-          this.writer?.appendSegment(this.targetLanguage, this.outputTurnBuffer);
-          this.publishInterim(this.targetLanguage, "");
-          this.outputTurnBuffer = "";
-        }
-        if (this.inputTurnBuffer.trim()) {
-          this.writer?.appendSegment(TranslationBridge.SOURCE_CODE, this.inputTurnBuffer);
-          this.publishInterim(TranslationBridge.SOURCE_CODE, "");
-          this.inputTurnBuffer = "";
-        }
+        this.writer?.appendDelta(TranslationBridge.SOURCE_CODE, serverContent.inputTranscription.text);
       }
     } catch (error) {
       console.error(
@@ -642,35 +623,6 @@ export class TranslationBridge {
     } catch (error) {
       console.error(
         `[TranslationBridge:${this.targetLanguage}] Error sending audio to Gemini:`,
-        error
-      );
-    }
-  }
-
-  /**
-   * Publish the current in-progress (interim) transcript line for a language over
-   * the LiveKit data channel. Interim text is ephemeral — finalized segments live
-   * in Yjs — so passing an empty string clears the interim line on turn completion.
-   */
-  private publishInterim(code: string, text: string): void {
-    if (!this.room?.localParticipant) return;
-
-    try {
-      const payload = JSON.stringify({
-        type: "transcription",
-        language: code,
-        text,
-        interim: true,
-        timestamp: Date.now(),
-      });
-
-      void this.room.localParticipant.publishData(
-        new TextEncoder().encode(payload),
-        { reliable: true, topic: "transcription" }
-      );
-    } catch (error) {
-      console.error(
-        `[TranslationBridge:${this.targetLanguage}] Error publishing interim transcript:`,
         error
       );
     }
