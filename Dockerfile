@@ -56,7 +56,7 @@ RUN --mount=type=secret,id=posthog_cli_token \
           POSTHOG_ARGS="--host $POSTHOG_CLI_HOST $POSTHOG_ARGS"; \
         fi && \
         export POSTHOG_CLI_TOKEN && \
-        posthog-cli $POSTHOG_ARGS sourcemap inject --directory ./dist --project live-outline --release-name live-outline --release-version ${GIT_SHA} && \
+        posthog-cli $POSTHOG_ARGS sourcemap inject --directory ./dist --release-name live-outline --release-version ${GIT_SHA} && \
         posthog-cli $POSTHOG_ARGS sourcemap upload --directory ./dist --release-name live-outline --release-version ${GIT_SHA} ; \
       fi; \
     fi
