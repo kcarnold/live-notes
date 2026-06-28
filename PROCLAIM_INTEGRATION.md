@@ -39,10 +39,13 @@ uv sync
 
 ```bash
 # Make sure Proclaim is running
-# Start the service (default doc: doc-YYYY-MM-DD)
+# Start the service. By default it targets doc-YYYY-MM-DD using the on-air show's
+# scheduled date (Proclaim's DateGiven), falling back to today's date if the show
+# has no date. This means you can pre-stage a future-dated show: bring it on air in
+# Proclaim and the service syncs to that date's doc automatically.
 uv run proclaim_service.py
 
-# Or specify a custom doc ID
+# Or specify a custom doc ID (disables date-based selection entirely)
 uv run proclaim_service.py my-custom-doc
 ```
 
@@ -77,8 +80,11 @@ reconnects:
 - **Active health checks.** The service pings the websocket each poll so a silently
   dropped connection is detected promptly and triggers a reconnect (the underlying
   library otherwise swallows the disconnect).
-- **Date rollover.** Across midnight the service rolls to the new date-based document
-  with a fresh doc, without needing an external restart.
+- **Show-dated documents.** When using the default date-based doc, the service anchors
+  the doc to the on-air show's scheduled date (Proclaim's `DateGiven`), so a show
+  prepared the night before still syncs to its own date's doc. When a show has no usable
+  date it falls back to today's date and rolls over at midnight (with a fresh doc) without
+  needing an external restart.
 
 ### 3. View Current Slide in Browser
 

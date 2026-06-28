@@ -241,7 +241,7 @@ class ProclaimDB:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT PresentationId, Content FROM Presentations WHERE PresentationId = ?",
+                "SELECT PresentationId, DateGiven, Content FROM Presentations WHERE PresentationId = ?",
                 (presentation_id,)
             )
             row = cursor.fetchone()
@@ -249,7 +249,8 @@ class ProclaimDB:
                 return None
             return {
                 'id': row[0],
-                'content': json.loads(row[1])
+                'date_given': row[1],
+                'content': json.loads(row[2])
             }
 
     def get_presentations(self, limit: int = 10) -> List[Dict[str, Any]]:

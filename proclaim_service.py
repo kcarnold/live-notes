@@ -208,6 +208,13 @@ class ProclaimYjsService:
             self.doc_id = doc_id
             self.current_doc_date = None
 
+        # Whether current_doc_date came from the on-air show's DateGiven (authoritative,
+        # set per session) rather than wall-clock today. When the date is anchored to a
+        # show we don't roll the doc at midnight - the show's date is the source of truth,
+        # so a service started the night before for a future-dated show targets the right
+        # doc. Only the wall-clock fallback rolls over at midnight.
+        self.doc_date_from_show = False
+
         # Yjs state
         self.ydoc: Doc = Doc()
         self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
@@ -239,13 +246,68 @@ class ProclaimYjsService:
         self._translation_screen_idx: Optional[int] = None
 
     @staticmethod
-    def _get_date_based_doc_id() -> str:
-        """Generate doc ID based on current date"""
-        return f'doc-{date.today().isoformat()}'
+    def _get_date_based_doc_id(d: Optional[date] = None) -> str:
+        """Generate doc ID based on a date (defaults to today)."""
+        return f'doc-{(d or date.today()).isoformat()}'
+
+    @staticmethod
+    def _parse_date_given(raw: Any) -> Optional[date]:
+        """Parse a Proclaim ``DateGiven`` value (e.g. ``"2025-03-02"``) into a date.
+
+        Returns None when the value is missing or not a parseable ISO date, so the
+        caller can fall back to wall-clock today.
+        """
+        if not isinstance(raw, str):
+            return None
+        # DateGiven is a date string but tolerate an accidental time component.
+        token = raw.strip().replace('T', ' ').split(' ')[0]
+        try:
+            return date.fromisoformat(token)
+        except ValueError:
+            return None
+
+    def _read_show_date(self, presentation_id: Optional[str]) -> Optional[date]:
+        """Read the on-air presentation's DateGiven as a date, or None if unavailable.
+
+        Tolerates a missing row (DB trailing the live API) or any DB/parse problem by
+        returning None; the caller then falls back to today's date.
+        """
+        if not presentation_id:
+            return None
+        try:
+            pres = self.db.get_presentation(presentation_id)
+        except Exception as e:
+            logger.warning(f"Could not read date for presentation {presentation_id}: {e}")
+            return None
+        if not pres:
+            return None
+        return self._parse_date_given(pres.get('date_given'))
+
+    def _resolve_doc_for_session(self, presentation_id: Optional[str]) -> None:
+        """Point the (date-based) doc id at the on-air show's date before connecting.
+
+        Uses the presentation's ``DateGiven`` when available, otherwise wall-clock today.
+        Recreates the Doc when the id changes so a new target doesn't inherit the prior
+        session's slides. No-op when an explicit doc_id override is in effect.
+        """
+        if not self.use_date_based_doc_id:
+            return
+
+        show_date = self._read_show_date(presentation_id)
+        new_date = show_date if show_date is not None else date.today()
+        self.doc_date_from_show = show_date is not None
+        new_doc_id = self._get_date_based_doc_id(new_date)
+
+        if new_doc_id != self.doc_id:
+            source = "show DateGiven" if show_date is not None else "today"
+            logger.info(f"Resolved doc from {source}: {self.doc_id} → {new_doc_id}")
+            self.doc_id = new_doc_id
+            self._recreate_doc()
+        self.current_doc_date = new_date
 
     def _check_doc_id_change(self) -> bool:
         """Check if date-based doc ID has changed. Returns True if changed."""
-        if not self.use_date_based_doc_id:
+        if not self.use_date_based_doc_id or self.doc_date_from_show:
             return False
 
         today = date.today()
@@ -263,7 +325,11 @@ class ProclaimYjsService:
         Used inside a live session (where we must not swap the Doc out from under an
         active Provider) to decide we should end the session and roll over.
         """
-        return self.use_date_based_doc_id and date.today() != self.current_doc_date
+        return (
+            self.use_date_based_doc_id
+            and not self.doc_date_from_show
+            and date.today() != self.current_doc_date
+        )
 
     def _recreate_doc(self) -> None:
         """Start a fresh Y.Doc so a new day's document doesn't inherit yesterday's slides."""
@@ -598,11 +664,13 @@ class ProclaimYjsService:
                 did_work = False
             await anyio.sleep(0 if did_work else TRANSLATION_SCAN_INTERVAL)
 
-    async def _wait_until_on_air(self) -> None:
+    async def _wait_until_on_air(self) -> Dict[str, Any]:
         """Poll Proclaim until it reports on air, holding NO Y-Sweet connection.
 
-        We don't open (or keep) a Y-Sweet connection while nothing is happening, so
-        we never depend on a connection that was established long before it was needed.
+        Returns the first on-air status (so the caller can resolve the doc from the
+        show before connecting). We don't open (or keep) a Y-Sweet connection while
+        nothing is happening, so we never depend on a connection that was established
+        long before it was needed.
         """
         announced = False
         while True:
@@ -610,7 +678,7 @@ class ProclaimYjsService:
             status = await self._fetch_status()
             if status is not None:
                 logger.info("Proclaim is on air - connecting to Y-Sweet")
-                return
+                return status
             if not announced:
                 logger.info("Waiting for Proclaim to go on air (no Y-Sweet connection held)")
                 announced = True
@@ -721,7 +789,9 @@ class ProclaimYjsService:
         while True:
             try:
                 # Phase 1: no connection held until Proclaim is actually on air.
-                await self._wait_until_on_air()
+                on_air_status = await self._wait_until_on_air()
+                # Anchor the date-based doc to the on-air show's date before connecting.
+                self._resolve_doc_for_session(on_air_status.get('presentationId'))
                 # Phase 2: connect and sync until off air / date roll / disconnect.
                 await self._run_session()
                 # Clean end of a session - reset backoff for the next connect.
@@ -752,7 +822,12 @@ async def main():
     """Entry point with signal handling"""
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Proclaim Service - Syncs Proclaim to Yjs')
-    parser.add_argument('doc_id', nargs='?', help='Document ID (default: date-based doc-YYYY-MM-DD)')
+    parser.add_argument(
+        'doc_id',
+        nargs='?',
+        help="Document ID override. Default: doc-YYYY-MM-DD from the on-air show's "
+             "DateGiven (falling back to today's date).",
+    )
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     args = parser.parse_args()
 

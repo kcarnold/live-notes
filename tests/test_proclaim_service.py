@@ -14,6 +14,7 @@ Covered behaviors:
 """
 
 import contextlib
+from datetime import date
 from unittest import mock
 
 import anyio
@@ -80,6 +81,14 @@ def make_service():
     return service
 
 
+def make_date_based_service():
+    """Build a date-based service (no explicit doc_id) with the Proclaim DB mocked."""
+    with mock.patch.object(ps, "ProclaimDB"):
+        service = ps.ProclaimYjsService("http://localhost:8000")
+    service.get_ysweet_token = mock.AsyncMock(return_value={"url": "ws://test"})
+    return service
+
+
 @contextlib.contextmanager
 def patched_connection(websocket):
     """Patch aconnect_ws/Provider so a session uses the given fake websocket."""
@@ -142,7 +151,7 @@ async def test_reconnects_after_websocket_drop(fast_timing):
     """A silently dropped websocket triggers reconnect-with-backoff, not death."""
     service = make_service()
     service._fetch_status = mock.AsyncMock(return_value=status())
-    service._wait_until_on_air = mock.AsyncMock()
+    service._wait_until_on_air = mock.AsyncMock(return_value=status())
 
     # Each session connects with a websocket that dies on its 2nd ping.
     websockets = [FakeWebSocket(fail_ping_after=2) for _ in range(5)]
@@ -180,7 +189,7 @@ async def test_reconnects_after_websocket_drop(fast_timing):
 async def test_reconnects_after_failed_token_fetch(fast_timing):
     """A cold/slow Y-Sweet (token fetch fails) is retried, not fatal."""
     service = make_service()
-    service._wait_until_on_air = mock.AsyncMock()
+    service._wait_until_on_air = mock.AsyncMock(return_value=status())
 
     calls = {"n": 0}
 
@@ -440,6 +449,84 @@ async def test_existing_translation_passed_to_translate(fast_timing):
         await service._translate_pending_items()
 
     assert captured['existing'] == 'Bonjou'
+
+
+def test_parse_date_given_variants():
+    """DateGiven parsing accepts plain dates (and a stray time), rejects junk."""
+    parse = ps.ProclaimYjsService._parse_date_given
+    assert parse("2025-03-02") == date(2025, 3, 2)
+    assert parse("2025-03-02T10:30:00") == date(2025, 3, 2)
+    assert parse("2025-03-02 10:30") == date(2025, 3, 2)
+    assert parse("") is None
+    assert parse("not-a-date") is None
+    assert parse(None) is None
+
+
+def test_resolve_doc_uses_show_date():
+    """Date-based doc is anchored to the on-air show's DateGiven, with a fresh Doc."""
+    service = make_date_based_service()
+    service.db.get_presentation = mock.MagicMock(
+        return_value={"date_given": "2030-01-15", "content": {}}
+    )
+    old_doc = service.ydoc
+
+    service._resolve_doc_for_session("pres-1")
+
+    assert service.doc_id == "doc-2030-01-15"
+    assert service.doc_date_from_show is True
+    assert service.current_doc_date == date(2030, 1, 15)
+    assert service.ydoc is not old_doc  # doc recreated for the new target
+    # Anchored to a show date => never rolls over at wall-clock midnight.
+    assert service._date_rolled_over() is False
+
+
+def test_resolve_doc_falls_back_to_today_without_show_date():
+    """A show with no usable date falls back to today and stays midnight-rollable."""
+    service = make_date_based_service()
+    service.db.get_presentation = mock.MagicMock(
+        return_value={"date_given": None, "content": {}}
+    )
+
+    service._resolve_doc_for_session("pres-1")
+
+    assert service.doc_id == ps.ProclaimYjsService._get_date_based_doc_id(date.today())
+    assert service.doc_date_from_show is False
+    assert service.current_doc_date == date.today()
+
+
+def test_resolve_doc_falls_back_when_presentation_missing():
+    """A missing presentation row (DB trailing the API) falls back to today."""
+    service = make_date_based_service()
+    service.db.get_presentation = mock.MagicMock(return_value=None)
+
+    service._resolve_doc_for_session("pres-x")
+
+    assert service.doc_date_from_show is False
+    assert service.current_doc_date == date.today()
+
+
+def test_resolve_doc_noop_with_explicit_doc_id():
+    """An explicit doc_id override is left untouched (no DB read, no Doc swap)."""
+    service = make_service()  # explicit doc_id="doc-test"
+    old_doc = service.ydoc
+
+    service._resolve_doc_for_session("pres-1")
+
+    assert service.doc_id == "doc-test"
+    assert service.ydoc is old_doc
+    assert service.doc_date_from_show is False
+
+
+async def test_wait_until_on_air_returns_status(fast_timing):
+    """_wait_until_on_air hands the on-air status back so the caller can resolve the doc."""
+    service = make_service()
+    service._fetch_status = mock.AsyncMock(return_value=status(item_id="item-7"))
+
+    with anyio.fail_after(2):
+        result = await service._wait_until_on_air()
+
+    assert result["status"]["itemId"] == "item-7"
+    assert result["presentationId"] == "pres-1"
 
 
 def test_recreate_doc_resets_state():
