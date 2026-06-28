@@ -26,7 +26,8 @@ MAIN_CONTENT_KEYS = {
 }
 
 # Item kinds / titles that render as a blank slide (no translatable text).
-BLANK_ITEM_KINDS = ['ImageSlideshow']
+# 'Grouping' is an image-slideshow grouping container - no translatable text.
+BLANK_ITEM_KINDS = ['ImageSlideshow', 'Grouping']
 BLANK_ITEM_TITLES = ['blank', 'ncf slide', 'offering slide']
 
 from lxml import etree
