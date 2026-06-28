@@ -15,13 +15,7 @@ import "@livekit/components-styles";
 import { LocalAudioTrack, Track } from "livekit-client";
 import { isEditorAtom } from "./configAtoms";
 import { useStrings } from "./useLocale";
-import { LiveTranscript } from "./LiveTranscript";
 import { getDocId } from "./getDocId";
-
-// The default/primary translator bridge transcribes the speaker's own audio and
-// writes it to the shared Yjs doc under this code, so the broadcaster can read
-// back exactly what's being captured.
-const SOURCE_TRANSCRIPT_CODE = "en";
 
 interface TranslationInfo {
   language: string;
@@ -109,11 +103,7 @@ function BroadcastDashboard({ docId }: { docId: string }) {
         </span>
       </div>
       <MicLevelMeter />
-      <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
-        {s.englishTranscript}
-      </h3>
-      <LiveTranscript langCode={SOURCE_TRANSCRIPT_CODE} />
-      <div className="overflow-auto max-h-40">
+      <div className="flex-1 overflow-auto">
         <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300 mb-1">
           {s.activeTranslations}
         </h3>
