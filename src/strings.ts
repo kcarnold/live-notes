@@ -51,6 +51,8 @@ export interface AppStrings {
 
   // Live audio translation (Gemini Live + LiveKit)
   listenLive: string;
+  stopAudio: string;
+  englishTranscript: string;
   liveListening: string;
   waitingForSpeaker: string;
   waitingForSpeech: string;
@@ -98,6 +100,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'No content yet',
     notTranslated: '(not translated)',
     listenLive: 'Listen live',
+    stopAudio: 'Stop audio',
+    englishTranscript: 'English transcript',
     liveListening: 'Listening live',
     waitingForSpeaker: 'Waiting for the speaker…',
     waitingForSpeech: 'Waiting for translated speech…',
@@ -145,6 +149,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Aucun contenu pour l\u2019instant',
     notTranslated: '(non traduit)',
     listenLive: 'Écouter en direct',
+    stopAudio: 'Couper le son',
+    englishTranscript: 'Transcription anglaise',
     liveListening: 'Écoute en direct',
     waitingForSpeaker: 'En attente de l’orateur…',
     waitingForSpeech: 'En attente de la traduction vocale…',
@@ -192,6 +198,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Sin contenido a\u00fan',
     notTranslated: '(no traducido)',
     listenLive: 'Escuchar en vivo',
+    stopAudio: 'Detener audio',
+    englishTranscript: 'Transcripción en inglés',
     liveListening: 'Escuchando en vivo',
     waitingForSpeaker: 'Esperando al orador…',
     waitingForSpeech: 'Esperando la traducción hablada…',
@@ -239,6 +247,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Pa gen kontni pou kounye a',
     notTranslated: '(pa tradui)',
     listenLive: 'Koute an dirèk',
+    stopAudio: 'Sispann odyo',
+    englishTranscript: 'Transkripsyon anglè',
     liveListening: 'Ap koute an dirèk',
     waitingForSpeaker: 'N ap tann moun k ap pale a…',
     waitingForSpeech: 'N ap tann tradiksyon vokal la…',
