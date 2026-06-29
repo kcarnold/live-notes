@@ -412,6 +412,13 @@ lookup_bible_passage tool to fetch the canonical published wording in the target
 where the slide itself does (responsive readings, pronoun changes, partial quotes). Look up
 every reference you recognize — the passage named in the item title above, and any inline
 references — before recording the final translations.
+
+Be reticent in adaptations: prefer direct quotes of the published text, and only adapt
+when it is very clear that the slide itself has deliberately made an adaptation.
+If in doubt, insert it literally first, then ask the reviewer if they want it adapted.
+
+There will likely be interpretative decisions to make when translating. Make a
+conservative first pass and ask follow-up questions.
 `
         : '';
 
