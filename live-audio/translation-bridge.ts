@@ -168,7 +168,9 @@ export class TranslationBridge {
 
   /** Emit a telemetry event tagged with this bridge's language and identity. */
   private record(event: string, properties: Record<string, unknown> = {}): void {
-    this.recordEvent?.(event, {
+    if (!this.recordEvent) return;
+    console.log(`[TranslationBridge:${this.targetLanguage}] telemetry: ${event}`, properties);
+    this.recordEvent(event, {
       targetLanguage: this.targetLanguage,
       identity: this.identity,
       ...properties,
@@ -177,7 +179,7 @@ export class TranslationBridge {
 
   async start(): Promise<void> {
     console.log(
-      `[TranslationBridge:${this.targetLanguage}] Starting bridge for session ${this.sessionId}`
+      `[TranslationBridge:${this.targetLanguage}] Starting bridge for session ${this.sessionId} (telemetry: ${this.recordEvent ? 'enabled' : 'DISABLED'})`
     );
 
     try {

@@ -579,3 +579,14 @@ app.listen(app.get("port"), () => {
 }).on('error', (error) => {
   console.error('Server error:', error);
 });
+
+// Flush PostHog before the process exits so events queued in the 10s batch window
+// aren't lost when Docker sends SIGTERM.
+process.on('SIGTERM', async () => {
+  await phClient.shutdown();
+  process.exit(0);
+});
+process.on('SIGINT', async () => {
+  await phClient.shutdown();
+  process.exit(0);
+});
