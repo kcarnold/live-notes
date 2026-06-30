@@ -26,7 +26,8 @@ MAIN_CONTENT_KEYS = {
 }
 
 # Item kinds / titles that render as a blank slide (no translatable text).
-BLANK_ITEM_KINDS = ['ImageSlideshow']
+# 'Grouping' is an image-slideshow grouping container - no translatable text.
+BLANK_ITEM_KINDS = ['ImageSlideshow', 'Grouping']
 BLANK_ITEM_TITLES = ['blank', 'ncf slide', 'offering slide']
 
 from lxml import etree
@@ -241,7 +242,7 @@ class ProclaimDB:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT PresentationId, Content FROM Presentations WHERE PresentationId = ?",
+                "SELECT PresentationId, DateGiven, Content FROM Presentations WHERE PresentationId = ?",
                 (presentation_id,)
             )
             row = cursor.fetchone()
@@ -249,7 +250,8 @@ class ProclaimDB:
                 return None
             return {
                 'id': row[0],
-                'content': json.loads(row[1])
+                'date_given': row[1],
+                'content': json.loads(row[2])
             }
 
     def get_presentations(self, limit: int = 10) -> List[Dict[str, Any]]:

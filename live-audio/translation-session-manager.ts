@@ -16,6 +16,18 @@ import { TranscriptWriter } from "./transcript-writer.ts";
 import { TranslationBridge } from "./translation-bridge.ts";
 import type { BridgeStatus } from "./translation-bridge.ts";
 
+/**
+ * Minimal telemetry client (structurally satisfied by the PostHog node client).
+ * Kept local so the translation layer doesn't depend on posthog-node directly.
+ */
+export interface TelemetryClient {
+  capture(args: {
+    distinctId: string;
+    event: string;
+    properties?: Record<string, unknown>;
+  }): void;
+}
+
 export interface TranslationInfo {
   language: string;
   translatorIdentity: string;
@@ -74,6 +86,7 @@ class TranslationSessionManager {
 
   private documentManager: DocumentManager | null = null;
   private livekitConfig: LiveKitConfig | null = null;
+  private telemetry: TelemetryClient | null = null;
   private reaperTimer: ReturnType<typeof setInterval> | null = null;
 
   private constructor() {}
@@ -89,9 +102,14 @@ class TranslationSessionManager {
    * Provide the dependencies the manager needs to persist transcripts and reap
    * idle bots. Called once from the server at boot.
    */
-  init(opts: { documentManager: DocumentManager; livekit: LiveKitConfig }): void {
+  init(opts: {
+    documentManager: DocumentManager;
+    livekit: LiveKitConfig;
+    telemetry?: TelemetryClient;
+  }): void {
     this.documentManager = opts.documentManager;
     this.livekitConfig = opts.livekit;
+    this.telemetry = opts.telemetry ?? null;
     this.startReaper();
   }
 
@@ -114,11 +132,11 @@ class TranslationSessionManager {
   /**
    * Ensure translation is running for a language and return its bridge.
    *
-   * Side effects that keep the English transcript available cheaply:
-   *  - ensures the default/primary bridge (DEFAULT_LANGUAGE) is running while
-   *    anyone is listening — it is the sole writer of the source transcript;
-   *  - on the first bridge for a session (a fresh talk), clears any stale
-   *    transcript left in the day-scoped doc by a previous service.
+   * Always keeps the English transcript available cheaply by ensuring the
+   * default/primary bridge (DEFAULT_LANGUAGE) runs while anyone is listening —
+   * it is the sole writer of the source transcript. The transcript is never
+   * cleared here: it accumulates in the day-scoped doc for accountability, so a
+   * transient drop-to-zero-listeners and rejoin can't wipe a live talk.
    */
   async getOrCreate(
     sessionId: string,
@@ -129,14 +147,7 @@ class TranslationSessionManager {
     // has finished joining the LiveKit room.
     this.lastHealthyAt.set(sessionId, Date.now());
 
-    const existingMap = this.translations.get(sessionId);
-    const isFirstBridge = !existingMap || existingMap.size === 0;
-
     const writer = this.getOrCreateWriter(sessionId);
-    if (writer && isFirstBridge) {
-      // Clear before any bridge can append, so a new talk starts clean.
-      await writer.clearAll();
-    }
 
     // Always keep the default bridge alive (the source-transcript writer).
     const defaultBridge = await this.ensureBridge(
@@ -199,6 +210,14 @@ class TranslationSessionManager {
       this.translations.set(sessionId, languageMap);
     }
 
+    // Per-session telemetry sink: tag every bridge event with the session as the
+    // distinctId so a talk's full reconnect history groups together in PostHog.
+    const telemetry = this.telemetry;
+    const recordEvent = telemetry
+      ? (event: string, properties: Record<string, unknown>) =>
+          telemetry.capture({ distinctId: sessionId, event, properties: { ...properties, sessionId } })
+      : null;
+
     const config = {
       geminiApiKey: process.env.GEMINI_API_KEY!,
       livekitUrl: this.livekitConfig?.url ?? process.env.LIVEKIT_URL ?? process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "ws://localhost:7880",
@@ -206,6 +225,7 @@ class TranslationSessionManager {
       livekitApiSecret: this.livekitConfig?.apiSecret ?? process.env.LIVEKIT_API_SECRET!,
       writer,
       writesSourceTranscript: opts.writesSourceTranscript,
+      recordEvent,
     };
 
     console.log(`[SessionManager] Creating new bridge for ${targetLanguage} in session ${sessionId}`);

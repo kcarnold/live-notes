@@ -69,6 +69,8 @@ from proclaim_lib import (
     service_item_signatures,
     slide_translation_key,
     slides_hash,
+    get_translation_screen_idx,
+    existing_translation_text,
 )
 
 # Configure logging (default level, can be overridden by --debug flag)
@@ -91,6 +93,9 @@ POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))
 # Proclaim localRevision is unchanged are not re-parsed, so this is cheap; the interval
 # just bounds how quickly a slide edited underneath us is picked up.
 SERVICE_ORDER_SYNC_INTERVAL = float(os.getenv('PROCLAIM_SERVICE_ORDER_SYNC_INTERVAL', '2.0'))  # seconds
+# How long the background translation worker idles when there's nothing left to translate.
+# Translation runs off the poll loop so a slow translation never stalls status polling.
+TRANSLATION_SCAN_INTERVAL = float(os.getenv('PROCLAIM_TRANSLATION_SCAN_INTERVAL', '1.0'))  # seconds
 # Target languages to pre-translate slides into (must match the frontend's configured
 # languages). The service asks the server to translate the active item into these and
 # writes the reviewed-or-auto results into the per-day slideTranslations map.
@@ -203,6 +208,13 @@ class ProclaimYjsService:
             self.doc_id = doc_id
             self.current_doc_date = None
 
+        # Whether current_doc_date came from the on-air show's DateGiven (authoritative,
+        # set per session) rather than wall-clock today. When the date is anchored to a
+        # show we don't roll the doc at midnight - the show's date is the source of truth,
+        # so a service started the night before for a future-dated show targets the right
+        # doc. Only the wall-clock fallback rolls over at midnight.
+        self.doc_date_from_show = False
+
         # Yjs state
         self.ydoc: Doc = Doc()
         self.presentations_map = self.ydoc.get('proclaimPresentations', type=Map)
@@ -222,18 +234,80 @@ class ProclaimYjsService:
         # last parsed them at, so we only re-read the DB when an item actually changes.
         self.items_by_id: Dict[str, ServiceItemWithSlides] = {}
         self.item_revisions: Dict[str, str] = {}
-        # Revision signature we last translated each item at, so we re-translate only
-        # when an item's slides actually change.
-        self.translated_revisions: Dict[str, str] = {}
+        # Slides-content hash we last attempted to translate each item at. Lets the worker
+        # translate each content version once (and re-attempt when slides change underneath
+        # us) without re-hitting the server on every scan.
+        self.translated_hashes: Dict[str, str] = {}
+        # Current presentation id (from status) and the translation-screen index we computed
+        # for it, so the worker can pull each item's existing translation as grounding without
+        # recomputing the screen index every time.
+        self.current_presentation_id: Optional[str] = None
+        self._translation_screen_pres_id: Optional[str] = None
+        self._translation_screen_idx: Optional[int] = None
 
     @staticmethod
-    def _get_date_based_doc_id() -> str:
-        """Generate doc ID based on current date"""
-        return f'doc-{date.today().isoformat()}'
+    def _get_date_based_doc_id(d: Optional[date] = None) -> str:
+        """Generate doc ID based on a date (defaults to today)."""
+        return f'doc-{(d or date.today()).isoformat()}'
+
+    @staticmethod
+    def _parse_date_given(raw: Any) -> Optional[date]:
+        """Parse a Proclaim ``DateGiven`` value (e.g. ``"2025-03-02"``) into a date.
+
+        Returns None when the value is missing or not a parseable ISO date, so the
+        caller can fall back to wall-clock today.
+        """
+        if not isinstance(raw, str):
+            return None
+        # DateGiven is a date string but tolerate an accidental time component.
+        token = raw.strip().replace('T', ' ').split(' ')[0]
+        try:
+            return date.fromisoformat(token)
+        except ValueError:
+            return None
+
+    def _read_show_date(self, presentation_id: Optional[str]) -> Optional[date]:
+        """Read the on-air presentation's DateGiven as a date, or None if unavailable.
+
+        Tolerates a missing row (DB trailing the live API) or any DB/parse problem by
+        returning None; the caller then falls back to today's date.
+        """
+        if not presentation_id:
+            return None
+        try:
+            pres = self.db.get_presentation(presentation_id)
+        except Exception as e:
+            logger.warning(f"Could not read date for presentation {presentation_id}: {e}")
+            return None
+        if not pres:
+            return None
+        return self._parse_date_given(pres.get('date_given'))
+
+    def _resolve_doc_for_session(self, presentation_id: Optional[str]) -> None:
+        """Point the (date-based) doc id at the on-air show's date before connecting.
+
+        Uses the presentation's ``DateGiven`` when available, otherwise wall-clock today.
+        Recreates the Doc when the id changes so a new target doesn't inherit the prior
+        session's slides. No-op when an explicit doc_id override is in effect.
+        """
+        if not self.use_date_based_doc_id:
+            return
+
+        show_date = self._read_show_date(presentation_id)
+        new_date = show_date if show_date is not None else date.today()
+        self.doc_date_from_show = show_date is not None
+        new_doc_id = self._get_date_based_doc_id(new_date)
+
+        if new_doc_id != self.doc_id:
+            source = "show DateGiven" if show_date is not None else "today"
+            logger.info(f"Resolved doc from {source}: {self.doc_id} → {new_doc_id}")
+            self.doc_id = new_doc_id
+            self._recreate_doc()
+        self.current_doc_date = new_date
 
     def _check_doc_id_change(self) -> bool:
         """Check if date-based doc ID has changed. Returns True if changed."""
-        if not self.use_date_based_doc_id:
+        if not self.use_date_based_doc_id or self.doc_date_from_show:
             return False
 
         today = date.today()
@@ -251,7 +325,11 @@ class ProclaimYjsService:
         Used inside a live session (where we must not swap the Doc out from under an
         active Provider) to decide we should end the session and roll over.
         """
-        return self.use_date_based_doc_id and date.today() != self.current_doc_date
+        return (
+            self.use_date_based_doc_id
+            and not self.doc_date_from_show
+            and date.today() != self.current_doc_date
+        )
 
     def _recreate_doc(self) -> None:
         """Start a fresh Y.Doc so a new day's document doesn't inherit yesterday's slides."""
@@ -265,7 +343,10 @@ class ProclaimYjsService:
         self.current_item_slides = None
         self.items_by_id = {}
         self.item_revisions = {}
-        self.translated_revisions = {}
+        self.translated_hashes = {}
+        self.current_presentation_id = None
+        self._translation_screen_pres_id = None
+        self._translation_screen_idx = None
         logger.info(f"Recreated Yjs document for {self.doc_id}")
 
     def _maybe_roll_doc_date(self) -> None:
@@ -419,22 +500,33 @@ class ProclaimYjsService:
             return None
 
     async def _translate_item(
-        self, slides: list, item_title: Optional[str] = None
+        self,
+        slides: list,
+        item_title: Optional[str] = None,
+        item_id: Optional[str] = None,
+        existing_translation: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Ask the server to translate an item's slides into all target languages.
 
         Returns the ``{language: [{text, status, provenance}, ...]}`` map, or None on
-        failure (translation is best-effort; a failure must not drop the session). Any
-        reference text for a better first draft is supplied by an operator on the review
-        screen, not by this service. ``item_title`` is forwarded as a lookup cue: for a
-        Bible reading the title is the citation (e.g. "Psalm 23") and is usually absent
-        from the slide text, so it's the model's only hint to fetch the passage.
+        failure (translation is best-effort; a failure must not drop the session).
+        ``item_title`` is forwarded as a lookup cue: for a Bible reading the title is the
+        citation (e.g. "Psalm 23") and is usually absent from the slide text, so it's the
+        model's only hint to fetch the passage. ``item_id`` keys the agent conversation
+        server-side so the review screen can pull it up by item. ``existing_translation`` is
+        any translation already present in Proclaim's translation screen — passed as
+        grounding the model can keep where good and correct where not (it may itself be
+        machine-generated).
         """
         if not slides or not SLIDE_TRANSLATION_LANGUAGES:
             return None
         body: Dict[str, Any] = {"slides": slides, "languages": SLIDE_TRANSLATION_LANGUAGES}
         if item_title and item_title != "Unknown":
             body["itemTitle"] = item_title
+        if item_id:
+            body["itemId"] = item_id
+        if existing_translation:
+            body["existingTranslation"] = existing_translation
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -473,31 +565,112 @@ class ProclaimYjsService:
                         'provenance': entry.get('provenance', 'llm'),
                     }
 
-    async def _translate_active_item(self, item_id: Optional[str]) -> None:
-        """Translate the active item once per content change and store the results.
+    def _existing_translation_for(self, item_id: str) -> Optional[str]:
+        """Proclaim's own translation-screen text for an item, joined, or None.
 
-        Reviewed library entries come back as ``reviewed``; everything else as ``auto``
-        (the viewer badges these unreviewed). Skipped when we've already translated this
-        item's current revision.
+        The translation-screen index is a presentation-level property, so we compute it once
+        per presentation and cache it. Best-effort: any DB/parse problem yields None (the
+        item is just translated without this grounding).
         """
-        item = self.items_by_id.get(item_id) if item_id else None
-        if not item or not item.slides:
-            return
-        revision = self.item_revisions.get(item_id)
-        if self.translated_revisions.get(item_id) == revision:
-            return
+        presentation_id = self.current_presentation_id
+        if not presentation_id:
+            return None
+        try:
+            if self._translation_screen_pres_id != presentation_id:
+                presentation = self.db.get_presentation(presentation_id)
+                content = presentation.get('content') if presentation else None
+                self._translation_screen_idx = (
+                    get_translation_screen_idx(content) if content else None
+                )
+                self._translation_screen_pres_id = presentation_id
+            if self._translation_screen_idx is None:
+                return None
+            return existing_translation_text(self.db, item_id, self._translation_screen_idx)
+        except Exception as e:
+            logger.debug(f"No existing translation for {item_id}: {e}")
+            return None
 
-        translations = await self._translate_item(item.slides, item.title)
-        if translations:
-            self._store_translations(item.slides, translations)
-            self.translated_revisions[item_id] = revision
-            logger.info(f"Stored translations for item {item_id} ({item.title})")
+    def _item_has_missing_translation(self, item: ServiceItemWithSlides) -> bool:
+        """True if any non-empty slide lacks a translation in any target language.
 
-    async def _wait_until_on_air(self) -> None:
+        Content-addressed: a slide whose text changed underneath us is a fresh key and so
+        a miss, which is how a mid-show edit gets re-translated.
+        """
+        for language in SLIDE_TRANSLATION_LANGUAGES:
+            for slide in item.slides:
+                if not slide.strip():
+                    continue
+                if slide_translation_key(language, slide) not in self.slide_translations_map:
+                    return True
+        return False
+
+    def _translation_scan_order(self) -> list:
+        """Item ids to consider translating, active item first, then upcoming, then past.
+
+        Rotating the service order so the active item leads means a newly on-air item is
+        picked up on the next scan even while we were working ahead on later items.
+        """
+        order = list(self.service_order_map['order']) if 'order' in self.service_order_map else []
+        active = self.status_map['itemId'] if 'itemId' in self.status_map else None
+        if active and active in order:
+            i = order.index(active)
+            return order[i:] + order[:i]
+        return order
+
+    async def _translate_pending_items(self) -> bool:
+        """Translate one item that still has missing translations, if any.
+
+        Scans the service order (active first); the first item whose current slide content
+        we haven't yet attempted and that has a cache miss is translated and stored. Returns
+        True if it did a unit of work (so the caller re-scans immediately), False when
+        everything reachable is already covered. Each content version is attempted once —
+        recorded by slides hash — so a failed or partial translation doesn't spin.
+        """
+        for item_id in self._translation_scan_order():
+            item = self.items_by_id.get(item_id)
+            if not item or not item.slides:
+                continue
+            current_hash = slides_hash(item.slides)
+            if self.translated_hashes.get(item_id) == current_hash:
+                continue  # already handled this content version
+            if not self._item_has_missing_translation(item):
+                # Fully covered already (e.g. warm-started from the library) — mark and skip.
+                self.translated_hashes[item_id] = current_hash
+                continue
+
+            existing = self._existing_translation_for(item_id)
+            translations = await self._translate_item(item.slides, item.title, item_id, existing)
+            # Mark attempted even on failure so we don't hammer the same content; a real
+            # content change produces a new hash and another attempt.
+            self.translated_hashes[item_id] = current_hash
+            if translations:
+                self._store_translations(item.slides, translations)
+                logger.info(f"Translated item {item_id} ({item.title})")
+            return True
+        return False
+
+    async def _translation_worker(self) -> None:
+        """Background loop that pre-translates items off the poll loop.
+
+        Runs for the life of a session. Keeps translating pending items back-to-back, then
+        idles when there's nothing left. Errors are reported but never end the worker.
+        """
+        while True:
+            try:
+                did_work = await self._translate_pending_items()
+            except Exception as e:  # best-effort: never let a translation kill the worker
+                logger.warning(f"Translation worker error: {e}")
+                if ph: ph.capture_exception(e, distinct_id=DISTINCT_ID)
+                did_work = False
+            await anyio.sleep(0 if did_work else TRANSLATION_SCAN_INTERVAL)
+
+    async def _wait_until_on_air(self) -> Dict[str, Any]:
         """Poll Proclaim until it reports on air, holding NO Y-Sweet connection.
 
-        We don't open (or keep) a Y-Sweet connection while nothing is happening, so
-        we never depend on a connection that was established long before it was needed.
+        Returns the first on-air status (so the caller can resolve the doc from the
+        show before connecting). We don't open (or keep) a Y-Sweet connection while
+        nothing is happening, so we never depend on a connection that was established
+        long before it was needed.
         """
         announced = False
         while True:
@@ -505,7 +678,7 @@ class ProclaimYjsService:
             status = await self._fetch_status()
             if status is not None:
                 logger.info("Proclaim is on air - connecting to Y-Sweet")
-                return
+                return status
             if not announced:
                 logger.info("Waiting for Proclaim to go on air (no Y-Sweet connection held)")
                 announced = True
@@ -531,66 +704,79 @@ class ProclaimYjsService:
             self.last_item_id = None
             self.last_slide_index = None
 
-            off_air_since: Optional[float] = None
-            last_ping = anyio.current_time()
-            last_order_sync = float('-inf')  # force an immediate sync on connect
-            while True:
-                # Don't swap the Doc while connected; end the session and let the
-                # caller roll the date with a fresh Doc, then reconnect.
-                if self._date_rolled_over():
-                    logger.info("Date changed - ending session to roll the document")
+            # Run translation off the poll loop: a slow translation must never stall status
+            # polling (which is what caused us to miss fast-changing items). The worker is
+            # scoped to this session and torn down when the poll loop ends or raises.
+            async with anyio.create_task_group() as session_tg:
+                session_tg.start_soon(self._translation_worker)
+                await self._poll_until_session_end(websocket)
+                session_tg.cancel_scope.cancel()
+
+    async def _poll_until_session_end(self, websocket) -> None:
+        """Poll Proclaim and push status/order to Yjs until the session should end.
+
+        Returns on a sustained off-air period or a date rollover; raises on a websocket
+        problem (so run() reconnects). Translation runs in the background worker, so a slow
+        translation can't delay polling.
+        """
+        off_air_since: Optional[float] = None
+        last_ping = anyio.current_time()
+        last_order_sync = float('-inf')  # force an immediate sync on connect
+        while True:
+            # Don't swap the Doc while connected; end the session and let the
+            # caller roll the date with a fresh Doc, then reconnect.
+            if self._date_rolled_over():
+                logger.info("Date changed - ending session to roll the document")
+                return
+
+            status = await self._fetch_status()
+            if status is None:
+                now = anyio.current_time()
+                if off_air_since is None:
+                    off_air_since = now
+                    logger.info("Off air - will disconnect from Y-Sweet if it persists")
+                elif now - off_air_since >= OFF_AIR_DISCONNECT_AFTER:
+                    logger.info("Off air long enough - disconnecting from Y-Sweet")
                     return
+                await anyio.sleep(POLL_INTERVAL_OFF_AIR)
+                continue
 
-                status = await self._fetch_status()
-                if status is None:
-                    now = anyio.current_time()
-                    if off_air_since is None:
-                        off_air_since = now
-                        logger.info("Off air - will disconnect from Y-Sweet if it persists")
-                    elif now - off_air_since >= OFF_AIR_DISCONNECT_AFTER:
-                        logger.info("Off air long enough - disconnecting from Y-Sweet")
-                        return
-                    await anyio.sleep(POLL_INTERVAL_OFF_AIR)
-                    continue
+            off_air_since = None
 
-                off_air_since = None
+            # Remember the current presentation so the translation worker can locate the
+            # right translation screen for existing-translation grounding.
+            self.current_presentation_id = status.get('presentationId') or self.current_presentation_id
 
-                # Refresh the full service order periodically, or immediately when the
-                # active item isn't in our cache yet (e.g. right after connecting).
-                now = anyio.current_time()
-                active_item = status.get('status', {}).get('itemId')
-                if (
-                    now - last_order_sync >= SERVICE_ORDER_SYNC_INTERVAL
-                    or (active_item and active_item not in self.items_by_id)
-                ):
-                    presentation = await self._fetch_onair_presentation()
-                    if presentation:
-                        if DUMP_PRESENTATION_JSON:
-                            Path('presentation.json').write_text(json.dumps(presentation, indent=2))
-                        self._sync_service_order(presentation)
-                    last_order_sync = now
+            # Refresh the full service order periodically, or immediately when the
+            # active item isn't in our cache yet (e.g. right after connecting).
+            now = anyio.current_time()
+            active_item = status.get('status', {}).get('itemId')
+            if (
+                now - last_order_sync >= SERVICE_ORDER_SYNC_INTERVAL
+                or (active_item and active_item not in self.items_by_id)
+            ):
+                presentation = await self._fetch_onair_presentation()
+                if presentation:
+                    if DUMP_PRESENTATION_JSON:
+                        Path('presentation.json').write_text(json.dumps(presentation, indent=2))
+                    self._sync_service_order(presentation)
+                last_order_sync = now
 
-                self._apply_status(status)
+            self._apply_status(status)
 
-                # Translate the active item (best-effort) so viewers have content; only
-                # re-translates when the item's slides change.
-                await self._translate_active_item(
-                    status.get('status', {}).get('itemId'),
-                )
-
-                # Health check (throttled to WS_PING_INTERVAL, separate from the
-                # faster slide-poll cadence). The keepalive task is what actually
-                # detects a silent/half-open drop - it waits for the pong and closes
-                # the socket on timeout - but it reports that only through recv(),
-                # which the Provider swallows. So we send here too: once the socket
-                # is closed, this raises in our scope and reaches the reconnect loop
-                # in run(). (Our send doesn't await a pong, so on its own it can't
-                # spot a half-open connection - hence the dependency on keepalive.)
-                now = anyio.current_time()
-                if now - last_ping >= WS_PING_INTERVAL:
-                    await websocket.ping()
-                    last_ping = now
-                await anyio.sleep(POLL_INTERVAL)
+            # Health check (throttled to WS_PING_INTERVAL, separate from the
+            # faster slide-poll cadence). The keepalive task is what actually
+            # detects a silent/half-open drop - it waits for the pong and closes
+            # the socket on timeout - but it reports that only through recv(),
+            # which the Provider swallows. So we send here too: once the socket
+            # is closed, this raises in our scope and reaches the reconnect loop
+            # in run(). (Our send doesn't await a pong, so on its own it can't
+            # spot a half-open connection - hence the dependency on keepalive.)
+            now = anyio.current_time()
+            if now - last_ping >= WS_PING_INTERVAL:
+                await websocket.ping()
+                last_ping = now
+            await anyio.sleep(POLL_INTERVAL)
 
     async def run(self):
         """Main service loop: wait for on air, connect, sync, reconnect on failure."""
@@ -603,7 +789,9 @@ class ProclaimYjsService:
         while True:
             try:
                 # Phase 1: no connection held until Proclaim is actually on air.
-                await self._wait_until_on_air()
+                on_air_status = await self._wait_until_on_air()
+                # Anchor the date-based doc to the on-air show's date before connecting.
+                self._resolve_doc_for_session(on_air_status.get('presentationId'))
                 # Phase 2: connect and sync until off air / date roll / disconnect.
                 await self._run_session()
                 # Clean end of a session - reset backoff for the next connect.
@@ -634,7 +822,12 @@ async def main():
     """Entry point with signal handling"""
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Proclaim Service - Syncs Proclaim to Yjs')
-    parser.add_argument('doc_id', nargs='?', help='Document ID (default: date-based doc-YYYY-MM-DD)')
+    parser.add_argument(
+        'doc_id',
+        nargs='?',
+        help="Document ID override. Default: doc-YYYY-MM-DD from the on-air show's "
+             "DateGiven (falling back to today's date).",
+    )
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     args = parser.parse_args()
 

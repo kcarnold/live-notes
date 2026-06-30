@@ -52,6 +52,8 @@ export interface AppStrings {
 
   // Live audio translation (Gemini Live + LiveKit)
   listenLive: string;
+  stopAudio: string;
+  englishTranscript: string;
   liveListening: string;
   waitingForSpeaker: string;
   waitingForSpeech: string;
@@ -81,7 +83,6 @@ export interface AppStrings {
   // Slide translation review
   slideReviewTitle: string;
   slidesInputLabel: string;
-  referenceLabel: string;
   loadOnAirItem: string;
   suggestTranslations: string;
   suggesting: string;
@@ -98,6 +99,13 @@ export interface AppStrings {
   editorOnlyReview: string;
   reviewSlidesLink: string;
   unreviewedBadge: string;
+  conversationHeader: string;
+  noConversation: string;
+  followUpPlaceholder: string;
+  sendMessage: string;
+  selectItemLabel: string;
+  sourceChangedWarning: string;
+  agentThinking: string;
 }
 
 export const strings: Record<SupportedLocale, AppStrings> = {
@@ -123,6 +131,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'No content yet',
     notTranslated: '(not translated)',
     listenLive: 'Listen live',
+    stopAudio: 'Stop audio',
+    englishTranscript: 'English transcript',
     liveListening: 'Listening live',
     waitingForSpeaker: 'Waiting for the speaker…',
     waitingForSpeech: 'Waiting for translated speech…',
@@ -151,7 +161,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Current Slide',
     slideReviewTitle: 'Slide Translation Review',
     slidesInputLabel: 'Item slides (separate slides with a blank line or --)',
-    referenceLabel: 'Reference text (optional) — paste existing translations in any of the target languages; the model uses what fits and ignores the rest',
     loadOnAirItem: 'Load on-air item',
     suggestTranslations: 'Suggest',
     suggesting: 'Suggesting…',
@@ -168,6 +177,13 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Open this page with #editor to edit and save translations.',
     reviewSlidesLink: 'Review Slide Translations',
     unreviewedBadge: 'unreviewed',
+    conversationHeader: 'Agent conversation',
+    noConversation: 'No conversation yet — Suggest to start one.',
+    followUpPlaceholder: 'Ask a question or give feedback…',
+    sendMessage: 'Send',
+    selectItemLabel: 'Service item',
+    sourceChangedWarning: 'Source slides changed since this was translated.',
+    agentThinking: 'Agent is working…',
   },
   fr: {
     connecting: 'Connexion\u2026',
@@ -191,6 +207,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Aucun contenu pour l\u2019instant',
     notTranslated: '(non traduit)',
     listenLive: 'Écouter en direct',
+    stopAudio: 'Couper le son',
+    englishTranscript: 'Transcription anglaise',
     liveListening: 'Écoute en direct',
     waitingForSpeaker: 'En attente de l’orateur…',
     waitingForSpeech: 'En attente de la traduction vocale…',
@@ -219,7 +237,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Diapositive actuelle',
     slideReviewTitle: 'Révision des traductions de diapositives',
     slidesInputLabel: 'Diapositives de l’élément (séparez par une ligne vide ou --)',
-    referenceLabel: 'Texte de référence (facultatif) — collez des traductions existantes dans l’une des langues cibles ; le modèle utilise ce qui convient et ignore le reste',
     loadOnAirItem: 'Charger l’élément à l’antenne',
     suggestTranslations: 'Suggérer',
     suggesting: 'Suggestion…',
@@ -236,6 +253,13 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Ouvrez cette page avec #editor pour modifier et enregistrer les traductions.',
     reviewSlidesLink: 'Réviser les traductions de diapositives',
     unreviewedBadge: 'non révisé',
+    conversationHeader: 'Conversation avec l’agent',
+    noConversation: 'Aucune conversation pour l’instant — cliquez sur Suggérer pour en démarrer une.',
+    followUpPlaceholder: 'Posez une question ou donnez un retour…',
+    sendMessage: 'Envoyer',
+    selectItemLabel: 'Élément du service',
+    sourceChangedWarning: 'Les diapositives source ont changé depuis cette traduction.',
+    agentThinking: 'L’agent travaille…',
   },
   es: {
     connecting: 'Conectando\u2026',
@@ -259,6 +283,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Sin contenido a\u00fan',
     notTranslated: '(no traducido)',
     listenLive: 'Escuchar en vivo',
+    stopAudio: 'Detener audio',
+    englishTranscript: 'Transcripción en inglés',
     liveListening: 'Escuchando en vivo',
     waitingForSpeaker: 'Esperando al orador…',
     waitingForSpeech: 'Esperando la traducción hablada…',
@@ -287,7 +313,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Diapositiva actual',
     slideReviewTitle: 'Revisi\u00f3n de traducciones de diapositivas',
     slidesInputLabel: 'Diapositivas del elemento (separe con una l\u00ednea en blanco o --)',
-    referenceLabel: 'Texto de referencia (opcional): pegue traducciones existentes en cualquiera de los idiomas de destino; el modelo usa lo que sirve e ignora el resto',
     loadOnAirItem: 'Cargar elemento al aire',
     suggestTranslations: 'Sugerir',
     suggesting: 'Sugiriendo\u2026',
@@ -304,6 +329,13 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Abra esta p\u00e1gina con #editor para editar y guardar traducciones.',
     reviewSlidesLink: 'Revisar traducciones de diapositivas',
     unreviewedBadge: 'sin revisar',
+    conversationHeader: 'Conversación con el agente',
+    noConversation: 'Aún no hay conversación — pulse Sugerir para iniciar una.',
+    followUpPlaceholder: 'Haga una pregunta o dé su opinión…',
+    sendMessage: 'Enviar',
+    selectItemLabel: 'Elemento del servicio',
+    sourceChangedWarning: 'Las diapositivas de origen cambiaron desde esta traducción.',
+    agentThinking: 'El agente está trabajando…',
   },
   ht: {
     connecting: 'Koneksyon\u2026',
@@ -327,6 +359,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Pa gen kontni pou kounye a',
     notTranslated: '(pa tradui)',
     listenLive: 'Koute an dirèk',
+    stopAudio: 'Sispann odyo',
+    englishTranscript: 'Transkripsyon anglè',
     liveListening: 'Ap koute an dirèk',
     waitingForSpeaker: 'N ap tann moun k ap pale a…',
     waitingForSpeech: 'N ap tann tradiksyon vokal la…',
@@ -355,7 +389,6 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentCurrentSlide: 'Diapozitiv aktyèl',
     slideReviewTitle: 'Revizyon Tradiksyon Diapozitiv',
     slidesInputLabel: 'Diapozitiv eleman an (separe ak yon liy vid oswa --)',
-    referenceLabel: 'Tèks referans (opsyonèl) — kole tradiksyon ki egziste deja nan nenpòt nan lang sib yo; modèl la sèvi ak sa ki bon epi li inyore rès la',
     loadOnAirItem: 'Chaje eleman k ap pase a',
     suggestTranslations: 'Sijere',
     suggesting: 'Ap sijere…',
@@ -372,5 +405,12 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     editorOnlyReview: 'Ouvri paj sa a ak #editor pou modifye ak anrejistre tradiksyon.',
     reviewSlidesLink: 'Revize Tradiksyon Diapozitiv',
     unreviewedBadge: 'pa revize',
+    conversationHeader: 'Konvèsasyon ak ajan an',
+    noConversation: 'Poko gen konvèsasyon — klike Sijere pou kòmanse youn.',
+    followUpPlaceholder: 'Poze yon kesyon oswa bay yon kòmantè…',
+    sendMessage: 'Voye',
+    selectItemLabel: 'Eleman sèvis la',
+    sourceChangedWarning: 'Diapozitiv sous yo chanje depi tradiksyon sa a.',
+    agentThinking: 'Ajan an ap travay…',
   },
 };
