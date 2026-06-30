@@ -19,6 +19,7 @@ export interface AppStrings {
 
   // Home page
   chooseLayout: string;
+  chooseLanguage: string;
 
   // Layout names
   layoutSlideAndTranslation: string;
@@ -77,6 +78,34 @@ export interface AppStrings {
   componentTranslatedText: string;
   componentBilingual: string;
   componentCurrentSlide: string;
+  componentListen: string;
+
+  // Slide translation review
+  slideReviewTitle: string;
+  slidesInputLabel: string;
+  loadOnAirItem: string;
+  suggestTranslations: string;
+  suggesting: string;
+  bibleLookupsLabel: string;
+  bibleLookupFound: string;
+  bibleLookupMissing: string;
+  save: string;
+  saveAll: string;
+  saving: string;
+  statusReviewed: string;
+  statusUnsaved: string;
+  reviewSourceHeader: string;
+  noSlidesToReview: string;
+  editorOnlyReview: string;
+  reviewSlidesLink: string;
+  unreviewedBadge: string;
+  conversationHeader: string;
+  noConversation: string;
+  followUpPlaceholder: string;
+  sendMessage: string;
+  selectItemLabel: string;
+  sourceChangedWarning: string;
+  agentThinking: string;
 }
 
 export const strings: Record<SupportedLocale, AppStrings> = {
@@ -86,9 +115,11 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Translation',
     bilingual: 'Bilingual',
     chooseLayout: 'Choose Layout',
+    chooseLanguage: 'Language',
     layoutSlideAndTranslation: 'Slide and Translation',
     layoutBilingualView: 'Bilingual View',
     layoutSlideAndListen: 'Slide and Listen',
+      componentListen: 'Listen',
     layoutEverything: 'Everything',
     decreaseFontSize: 'Decrease font size',
     increaseFontSize: 'Increase font size',
@@ -128,6 +159,31 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
     componentCurrentSlide: 'Current Slide',
+    slideReviewTitle: 'Slide Translation Review',
+    slidesInputLabel: 'Item slides (separate slides with a blank line or --)',
+    loadOnAirItem: 'Load on-air item',
+    suggestTranslations: 'Suggest',
+    suggesting: 'Suggesting…',
+    bibleLookupsLabel: 'Bible lookups',
+    bibleLookupFound: 'Found in',
+    bibleLookupMissing: 'No canonical text found',
+    save: 'Save',
+    saveAll: 'Save all reviewed',
+    saving: 'Saving…',
+    statusReviewed: 'Reviewed',
+    statusUnsaved: 'Unsaved',
+    reviewSourceHeader: 'Source',
+    noSlidesToReview: 'Enter or load an item to review its slides.',
+    editorOnlyReview: 'Open this page with #editor to edit and save translations.',
+    reviewSlidesLink: 'Review Slide Translations',
+    unreviewedBadge: 'unreviewed',
+    conversationHeader: 'Agent conversation',
+    noConversation: 'No conversation yet — Suggest to start one.',
+    followUpPlaceholder: 'Ask a question or give feedback…',
+    sendMessage: 'Send',
+    selectItemLabel: 'Service item',
+    sourceChangedWarning: 'Source slides changed since this was translated.',
+    agentThinking: 'Agent is working…',
   },
   fr: {
     connecting: 'Connexion\u2026',
@@ -135,9 +191,11 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Traduction',
     bilingual: 'Bilingue',
     chooseLayout: 'Choisir la mise en page',
+    chooseLanguage: 'Langue',
     layoutSlideAndTranslation: 'Diapositive et traduction',
     layoutBilingualView: 'Vue bilingue',
     layoutSlideAndListen: 'Diapositive et écoute',
+      componentListen: 'Écouter',
     layoutEverything: 'Tout',
     decreaseFontSize: 'Diminuer la taille du texte',
     increaseFontSize: 'Augmenter la taille du texte',
@@ -177,6 +235,31 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
     componentCurrentSlide: 'Diapositive actuelle',
+    slideReviewTitle: 'Révision des traductions de diapositives',
+    slidesInputLabel: 'Diapositives de l’élément (séparez par une ligne vide ou --)',
+    loadOnAirItem: 'Charger l’élément à l’antenne',
+    suggestTranslations: 'Suggérer',
+    suggesting: 'Suggestion…',
+    bibleLookupsLabel: 'Recherches bibliques',
+    bibleLookupFound: 'Trouvé en',
+    bibleLookupMissing: 'Aucun texte canonique trouvé',
+    save: 'Enregistrer',
+    saveAll: 'Tout enregistrer',
+    saving: 'Enregistrement…',
+    statusReviewed: 'Révisé',
+    statusUnsaved: 'Non enregistré',
+    reviewSourceHeader: 'Source',
+    noSlidesToReview: 'Saisissez ou chargez un élément pour réviser ses diapositives.',
+    editorOnlyReview: 'Ouvrez cette page avec #editor pour modifier et enregistrer les traductions.',
+    reviewSlidesLink: 'Réviser les traductions de diapositives',
+    unreviewedBadge: 'non révisé',
+    conversationHeader: 'Conversation avec l’agent',
+    noConversation: 'Aucune conversation pour l’instant — cliquez sur Suggérer pour en démarrer une.',
+    followUpPlaceholder: 'Posez une question ou donnez un retour…',
+    sendMessage: 'Envoyer',
+    selectItemLabel: 'Élément du service',
+    sourceChangedWarning: 'Les diapositives source ont changé depuis cette traduction.',
+    agentThinking: 'L’agent travaille…',
   },
   es: {
     connecting: 'Conectando\u2026',
@@ -184,9 +267,11 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Traducci\u00f3n',
     bilingual: 'Biling\u00fce',
     chooseLayout: 'Elegir dise\u00f1o',
+    chooseLanguage: 'Idioma',
     layoutSlideAndTranslation: 'Diapositiva y traducci\u00f3n',
     layoutBilingualView: 'Vista biling\u00fce',
     layoutSlideAndListen: 'Diapositiva y escucha',
+      componentListen: 'Escuchar',
     layoutEverything: 'Todo',
     decreaseFontSize: 'Disminuir tama\u00f1o de fuente',
     increaseFontSize: 'Aumentar tama\u00f1o de fuente',
@@ -226,6 +311,31 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
     componentCurrentSlide: 'Diapositiva actual',
+    slideReviewTitle: 'Revisi\u00f3n de traducciones de diapositivas',
+    slidesInputLabel: 'Diapositivas del elemento (separe con una l\u00ednea en blanco o --)',
+    loadOnAirItem: 'Cargar elemento al aire',
+    suggestTranslations: 'Sugerir',
+    suggesting: 'Sugiriendo\u2026',
+    bibleLookupsLabel: 'Consultas b\u00edblicas',
+    bibleLookupFound: 'Encontrado en',
+    bibleLookupMissing: 'No se encontr\u00f3 texto can\u00f3nico',
+    save: 'Guardar',
+    saveAll: 'Guardar todo',
+    saving: 'Guardando\u2026',
+    statusReviewed: 'Revisado',
+    statusUnsaved: 'Sin guardar',
+    reviewSourceHeader: 'Fuente',
+    noSlidesToReview: 'Ingrese o cargue un elemento para revisar sus diapositivas.',
+    editorOnlyReview: 'Abra esta p\u00e1gina con #editor para editar y guardar traducciones.',
+    reviewSlidesLink: 'Revisar traducciones de diapositivas',
+    unreviewedBadge: 'sin revisar',
+    conversationHeader: 'Conversación con el agente',
+    noConversation: 'Aún no hay conversación — pulse Sugerir para iniciar una.',
+    followUpPlaceholder: 'Haga una pregunta o dé su opinión…',
+    sendMessage: 'Enviar',
+    selectItemLabel: 'Elemento del servicio',
+    sourceChangedWarning: 'Las diapositivas de origen cambiaron desde esta traducción.',
+    agentThinking: 'El agente está trabajando…',
   },
   ht: {
     connecting: 'Koneksyon\u2026',
@@ -233,9 +343,11 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     translation: 'Tradiksyon',
     bilingual: 'Bileng',
     chooseLayout: 'Chwazi Dispozisyon',
+    chooseLanguage: 'Lang',
     layoutSlideAndTranslation: 'Diapozitiv ak Tradiksyon',
     layoutBilingualView: 'Vi Bileng',
     layoutSlideAndListen: 'Diapozitiv ak \u00c9coute',
+      componentListen: 'Koute',
     layoutEverything: 'Tout bagay',
     decreaseFontSize: 'Diminye gw\u00f2s\u00e8 l\u00e8t',
     increaseFontSize: 'Ogmante gw\u00f2s\u00e8 l\u00e8t',
@@ -275,5 +387,30 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',
     componentCurrentSlide: 'Diapozitiv aktyèl',
+    slideReviewTitle: 'Revizyon Tradiksyon Diapozitiv',
+    slidesInputLabel: 'Diapozitiv eleman an (separe ak yon liy vid oswa --)',
+    loadOnAirItem: 'Chaje eleman k ap pase a',
+    suggestTranslations: 'Sijere',
+    suggesting: 'Ap sijere…',
+    bibleLookupsLabel: 'Rechèch biblik',
+    bibleLookupFound: 'Jwenn nan',
+    bibleLookupMissing: 'Pa jwenn tèks kanonik',
+    save: 'Anrejistre',
+    saveAll: 'Anrejistre tout',
+    saving: 'Ap anrejistre…',
+    statusReviewed: 'Revize',
+    statusUnsaved: 'Pa anrejistre',
+    reviewSourceHeader: 'Sous',
+    noSlidesToReview: 'Antre oswa chaje yon eleman pou revize diapozitiv li yo.',
+    editorOnlyReview: 'Ouvri paj sa a ak #editor pou modifye ak anrejistre tradiksyon.',
+    reviewSlidesLink: 'Revize Tradiksyon Diapozitiv',
+    unreviewedBadge: 'pa revize',
+    conversationHeader: 'Konvèsasyon ak ajan an',
+    noConversation: 'Poko gen konvèsasyon — klike Sijere pou kòmanse youn.',
+    followUpPlaceholder: 'Poze yon kesyon oswa bay yon kòmantè…',
+    sendMessage: 'Voye',
+    selectItemLabel: 'Eleman sèvis la',
+    sourceChangedWarning: 'Diapozitiv sous yo chanje depi tradiksyon sa a.',
+    agentThinking: 'Ajan an ap travay…',
   },
 };

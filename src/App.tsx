@@ -22,6 +22,8 @@ import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
 import { PostHogErrorBoundary } from "posthog-js/react";
 import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
+import { SlideReviewContainer } from "./SlideReviewContainer";
+import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
 import { getDocId } from "./getDocId";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
@@ -59,32 +61,24 @@ function ConnectionStatusWidget({
 // Layouts: each is an array of arrays of component keys
 const availableLayouts = [
   {
+    key: "slide-and-listen",
+    labelKey: "layoutSlideAndListen" as const,
+    layout: [
+      ["slideTranslation", "listen"]
+    ]
+  },
+  {
     key: 'slide-and-translation',
     labelKey: 'layoutSlideAndTranslation' as const,
     layout: [
-      ["currentSlide", "translatedText"]
+      ["slideTranslation", "translatedText"]
     ]
   },
   {
     key: 'slide-and-bilingual',
     labelKey: 'layoutBilingualView' as const,
     layout: [
-      ["currentSlide", "bilingual"]
-    ]
-  },
-  {
-    key: "slide-and-listen",
-    labelKey: "layoutSlideAndListen" as const,
-    layout: [
-      ["currentSlide", "listen"]
-    ]
-  },
-  {
-    key: 'full',
-    labelKey: 'layoutEverything' as const,
-    layout: [
-      ["sourceText"],
-      ["translatedText", "currentSlide"]
+      ["slideTranslation", "bilingual"]
     ]
   },
 ];
@@ -93,22 +87,60 @@ const availableLayouts = [
 function HomePage() {
   const s = useStrings();
   const locale = resolveLocale();
-  const defaultLang = languages[0];
+  const [selectedLang, setSelectedLang] = useState<string>(languages[0]);
+
+  const langDisplayNames = new Intl.DisplayNames([locale], { type: 'language' });
+
+  // The listen pane is keyed by BCP-47 code (a larger set than our text-translation
+  // languages). Map the selected language to its code, falling back to the default
+  // listen language if Gemini Live doesn't support it (e.g. Haitian Creole).
+  const listenCode =
+    LISTEN_LANGUAGE_CODES.includes(LANGUAGE_BCP47[selectedLang])
+      ? LANGUAGE_BCP47[selectedLang]
+      : DEFAULT_LISTEN_CODE;
+
+  // Substitute the selected language into a layout component's bare name.
+  const applyLanguage = (component: string): string => {
+    switch (component) {
+      case 'translatedText':
+      case 'bilingual':
+      case 'slideTranslation':
+        return `${component}-${selectedLang}`;
+      case 'listen':
+        return `listen-${listenCode}`;
+      default:
+        return component;
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-950 dark:to-gray-900 text-black dark:text-gray-200">
       <h1 className="text-2xl font-bold mb-6 mt-8">
         {s.chooseLayout}
       </h1>
       <div className="flex flex-col gap-6 w-full max-w-xl">
+        <div className="bg-white/80 dark:bg-gray-800/80 rounded shadow p-4 flex items-center justify-center gap-2">
+          <label htmlFor="home-language" className="font-semibold text-sm">
+            {s.chooseLanguage}
+          </label>
+          <select
+            id="home-language"
+            className="px-2 py-1 rounded text-sm bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700"
+            value={selectedLang}
+            onChange={(e) => setSelectedLang(e.target.value)}
+          >
+            {languages.map((lang) => (
+              <option key={lang} value={lang}>
+                {langDisplayNames.of(LANGUAGE_BCP47[lang]) ?? lang}
+              </option>
+            ))}
+          </select>
+        </div>
         {availableLayouts.map((layout) => {
-          // Convert layout array to human-legible string, adding default language to translatedText components
+          // Convert layout array to a layout string, substituting the selected
+          // language into any language-keyed components.
           const layoutStr = layout.layout.map(row =>
-            row.map(component =>
-              component === 'translatedText' ? `translatedText-${defaultLang}` :
-              component === 'bilingual' ? `bilingual-${defaultLang}` :
-              component === 'listen' ? `listen-${DEFAULT_LISTEN_CODE}` :
-              component
-            ).join(",")
+            row.map(applyLanguage).join(",")
           ).join("|");
           const localeParam = locale !== 'en' ? `?locale=${locale}` : '';
           return (
@@ -128,9 +160,10 @@ function HomePage() {
             </div>
           );
         })}
-        <div className="text-center mb-4">
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText|bilingual-French#editor">Note-Taker</a> |{" "}
-          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/sourceText,broadcast|bilingual-French#editor">Broadcaster</a>
+        <div className="text-center mb-4 flex flex-col gap-2">
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText|bilingual-${selectedLang}#editor`}>Note-Taker</a> |{" "}
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText,broadcast|bilingual-${selectedLang}#editor`}>Broadcaster</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/slideReview#editor">{s.reviewSlidesLink}</a>
         </div>
       </div>
     </div>
@@ -140,6 +173,8 @@ function HomePage() {
 function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace: (newName: string) => void }) {
   const [fontSize, setFontSize] = useAtom(fontSizeAtom);
   const ydoc = useYDoc();
+  // eslint-disable-next-line react-hooks/immutability, @typescript-eslint/no-explicit-any
+  (window as any).ydoc = ydoc; // Expose YDoc on window for debugging
   const s = useStrings();
   const locale = resolveLocale();
 
@@ -226,6 +261,28 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 
   if (componentStr === 'currentSlide') {
     return <CurrentSlideViewerContainer />;
+  }
+
+  if (componentStr === 'slideReview') {
+    return (
+      <div className={cardClass + " flex-1 overflow-auto bg-white/70 dark:bg-gray-900/70"}>
+        <SlideReviewContainer />
+      </div>
+    );
+  }
+
+  if (componentStr.startsWith('slideTranslation-')) {
+    const language = componentStr.substring('slideTranslation-'.length);
+    const validLanguage = (languages as readonly string[]).includes(language) ? language : languages[0];
+    return (
+      <div className={cardClass + " flex-1/2 overflow-auto"}>
+        <div className="flex items-center gap-2 px-1">
+          <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.translation}</h2>
+          {languageSelector('slideTranslation', validLanguage)}
+        </div>
+        <SlideTranslationViewerContainer language={validLanguage} />
+      </div>
+    );
   }
 
   if (componentStr.startsWith('translatedText-')) {

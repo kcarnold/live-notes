@@ -63,6 +63,7 @@ def fast_timing(monkeypatch):
     monkeypatch.setattr(ps, "OFF_AIR_DISCONNECT_AFTER", 0.005)
     monkeypatch.setattr(ps, "RECONNECT_BACKOFF_INITIAL", 0.001)
     monkeypatch.setattr(ps, "RECONNECT_BACKOFF_MAX", 0.002)
+    monkeypatch.setattr(ps, "TRANSLATION_SCAN_INTERVAL", 0.001)
     # Ping every poll so the health-check path is exercised within the test window.
     monkeypatch.setattr(ps, "WS_PING_INTERVAL", 0.0)
 
@@ -72,8 +73,11 @@ def make_service():
     with mock.patch.object(ps, "ProclaimDB"):
         service = ps.ProclaimYjsService("http://localhost:8000", doc_id="doc-test")
     service.get_ysweet_token = mock.AsyncMock(return_value={"url": "ws://test"})
-    # Item-change parsing hits the DB; stub it so _apply_status just records state.
-    service._handle_item_change = mock.MagicMock(return_value=True)
+    # The full service-order sync hits Proclaim's HTTP API + DB; stub the fetch to a
+    # no-op so lifecycle tests need neither. _apply_status itself touches neither.
+    service._fetch_onair_presentation = mock.AsyncMock(return_value=None)
+    # Translation makes an HTTP call to the server; stub it for lifecycle tests.
+    service._translate_item = mock.AsyncMock(return_value=None)
     return service
 
 
@@ -205,7 +209,7 @@ async def test_reconnects_after_failed_token_fetch(fast_timing):
 
 
 async def test_fresh_connection_repushes_current_state(fast_timing):
-    """On (re)connect the current item/slide is re-pushed to the new server."""
+    """On (re)connect the current item/slide pointer is re-pushed to the new server."""
     service = make_service()
     service._fetch_status = mock.AsyncMock(return_value=status(item_id="item-9", slide_index=4))
     ws = FakeWebSocket(fail_ping_after=1)  # die after first push so the session ends fast
@@ -215,9 +219,236 @@ async def test_fresh_connection_repushes_current_state(fast_timing):
             with anyio.fail_after(2):
                 await service._run_session()
 
-    # last_item_id was reset to None on connect, so the first poll counts as an
-    # item change and re-pushes via _handle_item_change.
-    service._handle_item_change.assert_called_with("item-9", 4, "pres-1")
+    # last_item_id was reset to None on connect, so the first poll re-pushes the
+    # current item/slide pointer into proclaimStatus.
+    assert service.status_map["itemId"] == "item-9"
+    assert service.status_map["slideIndex"] == 4
+
+
+def test_sync_service_order_pushes_items_and_caches_revisions():
+    """The full-order sync pushes every item's original slides + a service order, and
+    only re-parses items whose localRevision signature changed."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    parsed = {
+        'i1': ServiceItemWithSlides('i1', 'Call to Worship', ['A', 'B'], 'Content'),
+        'i2': ServiceItemWithSlides('i2', 'Song', ['C'], 'SongLyrics'),
+    }
+    calls = []
+
+    def fake_parse(_db, item_id):
+        calls.append(item_id)
+        return parsed[item_id]
+
+    presentation = {
+        'serviceItems': [
+            {'id': 'i1', 'title': 'Call to Worship', 'kind': 'Content',
+             'slides': [{'localRevision': 1}, {'localRevision': 2}]},
+            {'id': 'i2', 'title': 'Song', 'kind': 'SongLyrics', 'slides': [{'localRevision': 9}]},
+        ]
+    }
+
+    with mock.patch.object(ps, 'parse_item_original', fake_parse):
+        service._sync_service_order(presentation)
+        assert list(service.service_order_map['order']) == ['i1', 'i2']
+        assert list(service.presentations_map['i1']['slides']) == ['A', 'B']
+        assert service.presentations_map['i1']['slidesHash']
+        assert calls == ['i1', 'i2']
+
+        # Unchanged revisions => no re-parse.
+        service._sync_service_order(presentation)
+        assert calls == ['i1', 'i2']
+
+        # Change i1's revision => only i1 is re-parsed (slides changed underneath us).
+        presentation['serviceItems'][0]['slides'][0]['localRevision'] = 5
+        service._sync_service_order(presentation)
+        assert calls == ['i1', 'i2', 'i1']
+
+
+def test_store_translations_writes_content_addressed_keys():
+    """Per-slide results land in slideTranslations under language:normalized-text keys."""
+    from proclaim_lib import slide_translation_key
+
+    service = make_service()
+    service._store_translations(
+        ['Hello', '', 'World'],
+        {
+            'French': [
+                {'text': 'Bonjour', 'status': 'auto', 'provenance': 'llm'},
+                {'text': '', 'status': 'auto', 'provenance': 'llm'},
+                {'text': 'Monde', 'status': 'reviewed', 'provenance': 'human'},
+            ]
+        },
+    )
+    hello = service.slide_translations_map[slide_translation_key('French', 'Hello')]
+    assert hello['text'] == 'Bonjour'
+    assert hello['status'] == 'auto'
+    world = service.slide_translations_map[slide_translation_key('French', 'World')]
+    assert world['status'] == 'reviewed'
+    # The empty slide is skipped.
+    assert slide_translation_key('French', '') not in service.slide_translations_map
+
+
+def test_store_translations_never_clobbers_reviewed_entries():
+    """A reviewed entry (e.g. a live review-screen edit) survives a re-seed; autos refill."""
+    from proclaim_lib import slide_translation_key
+
+    service = make_service()
+    hello_key = slide_translation_key('French', 'Hello')
+    world_key = slide_translation_key('French', 'World')
+    # Simulate a human edit written live: a reviewed entry, plus a stale auto.
+    service.slide_translations_map[hello_key] = {
+        'text': 'Bonjour (édité)', 'status': 'reviewed', 'provenance': 'human'
+    }
+    service.slide_translations_map[world_key] = {
+        'text': 'Monde (ancien)', 'status': 'auto', 'provenance': 'llm'
+    }
+
+    service._store_translations(
+        ['Hello', 'World'],
+        {
+            'French': [
+                {'text': 'Bonjour (re-traduit)', 'status': 'auto', 'provenance': 'llm'},
+                {'text': 'Monde (nouveau)', 'status': 'auto', 'provenance': 'llm'},
+            ]
+        },
+    )
+
+    # Reviewed entry untouched; the prior auto is refilled.
+    assert service.slide_translations_map[hello_key]['text'] == 'Bonjour (édité)'
+    assert service.slide_translations_map[hello_key]['status'] == 'reviewed'
+    assert service.slide_translations_map[world_key]['text'] == 'Monde (nouveau)'
+
+
+def test_translation_scan_order_rotates_active_first():
+    """The scan visits the active item first, then upcoming, then past."""
+    service = make_service()
+    service.service_order_map['order'] = ['i1', 'i2', 'i3', 'i4']
+
+    service.status_map['itemId'] = 'i3'
+    assert service._translation_scan_order() == ['i3', 'i4', 'i1', 'i2']
+
+    # An active id not in the order (or none) => order as-is.
+    service.status_map['itemId'] = 'unknown'
+    assert service._translation_scan_order() == ['i1', 'i2', 'i3', 'i4']
+
+
+async def test_translate_pending_items_translates_misses_active_first(fast_timing):
+    """Pending items are translated, active item first; content-addressed keys are filled."""
+    from proclaim_lib import ServiceItemWithSlides, slide_translation_key
+
+    service = make_service()
+    service.items_by_id = {
+        'i1': ServiceItemWithSlides('i1', 'Past', ['Past slide'], 'Content'),
+        'i2': ServiceItemWithSlides('i2', 'Active', ['Active slide'], 'Content'),
+    }
+    service.service_order_map['order'] = ['i1', 'i2']
+    service.status_map['itemId'] = 'i2'  # active is i2, so it should go first
+
+    translated = []
+
+    async def fake_translate(slides, title=None, item_id=None, existing_translation=None):
+        translated.append(item_id)
+        return {
+            lang: [{'text': f'{lang}:{slides[0]}', 'status': 'auto', 'provenance': 'llm'}]
+            for lang in ps.SLIDE_TRANSLATION_LANGUAGES
+        }
+
+    service._translate_item = fake_translate
+
+    assert await service._translate_pending_items() is True
+    assert translated == ['i2']  # active first, even though it's later in the order
+    for lang in ps.SLIDE_TRANSLATION_LANGUAGES:
+        assert slide_translation_key(lang, 'Active slide') in service.slide_translations_map
+
+    # The remaining (past) item is picked up next.
+    assert await service._translate_pending_items() is True
+    assert translated == ['i2', 'i1']
+
+    # Everything covered now => no work.
+    assert await service._translate_pending_items() is False
+
+
+async def test_translate_pending_items_skips_fully_covered(fast_timing):
+    """An item already translated in every language isn't sent to the server."""
+    from proclaim_lib import ServiceItemWithSlides, slide_translation_key, slides_hash
+
+    service = make_service()
+    service.items_by_id = {'i1': ServiceItemWithSlides('i1', 'X', ['Hello'], 'Content')}
+    service.service_order_map['order'] = ['i1']
+    for lang in ps.SLIDE_TRANSLATION_LANGUAGES:
+        service.slide_translations_map[slide_translation_key(lang, 'Hello')] = {
+            'text': 'x', 'status': 'auto', 'provenance': 'llm'
+        }
+    service._translate_item = mock.AsyncMock(return_value=None)
+
+    assert await service._translate_pending_items() is False
+    service._translate_item.assert_not_awaited()
+    assert service.translated_hashes['i1'] == slides_hash(['Hello'])
+
+
+async def test_translate_pending_items_attempts_each_content_once(fast_timing):
+    """A failed/partial translation isn't retried until the slide content changes."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    service.items_by_id = {'i1': ServiceItemWithSlides('i1', 'X', ['Hello'], 'Content')}
+    service.service_order_map['order'] = ['i1']
+    service._translate_item = mock.AsyncMock(return_value=None)  # translation fails
+
+    assert await service._translate_pending_items() is True
+    assert await service._translate_pending_items() is False  # same content => no retry
+    assert service._translate_item.await_count == 1
+
+    # Slide content changes underneath us => a fresh attempt.
+    service.items_by_id['i1'] = ServiceItemWithSlides('i1', 'X', ['Hello there'], 'Content')
+    assert await service._translate_pending_items() is True
+    assert service._translate_item.await_count == 2
+
+
+def test_existing_translation_screen_idx_cached_per_presentation():
+    """The translation-screen index is computed once per presentation, reused per item."""
+    service = make_service()
+    service.current_presentation_id = 'pres-1'
+    service.db.get_presentation = mock.MagicMock(return_value={'content': {'VirtualScreens': '[]'}})
+
+    with mock.patch.object(ps, 'get_translation_screen_idx', return_value=2) as gti, \
+         mock.patch.object(ps, 'existing_translation_text', side_effect=lambda db, item, idx: f'{item}:{idx}'):
+        assert service._existing_translation_for('i1') == 'i1:2'
+        assert service._existing_translation_for('i2') == 'i2:2'
+
+    # Screen index (and the DB read for it) computed once for the presentation.
+    assert gti.call_count == 1
+    assert service.db.get_presentation.call_count == 1
+
+
+async def test_existing_translation_passed_to_translate(fast_timing):
+    """The worker forwards Proclaim's existing translation as grounding to the server."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    service.items_by_id = {'i1': ServiceItemWithSlides('i1', 'Song', ['Hello'], 'Content')}
+    service.service_order_map['order'] = ['i1']
+    service.current_presentation_id = 'pres-1'
+    service.db.get_presentation = mock.MagicMock(return_value={'content': {'VirtualScreens': '[]'}})
+
+    captured = {}
+
+    async def fake_translate(slides, title=None, item_id=None, existing_translation=None):
+        captured['existing'] = existing_translation
+        return {
+            lang: [{'text': 'x', 'status': 'auto', 'provenance': 'llm'}]
+            for lang in ps.SLIDE_TRANSLATION_LANGUAGES
+        }
+
+    service._translate_item = fake_translate
+
+    with mock.patch.object(ps, 'get_translation_screen_idx', return_value=1), \
+         mock.patch.object(ps, 'existing_translation_text', return_value='Bonjou'):
+        await service._translate_pending_items()
+
+    assert captured['existing'] == 'Bonjou'
 
 
 def test_parse_date_given_variants():

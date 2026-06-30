@@ -9,12 +9,26 @@ Provides:
 - Service item parsing
 """
 
+import hashlib
 import json
 import logging
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# Main/original-language content keys per item kind (the non-translation screen).
+MAIN_CONTENT_KEYS = {
+    'SongLyrics': '_richtextfield:Lyrics',
+    'Content': '_richtextfield:Main Content',
+    'BiblePassage': '_richtextfield:Passage',
+}
+
+# Item kinds / titles that render as a blank slide (no translatable text).
+# 'Grouping' is an image-slideshow grouping container - no translatable text.
+BLANK_ITEM_KINDS = ['ImageSlideshow', 'Grouping']
+BLANK_ITEM_TITLES = ['blank', 'ncf slide', 'offering slide']
 
 from lxml import etree
 
@@ -270,6 +284,30 @@ def get_slides_for_song(content: dict, content_key: str = '_richtextfield:Lyrics
     return split_into_slides(text)
 
 
+def _is_blank_item(item_kind: str, item_title: str) -> bool:
+    """Whether an item renders as a blank slide (image slideshow, offering, etc.)."""
+    return item_kind in BLANK_ITEM_KINDS or item_title.lower() in BLANK_ITEM_TITLES
+
+
+def _slides_from_source_xml(item_kind: str, content: dict, source_xml: str) -> List[str]:
+    """Decode and split a rich-text source field into ordered slides for an item.
+
+    Songs are split into labeled sections and ordered by CustomOrderSequence; other
+    kinds split on blank lines / explicit ``--`` delimiters.
+    """
+    source_text = decode_richtext_xml(source_xml)
+
+    if item_kind == 'SongLyrics':
+        sections = split_into_song_sections(source_text)
+        order_str = content.get('CustomOrderSequence') or ''
+        slides = get_slides_in_order(sections, order_str)
+        if title := content.get('SongDisplayTitle'):
+            slides.insert(0, title)
+        return slides
+
+    return split_into_slides(source_text)
+
+
 def parse_item_translation(
     db: ProclaimDB,
     item_id: str,
@@ -285,14 +323,9 @@ def parse_item_translation(
     item_kind = service_item.get('ServiceItemKind') or 'Unknown'
     item_title = service_item.get('Title') or 'Unknown'
 
-    if item_kind in ["ImageSlideshow"] or item_title.lower() in ['blank', 'ncf slide', 'offering slide']:
+    if _is_blank_item(item_kind, item_title):
         logger.info(f"Showing blank item: {item_title}")
-        return ServiceItemWithSlides(
-            itemId=item_id,
-            title=item_title,
-            slides=[''],
-            itemKind=item_kind,
-        )
+        return ServiceItemWithSlides(itemId=item_id, title=item_title, slides=[''], itemKind=item_kind)
 
     translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
 
@@ -300,13 +333,7 @@ def parse_item_translation(
     if translation_key in content:
         source_xml = content[translation_key]
     else:
-        # Fall back to main slide text
-        main_content_keys = {
-            'SongLyrics': '_richtextfield:Lyrics',
-            'Content': '_richtextfield:Main Content',
-            'BiblePassage': '_richtextfield:Passage',
-        }
-        fallback_key = main_content_keys.get(item_kind)
+        fallback_key = MAIN_CONTENT_KEYS.get(item_kind)
         if fallback_key and fallback_key in content:
             logger.warning(f"No translation for {item_id}, falling back to main content")
             source_xml = content[fallback_key]
@@ -314,21 +341,127 @@ def parse_item_translation(
             logger.warning(f"No translation or main content found for {item_id}")
             return None
 
-    source_text = decode_richtext_xml(source_xml)
+    slides = _slides_from_source_xml(item_kind, content, source_xml)
+    return ServiceItemWithSlides(itemId=item_id, title=item_title, slides=slides, itemKind=item_kind)
 
-    if item_kind == 'SongLyrics':
-        sections = split_into_song_sections(source_text)
-        order_str = content.get('CustomOrderSequence') or ''
-        slides = get_slides_in_order(sections, order_str)
 
-        if title := content.get('SongDisplayTitle'):
-            slides.insert(0, title)
-    else:
-        slides = split_into_slides(source_text)
+def parse_item_original(db: ProclaimDB, item_id: str) -> Optional[ServiceItemWithSlides]:
+    """Extract the original/main-language slides for an item (the source for translation).
 
-    return ServiceItemWithSlides(
-        itemId=item_id,
-        title=item_title,
-        slides=slides,
-        itemKind=item_kind,
-    )
+    Unlike ``parse_item_translation``, this always reads the Main screen content, so
+    the slides are the original-language text the LLM/library translate *from*.
+    """
+    service_item = db.get_service_item(item_id.replace('-', ''))
+    if not service_item:
+        logger.warning(f"Service item {item_id} not found")
+        return None
+
+    content = json.loads(service_item['Content'])
+    item_kind = service_item.get('ServiceItemKind') or 'Unknown'
+    item_title = service_item.get('Title') or 'Unknown'
+
+    if _is_blank_item(item_kind, item_title):
+        return ServiceItemWithSlides(itemId=item_id, title=item_title, slides=[''], itemKind=item_kind)
+
+    main_key = MAIN_CONTENT_KEYS.get(item_kind)
+    if not main_key or main_key not in content:
+        logger.warning(f"No main content found for {item_id} (kind {item_kind})")
+        return None
+
+    slides = _slides_from_source_xml(item_kind, content, content[main_key])
+    return ServiceItemWithSlides(itemId=item_id, title=item_title, slides=slides, itemKind=item_kind)
+
+
+def normalize_slide_text(text: str) -> str:
+    """Canonicalize slide text for use as a translation key.
+
+    Must match the TypeScript ``normalizeSlideText`` exactly so keys written by this
+    service line up with what the frontend reads: NFC, LF line endings, trailing
+    whitespace stripped per line, surrounding blank lines trimmed, internal line
+    breaks preserved.
+    """
+    text = unicodedata.normalize('NFC', text)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    lines = [line.rstrip() for line in text.split('\n')]
+    return '\n'.join(lines).strip()
+
+
+def slide_translation_key(language: str, slide_text: str) -> str:
+    """Content-addressed key combining language and normalized slide text."""
+    return f"{language}:{normalize_slide_text(slide_text)}"
+
+
+def existing_translation_text(
+    db: ProclaimDB,
+    item_id: str,
+    translation_screen_idx: int,
+) -> Optional[str]:
+    """Return the decoded text of an item's existing translation screen, or None.
+
+    Unlike ``parse_item_translation`` this does NOT fall back to the Main screen: if the
+    item has no translation-screen field we return None (so we never feed the original
+    language back as a "translation" reference). The text is returned joined, unsegmented
+    — the LLM re-aligns it to the source slides.
+    """
+    service_item = db.get_service_item(item_id.replace('-', ''))
+    if not service_item:
+        return None
+
+    content = json.loads(service_item['Content'])
+    item_kind = service_item.get('ServiceItemKind') or 'Unknown'
+    item_title = service_item.get('Title') or 'Unknown'
+    if _is_blank_item(item_kind, item_title):
+        return None
+
+    translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'
+    if translation_key not in content:
+        return None
+
+    slides = _slides_from_source_xml(item_kind, content, content[translation_key])
+    text = '\n\n'.join(slide for slide in slides if slide.strip())
+    return text or None
+
+
+def slides_hash(slides: List[str]) -> str:
+    """Stable content hash of an item's slides, for detecting changes underneath us."""
+    digest = hashlib.sha256()
+    for slide in slides:
+        digest.update(slide.encode('utf-8'))
+        digest.update(b'\x00')
+    return digest.hexdigest()
+
+
+def service_item_signatures(onair_presentation: dict) -> List[Dict[str, str]]:
+    """Summarize the on-air service order with a per-item change signature.
+
+    The signature combines the per-slide ``localRevision`` values Proclaim reports,
+    so we can tell when an item's content changed without re-reading the DB.
+    """
+    items: List[Dict[str, str]] = []
+    for item in onair_presentation.get('serviceItems', []):
+        slides = item.get('slides', []) or []
+        revision = '|'.join(str(slide.get('localRevision', '')) for slide in slides)
+        items.append({
+            'id': item.get('id', ''),
+            'title': item.get('title', ''),
+            'kind': item.get('kind', ''),
+            'revision': revision,
+        })
+    return items
+
+
+def build_seed_pairs(
+    original_slides: List[str],
+    translation_slides: List[str],
+) -> Optional[List[Tuple[str, str]]]:
+    """Align an item's original and existing-translation slides into pairs to seed the
+    reviewed library, or None when they can't be aligned 1:1 (different slide counts).
+    """
+    if not original_slides or len(original_slides) != len(translation_slides):
+        return None
+    pairs = [
+        (orig.strip(), trans.strip())
+        for orig, trans in zip(original_slides, translation_slides)
+        if orig.strip() and trans.strip()
+    ]
+    return pairs or None

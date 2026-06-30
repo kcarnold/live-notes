@@ -34,9 +34,8 @@ log_error() {
 }
 
 fetch_posthog_config() {
-    local server_url="${1:-https://live-outline-app.fly.dev}"
     local config
-    config=$(curl -sf "$server_url/api/config") || { log_warn "Could not fetch PostHog config from $server_url (service may be down)"; return 1; }
+    config=$(curl -sf "$SERVER_URL/api/config") || { log_warn "Could not fetch PostHog config from $SERVER_URL (service may be down)"; return 1; }
     POSTHOG_KEY=$(echo "$config" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('posthogKey',''))")
     POSTHOG_HOST=$(echo "$config" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('posthogHost',''))")
 }
@@ -73,7 +72,7 @@ uninstall() {
 }
 
 # Parse arguments
-SERVER_URL="https://live-outline-app.fly.dev"
+SERVER_URL="https://notelate.com"
 POSTHOG_KEY=""
 POSTHOG_HOST=""
 
@@ -83,6 +82,15 @@ for arg in "$@"; do
         --server-url=*) SERVER_URL="${arg#--server-url=}" ;;
     esac
 done
+
+if [ -z "$SERVER_URL" ]; then
+    log_error "--server-url is required"
+    echo "Usage: bash install_proclaim_service.sh --server-url=<url> [--uninstall]"
+    exit 1
+fi
+
+# Normalize URL (strip trailing slash)
+SERVER_URL="${SERVER_URL%/}"
 
 echo "Installing proclaim service..."
 

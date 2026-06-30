@@ -17,6 +17,7 @@ services:
         VITE_PUBLIC_POSTHOG_HOST: ${VITE_PUBLIC_POSTHOG_HOST}
         POSTHOG_CLI_ENV_ID: ${POSTHOG_CLI_ENV_ID}
         POSTHOG_CLI_HOST: ${POSTHOG_CLI_HOST}
+        GIT_SHA: ${GIT_SHA}
       secrets:
         - posthog_cli_token
     ports:
