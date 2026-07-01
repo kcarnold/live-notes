@@ -3,7 +3,7 @@ import { useCallback, useRef } from "react";
 import * as Y from "yjs";
 import { isEditorAtom, languages } from "./configAtoms";
 import { BlockEditor } from "./BlockEditor";
-import type { Block } from "./blockTypes";
+import type { Block, BlockYMap } from "./blockTypes";
 import type { TranslationBlock } from "./translationUtils";
 import { useTranslationManager } from "./useTranslationManager";
 
@@ -16,7 +16,7 @@ const modifierKeyPrefix =
 export function SourceTextTranslationManager({ ydoc }: { ydoc: Y.Doc }) {
   const sourceBlocksRef = useRef<TranslationBlock[]>([]);
   const isEditor = useAtomValue(isEditorAtom);
-  const sourceBlocks = ydoc.getArray<Y.Map<string | number>>("sourceBlocks");
+  const sourceBlocks = ydoc.getArray<BlockYMap>("sourceBlocks");
   const {
     isTranslating,
     translationError,

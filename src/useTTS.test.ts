@@ -58,7 +58,7 @@ describe('useTTS', () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({ audioUrl: 'http://example.com/audio.mp3' }),
-    } as unknown as Response);
+    });
   });
 
   afterEach(() => {
@@ -312,7 +312,7 @@ describe('useTTS', () => {
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
         json: vi.fn().mockResolvedValue({ audioUrl: 'http://example.com/audio.mp3' }),
-      } as unknown as Response);
+      });
 
       // Second attempt should work
       act(() => {

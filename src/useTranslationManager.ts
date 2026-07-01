@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useMap } from '@y-sweet/react';
-import type { GenericMap, TranslationBlock, TranslationCache } from './translationUtils';
+import type { TranslationBlock } from './translationUtils';
 import { fetchAndCacheTranslations } from './translationUtils';
 
 export function useTranslationManager({
@@ -12,7 +12,7 @@ export function useTranslationManager({
   sourceBlocksRef: React.RefObject<TranslationBlock[]>;
   translationCacheName: string;
 }) {
-  const translationCache = useMap(translationCacheName);
+  const translationCache = useMap<string>(translationCacheName);
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationError, setTranslationError] = useState("");
 
@@ -29,7 +29,7 @@ export function useTranslationManager({
       await fetchAndCacheTranslations(
         language,
         blocks,
-        translationCache as GenericMap as TranslationCache,
+        translationCache,
       );
     }
 

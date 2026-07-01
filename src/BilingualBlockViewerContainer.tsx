@@ -1,8 +1,7 @@
 import type React from 'react';
 import { useEffect, useState, useMemo } from 'react';
 import { useYDoc, useMap } from '@y-sweet/react';
-import type * as Y from 'yjs';
-import { type Block, yMapToBlock, compareBlockPositions } from './blockTypes';
+import { type Block, type BlockYMap, yMapToBlock, compareBlockPositions } from './blockTypes';
 import { BilingualBlockViewer } from './BilingualBlockViewer';
 
 interface BilingualBlockViewerContainerProps {
@@ -34,7 +33,7 @@ export function BilingualBlockViewerContainer({
 
   // Get the sourceBlocks array
   const sourceBlocks = useMemo(
-    () => ydoc.getArray<Y.Map<any>>('sourceBlocks'),
+    () => ydoc.getArray<BlockYMap>('sourceBlocks'),
     [ydoc]
   );
 
