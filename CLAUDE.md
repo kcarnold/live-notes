@@ -65,6 +65,9 @@ npm test -- path/to/test.ts --run
 # Lint code
 npm run lint
 
+# Type-check without a full production build
+npm run typecheck
+
 # Build for production (requires npm install first)
 npm run build
 
@@ -75,6 +78,7 @@ npm start
 **Important**:
 - Always run `npm install` before building or testing, especially in fresh environments. The build will fail with module resolution errors if dependencies aren't installed.
 - When running tests via tools/agents, use `--no-color` flag to disable ANSI color codes in output.
+- The root `tsconfig.json` is a solution-style config (`files: []` + `references`), so plain `tsc --noEmit -p .` silently checks nothing. Use `npm run typecheck` (or `tsc -b`) to actually type-check.
 
 ### Python (Proclaim service)
 

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
     "start": "env PORT=5008 node server.ts",
     "dev": "vite --host 127.0.0.1",
     "lint": "eslint .",
