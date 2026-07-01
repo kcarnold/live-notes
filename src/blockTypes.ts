@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 import { v4 as uuidv4 } from 'uuid';
-import { setYTextFromString } from './yjsUtils';
+import { setYTextFromString, yTextToString } from './yjsUtils';
 import { generateKeyBetween } from 'fractional-indexing';
 
 export type BlockType = 'heading' | 'bullet';
@@ -71,8 +71,7 @@ export function yMapToBlock(yMap: BlockYMap): Block {
 
   return {
     id: id || uuidv4(),
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    content: yText ? yText.toString() : '',
+    content: yText ? yTextToString(yText) : '',
     type: type || 'bullet',
     level: level ?? 0,
     position: position || getPosition(null, null),
@@ -108,8 +107,7 @@ export function updateYMap(yMap: BlockYMap, block: Partial<Block>): void {
         }
       } else {
         // Existing Y.Text - update it using diff-based approach
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        const currentText = yText.toString();
+        const currentText = yTextToString(yText);
         if (currentText !== block.content) {
           setYTextFromString(yText, block.content);
         }

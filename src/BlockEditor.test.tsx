@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import * as Y from 'yjs';
 import { BlockEditor } from './BlockEditor';
 import { createBlock, getPosition, addBlockToYArray, createSequentialPositions, type BlockYMap } from './blockTypes';
+import { yTextToString } from './yjsUtils';
 
 const positions = createSequentialPositions(10);
 
@@ -112,8 +113,7 @@ describe('BlockEditor', () => {
       await waitFor(() => {
         const yMap = yArray.get(0);
         const yText = yMap.get('content') as Y.Text;
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        expect(yText.toString()).toBe('Updated text');
+        expect(yTextToString(yText)).toBe('Updated text');
       });
     });
 
@@ -179,10 +179,8 @@ describe('BlockEditor', () => {
         expect(yArray.length).toBe(2);
         const block1 = yArray.get(0);
         const block2 = yArray.get(1);
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        expect((block1.get('content') as Y.Text).toString()).toBe('Hello ');
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        expect((block2.get('content') as Y.Text).toString()).toBe('World');
+        expect(yTextToString(block1.get('content') as Y.Text)).toBe('Hello ');
+        expect(yTextToString(block2.get('content') as Y.Text)).toBe('World');
       });
     });
 
@@ -357,8 +355,7 @@ describe('BlockEditor', () => {
         expect(yMap.get('type')).toBe('heading');
         expect(yMap.get('level')).toBe(0);
         // Content should not include the #
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        expect((yMap.get('content') as Y.Text).toString()).toBe('Test');
+        expect(yTextToString(yMap.get('content') as Y.Text)).toBe('Test');
       });
     });
 
@@ -397,8 +394,7 @@ describe('BlockEditor', () => {
         const yMap = yArray.get(0);
         expect(yMap.get('level')).toBe(5);
         // Content should not include the #
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        expect((yMap.get('content') as Y.Text).toString()).toBe('Test');
+        expect(yTextToString(yMap.get('content') as Y.Text)).toBe('Test');
       });
     });
 
@@ -419,8 +415,7 @@ describe('BlockEditor', () => {
         const yMap = yArray.get(0);
         expect(yMap.get('type')).toBe('bullet');
         // Content should include the #
-        // eslint-disable-next-line @typescript-eslint/no-base-to-string
-        expect((yMap.get('content') as Y.Text).toString()).toBe('Test#');
+        expect(yTextToString(yMap.get('content') as Y.Text)).toBe('Test#');
       });
     });
   });
@@ -555,8 +550,7 @@ describe('BlockEditor', () => {
       await waitFor(() => {
         // Check that second block now has a position before first
         const blocks = yArray.toArray().map(yMap => ({
-          // eslint-disable-next-line @typescript-eslint/no-base-to-string
-          content: (yMap.get('content') as Y.Text).toString(),
+          content: yTextToString(yMap.get('content') as Y.Text),
           position: yMap.get('position') as string
         }));
         blocks.sort((a, b) => a.position < b.position ? -1 : 1);
@@ -582,8 +576,7 @@ describe('BlockEditor', () => {
 
       await waitFor(() => {
         const blocks = yArray.toArray().map(yMap => ({
-          // eslint-disable-next-line @typescript-eslint/no-base-to-string
-          content: (yMap.get('content') as Y.Text).toString(),
+          content: yTextToString(yMap.get('content') as Y.Text),
           position: yMap.get('position') as string
         }));
         blocks.sort((a, b) => a.position < b.position ? -1 : 1);
@@ -723,8 +716,7 @@ describe('BlockEditor', () => {
 
       await waitFor(() => {
         const blocks = yArray.toArray().map(yMap => ({
-          // eslint-disable-next-line @typescript-eslint/no-base-to-string
-          content: (yMap.get('content') as Y.Text).toString(),
+          content: yTextToString(yMap.get('content') as Y.Text),
           position: yMap.get('position') as string
         }));
         blocks.sort((a, b) => a.position < b.position ? -1 : 1);
@@ -749,8 +741,7 @@ describe('BlockEditor', () => {
 
       await waitFor(() => {
         const blocks = yArray.toArray().map(yMap => ({
-          // eslint-disable-next-line @typescript-eslint/no-base-to-string
-          content: (yMap.get('content') as Y.Text).toString(),
+          content: yTextToString(yMap.get('content') as Y.Text),
           position: yMap.get('position') as string
         }));
         blocks.sort((a, b) => a.position < b.position ? -1 : 1);

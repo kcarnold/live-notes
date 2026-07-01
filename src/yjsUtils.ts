@@ -3,22 +3,27 @@ import diff from 'fast-diff';
 import { useText } from '@y-sweet/react';
 import * as Y from 'yjs';
 
+// Yjs's Y.Text.d.ts doesn't declare its (working) toString() override, so TypeScript
+// falls back to Object.prototype.toString and flags direct calls as unsafe. Centralize
+// the disable here instead of scattering it at every call site.
+export function yTextToString(yText: Y.Text): string {
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
+  return yText.toString();
+}
+
 // Hook based on implementation here https://discuss.yjs.dev/t/plain-text-input-component-with-y-text/2358/2
 export const useAsPlainText = (name: string): [string, (newText: string) => void] => {
   const sharedText = useText(name);
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string
-  const [text, setText] = useState(() => sharedText.toString());
-  
+  const [text, setText] = useState(() => yTextToString(sharedText));
+
   // Reset text state when name changes
   useEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    setText(sharedText.toString());
+    setText(yTextToString(sharedText));
   }, [sharedText, name]);
 
   useEffect(() => {
     const observer = () => {
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      setText(sharedText.toString());
+      setText(yTextToString(sharedText));
     };
 
     sharedText.observe(observer);
@@ -43,8 +48,7 @@ export const usePlainTextSetter = (name: string): ((newText: string) => void) =>
 
 
 export function setYTextFromString(yText: Y.Text, text: string) {
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string
-  const currentText = yText.toString();
+  const currentText = yTextToString(yText);
   if (currentText === text) return;
   const delta = diffToDelta(diff(currentText, text));
   yText.applyDelta(delta);
