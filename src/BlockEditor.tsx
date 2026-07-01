@@ -5,6 +5,7 @@ import { generateKeyBetween } from 'fractional-indexing';
 import {
   Block,
   BlockType,
+  BlockYMap,
   createBlock,
   yMapToBlock,
   updateYMap,
@@ -19,7 +20,7 @@ import {
 const SHOW_BUTTONS = true;
 
 interface BlockEditorProps {
-  yArray: Y.Array<Y.Map<any>>;
+  yArray: Y.Array<BlockYMap>;
   onTextChanged?: (markdown: string) => void;
   onBlocksChanged?: (blocks: Block[]) => void;
   editable?: boolean;
@@ -28,7 +29,7 @@ interface BlockEditorProps {
 
 interface BlockItemProps {
   blockId: string;
-  yArray: Y.Array<Y.Map<any>>;
+  yArray: Y.Array<BlockYMap>;
   isFocused: boolean;
   isFirst: boolean;
   isLast: boolean;
@@ -63,7 +64,10 @@ const BlockItem = memo(function BlockItem({
   // Find the Y.Map for this specific block
   const yMap = useMemo(() => {
     return yArray.toArray().find(map => map.get('id') === blockId);
-  }, [yArray, blockId, version]); // Include version to refresh when array changes
+    // version isn't read here, but must stay a dependency to force re-lookup
+    // when the underlying Yjs map mutates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yArray, blockId, version]);
 
   // Observe only this block's Y.Map
   useEffect(() => {
@@ -335,7 +339,7 @@ export function BlockEditor({ yArray, onTextChanged, onBlocksChanged, editable =
       const nextPos = currentIndex < sortedBlocks.length - 1
         ? sortedBlocks[currentIndex + 1].position
         : null;
-      const newPosition = generateKeyBetween(currentPos, nextPos) as string;
+      const newPosition = generateKeyBetween(currentPos, nextPos);
 
       const newBlock = createBlock(
         content,

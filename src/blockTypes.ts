@@ -13,6 +13,10 @@ export interface Block {
   position: string; // Fractional index for stable ordering
 }
 
+// The Y.Map backing a block holds a mix of these value types (id/type/position
+// are strings, level is a number, content is a Y.Text).
+export type BlockYMap = Y.Map<string | number | Y.Text>;
+
 export const MAX_INDENT_LEVEL = 5;
 
 /**
@@ -48,7 +52,7 @@ export function getPosition(prevBlock: Block | null, nextBlock: Block | null): s
  *
  * Logs warnings if expected fields are missing - indicates incorrect state.
  */
-export function yMapToBlock(yMap: Y.Map<any>): Block {
+export function yMapToBlock(yMap: BlockYMap): Block {
   const yText = yMap.get('content') as Y.Text | undefined;
   const id = yMap.get('id') as string | undefined;
   const type = yMap.get('type') as BlockType | undefined;
@@ -82,7 +86,7 @@ export function yMapToBlock(yMap: Y.Map<any>): Block {
  * All updates are wrapped in a transaction to ensure atomicity when multiple
  * fields are updated simultaneously.
  */
-export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
+export function updateYMap(yMap: BlockYMap, block: Partial<Block>): void {
   const doc = yMap.doc;
 
   const performUpdates = () => {
@@ -133,8 +137,8 @@ export function updateYMap(yMap: Y.Map<any>, block: Partial<Block>): void {
  * 
  * This avoids warnings from Yjs about modifying a Y.Map before it's attached to a document.
  */
-export function addBlockToYArray(yArray: Y.Array<Y.Map<any>>, block: Block): void {
-  const yMap = new Y.Map();
+export function addBlockToYArray(yArray: Y.Array<BlockYMap>, block: Block): void {
+  const yMap: BlockYMap = new Y.Map();
   yArray.push([yMap]);
   if (yArray.doc == null) {
     updateYMap(yMap, block);
@@ -169,7 +173,7 @@ export function serializeBlocksToMarkdown(blocks: Block[]): string {
 /**
  * Ensure there's always at least one block
  */
-export function ensureMinimumBlocks(yArray: Y.Array<Y.Map<any>>): void {
+export function ensureMinimumBlocks(yArray: Y.Array<BlockYMap>): void {
   if (yArray.length > 0) {
     return;
   }
@@ -180,7 +184,7 @@ export function ensureMinimumBlocks(yArray: Y.Array<Y.Map<any>>): void {
 /**
  * Get the Y.Text for a block's content
  */
-export function getBlockYText(yMap: Y.Map<any>): Y.Text {
+export function getBlockYText(yMap: BlockYMap): Y.Text {
   let yText = yMap.get('content') as Y.Text | undefined;
   if (!yText) {
     yText = new Y.Text();
@@ -220,7 +224,7 @@ export function createSequentialPositions(count: number): string[] {
   let prevPos: string | null = null;
 
   for (let i = 0; i < count; i++) {
-    const pos = generateKeyBetween(prevPos, null) as string;
+    const pos = generateKeyBetween(prevPos, null);
     positions.push(pos);
     prevPos = pos;
   }

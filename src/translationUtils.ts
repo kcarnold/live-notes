@@ -1,5 +1,5 @@
 
-export function findContiguousBlocks(arr: any[]) {
+export function findContiguousBlocks(arr: unknown[]) {
     const blocks = [];
     let start = -1;
 
@@ -37,12 +37,6 @@ export interface TranslationCache {
     has(key: string): boolean;
 }
 
-export interface GenericMap {
-    get(key: string): any;
-    set(key: string, value: any): void;
-    has(key: string): boolean;
-}
-
 type ChunkStatus = 0 | 1 | 2; // 0: skip, 1: translate, 2: context
 
 export function translationCacheKey(language: string, chunkText: string) {
@@ -51,10 +45,21 @@ export function translationCacheKey(language: string, chunkText: string) {
     return `${language}:${chunkText}`;
 }
 
-export function updateTranslationCache(serverResponse: any, translationCache: TranslationCache) {
+interface TranslationApiResult {
+    sourceText: string;
+    translatedText: string;
+    language: string;
+}
+
+export interface TranslationApiResponse {
+    ok: boolean;
+    error?: string;
+    results: TranslationApiResult[][];
+}
+
+export function updateTranslationCache(serverResponse: TranslationApiResponse, translationCache: TranslationCache) {
     // For each block, the server gave us a list of updated chunks, which we can use to update the translation cache.
-    const translationResults = serverResponse.results as { sourceText: string; translatedText: string; language: string}[][];
-    for (const block of translationResults) {
+    for (const block of serverResponse.results) {
     for (const result of block) {
         const { sourceText, translatedText, language } = result;
         // There shouldn't be anything to trim, but just in case, trim the source and translated text.
@@ -189,7 +194,7 @@ export async function fetchAndCacheTranslations(
             body: JSON.stringify({ translationTodos, language }),
         });
 
-        const result = await response.json().catch(() => null);
+        const result = await response.json().catch(() => null) as TranslationApiResponse | null;
         if (!response.ok || !result?.ok) {
             if (result?.error) {
                 throw new Error(`Translation error (${response.status}): ${result.error}`);
