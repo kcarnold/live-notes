@@ -22,17 +22,6 @@ export function CurrentSlideViewer({
   context = 0
 }: CurrentSlideViewerProps) {
   const s = useStrings();
-  // Build array of slides to display with context
-  const startIdx = Math.max(0, currentIndex - context);
-  const endIdx = Math.min(slides.length - 1, currentIndex + context);
-
-  const visibleSlides: Slide[] = [];
-  for (let i = startIdx; i <= endIdx; i++) {
-    visibleSlides.push({
-      text: slides[i],
-      isActive: i === currentIndex,
-    });
-  }
 
   if (slides.length === 0) {
     return (
@@ -40,6 +29,22 @@ export function CurrentSlideViewer({
         <div className="text-gray-500 dark:text-gray-400">{s.noSlides}</div>
       </div>
     );
+  }
+
+  // Clamp the index into range: Proclaim publishes status and presentation as
+  // separate writes, so currentIndex can transiently point past the slides.
+  const clampedIndex = Math.min(Math.max(currentIndex, 0), slides.length - 1);
+
+  // Build array of slides to display with context
+  const startIdx = Math.max(0, clampedIndex - context);
+  const endIdx = Math.min(slides.length - 1, clampedIndex + context);
+
+  const visibleSlides: Slide[] = [];
+  for (let i = startIdx; i <= endIdx; i++) {
+    visibleSlides.push({
+      text: slides[i],
+      isActive: i === clampedIndex,
+    });
   }
 
   return (
@@ -73,7 +78,7 @@ export function CurrentSlideViewer({
             </div>
             {!slide.isActive && (
               <div className="text-xs text-gray-500 dark:text-gray-600 mt-1 text-center">
-                {startIdx + idx < currentIndex ? s.previous : s.next}
+                {startIdx + idx < clampedIndex ? s.previous : s.next}
               </div>
             )}
           </div>
@@ -91,49 +96,36 @@ export function CurrentSlideViewerContainer() {
   const statusMap = useMap('proclaimStatus');
   const presentationsMap = useMap('proclaimPresentations');
 
-  try {
-    // Read current status
-    const itemId = statusMap.get('itemId') as string | undefined;
-    if (!itemId) {
-      throw new Error('No itemId in statusMap');
-    }
-    const slideIndex = (statusMap.get('slideIndex') as number) ?? 0;
+  // Read current status and presentation data.
+  const itemId = statusMap.get('itemId') as string | undefined;
+  const presentation = itemId
+    ? (presentationsMap.get(itemId) as { title: string; slides: string[] } | undefined)
+    : undefined;
 
-    // Read presentation data
-    const presentation = presentationsMap.get(itemId) as { title: string; slides: string[] } | undefined;
-    if (!presentation) {
-      throw new Error('Presentation not found');
-    }
-
-    const title = presentation.title || s.untitledPresentation;
-    const slidesArray = presentation.slides || [];
-    const slides: string[] = [];
-
-    if (slidesArray.length > 0) {
-      for (let i = 0; i < slidesArray.length; i++) {
-        const slide = slidesArray[i];
-        if (typeof slide === 'string') {
-          slides.push(slide);
-        }
-      }
-    }
-
+  // Without a current item or its presentation, we have nothing to show yet.
+  if (!itemId || !presentation) {
     return (
-      <CurrentSlideViewer
-        title={title}
-        slides={slides}
-        currentIndex={slideIndex}
-        context={0}
-      />
-    );
-  } catch {
-      return (
-        <div className="flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-          <div className="text-gray-500 dark:text-gray-400">
-            {s.waitingForProclaim}
-            <div className="text-xs mt-2">{s.isProclaimRunning}</div>
-          </div>
+      <div className="flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <div className="text-gray-500 dark:text-gray-400">
+          {s.waitingForProclaim}
+          <div className="text-xs mt-2">{s.isProclaimRunning}</div>
         </div>
-      );
+      </div>
+    );
   }
+
+  const slideIndex = (statusMap.get('slideIndex') as number) ?? 0;
+  const title = presentation.title || s.untitledPresentation;
+  const slides = (presentation.slides || []).filter(
+    (slide): slide is string => typeof slide === 'string',
+  );
+
+  return (
+    <CurrentSlideViewer
+      title={title}
+      slides={slides}
+      currentIndex={slideIndex}
+      context={0}
+    />
+  );
 }
