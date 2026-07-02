@@ -654,3 +654,167 @@ export const draftItemTranslations = async (
     onUsage?.(result.usage);
     return result.translations;
 };
+
+// --- Live note-outline synthesis ---------------------------------------------------------
+//
+// Incrementally turns a talk's live transcript into outline blocks the editor reviews. Unlike
+// the slide translator, this runs as ONE continuous conversation over the whole talk: each turn
+// appends the new transcript slice + the current outline, so the model keeps a running
+// understanding, prefixes stay cache-friendly, and it reconciles what it proposed earlier
+// against what the editor actually kept/edited (that diff IS the human feedback — no separate
+// event log). A turn may legitimately propose zero blocks when there isn't enough new material.
+
+/** A single outline block the model proposes (before it becomes a real Yjs block). */
+export type NoteBlockDraft = {
+    type: 'heading' | 'bullet';
+    level: number;
+    content: string;
+};
+
+/** An outline block as it currently stands, sent to the model as ground truth each turn. */
+export type OutlineSnapshotBlock = NoteBlockDraft & {
+    /** 'confirmed' = kept by the editor; 'proposed' = an earlier suggestion not yet reviewed. */
+    status: 'confirmed' | 'proposed';
+};
+
+/** Structured-output schema: an object with a (possibly empty) list of proposed blocks. */
+const PROPOSE_BLOCKS_SCHEMA = {
+    type: genAI.Type.OBJECT,
+    required: ['blocks'],
+    properties: {
+        blocks: {
+            type: genAI.Type.ARRAY,
+            items: {
+                type: genAI.Type.OBJECT,
+                required: ['type', 'level', 'content'],
+                properties: {
+                    type: { type: genAI.Type.STRING, description: '"heading" or "bullet".' },
+                    level: { type: genAI.Type.INTEGER, description: 'Depth 0-5.' },
+                    content: { type: genAI.Type.STRING },
+                },
+            },
+        },
+    },
+};
+
+const NOTE_SYNTH_INSTRUCTIONS = `You are an expert note-taker building a live outline of a talk in real time, as an English transcript streams in.
+
+Each turn you receive the outline so far and the new transcript since the last turn. Propose a FEW new outline blocks that capture genuinely new material. Rules:
+- Use a heading (type "heading") when the topic shifts; use bullets (type "bullet") for points and supporting detail.
+- level is 0-5. For headings, level is the heading depth (0 = top level). For bullets, level is the indent depth under the current point.
+- Keep each block short and self-contained — a phrase or one sentence, never a raw transcript quote.
+- Do NOT repeat, restate, or lightly reword anything already in the outline.
+- Match the wording and style the editor has kept or edited in CONFIRMED blocks.
+- If there is not yet enough substance for a new block (filler, repetition, or just a few words), return an EMPTY blocks array and wait.
+- Never revise or delete existing blocks; only propose new ones — they are appended to the end of the outline.
+
+Outline blocks are marked CONFIRMED (kept by the editor) or PROPOSED (your earlier suggestions not yet reviewed). Build on CONFIRMED structure and do not duplicate still-PROPOSED blocks.
+
+Respond ONLY with JSON of the form {"blocks": [{"type": "heading"|"bullet", "level": <0-5>, "content": "..."}]}. An empty blocks array is valid and expected during quiet stretches.`;
+
+/** Render the current outline for the prompt, tagging each block's review status. */
+const formatOutlineForPrompt = (outline: OutlineSnapshotBlock[]): string => {
+    if (outline.length === 0) return '(the outline is empty)';
+    return outline
+        .map((block) => {
+            const tag = block.status === 'confirmed' ? '[CONFIRMED]' : '[PROPOSED] ';
+            const level = Math.min(Math.max(0, block.level), 5);
+            const body =
+                block.type === 'heading'
+                    ? `${'#'.repeat(level + 2)} ${block.content}`
+                    : `${'  '.repeat(level)}- ${block.content}`;
+            return `${tag} ${body}`;
+        })
+        .join('\n');
+};
+
+/** The per-turn user message: current outline + the new transcript slice. */
+const buildNoteSynthesisTurnBody = (newTranscript: string, outline: OutlineSnapshotBlock[]): string =>
+    `Outline so far:
+<outline>
+${formatOutlineForPrompt(outline)}
+</outline>
+
+New transcript since last time:
+<transcript>
+${newTranscript.trim()}
+</transcript>
+
+Propose new blocks capturing only genuinely new material (or an empty array).`;
+
+/**
+ * Parse a `propose_blocks` structured response into validated drafts. Tolerant by design:
+ * bad JSON yields no blocks (a quiet turn), unknown types fall back to 'bullet', levels are
+ * clamped to 0-5, and empty-content blocks are dropped.
+ */
+export const parseProposedBlocks = (text: string | undefined): NoteBlockDraft[] => {
+    if (!text) return [];
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(text);
+    } catch {
+        return [];
+    }
+    const rawBlocks = (parsed as { blocks?: unknown })?.blocks;
+    if (!Array.isArray(rawBlocks)) return [];
+    const drafts: NoteBlockDraft[] = [];
+    for (const raw of rawBlocks) {
+        const entry = raw as { type?: unknown; level?: unknown; content?: unknown };
+        const content = typeof entry.content === 'string' ? entry.content.trim() : '';
+        if (!content) continue;
+        const type = entry.type === 'heading' ? 'heading' : 'bullet';
+        const levelNum = typeof entry.level === 'number' ? Math.floor(entry.level) : 0;
+        const level = Math.min(Math.max(0, levelNum), 5);
+        drafts.push({ type, level, content });
+    }
+    return drafts;
+};
+
+export type NoteSynthTurnResult = {
+    /** New blocks the model proposes this turn (empty when there isn't enough new material). */
+    blocks: NoteBlockDraft[];
+    /** The updated conversation (raw Gemini Content, mutated in place and returned). */
+    messages: Content[];
+};
+
+/**
+ * Run one turn of live note synthesis over a continuing conversation.
+ *
+ * `messages` is mutated in place and returned; pass the same array back next turn to keep the
+ * conversation (and its cache-friendly prefix) going. On the first turn (empty `messages`) the
+ * standing instructions are prepended. The model's prior proposals live in `messages`, so
+ * sending the current `outline` each turn lets it see which were kept, edited, or dropped.
+ */
+export const synthesizeNotesTurn = async (
+    provider: GeminiProvider,
+    params: {
+        messages: Content[];
+        newTranscript: string;
+        outline: OutlineSnapshotBlock[];
+        model?: string;
+    },
+): Promise<NoteSynthTurnResult> => {
+    const { messages, newTranscript, outline } = params;
+    const model = params.model ?? provider.defaultModel;
+
+    const turnBody = buildNoteSynthesisTurnBody(newTranscript, outline);
+    const userText = messages.length === 0
+        ? `${NOTE_SYNTH_INSTRUCTIONS}\n\n${turnBody}`
+        : turnBody;
+    messages.push({ role: 'user', parts: [{ text: userText }] });
+
+    const response = await provider.apiClient.models.generateContent({
+        model,
+        config: {
+            responseMimeType: 'application/json',
+            responseSchema: PROPOSE_BLOCKS_SCHEMA,
+        },
+        contents: messages,
+    });
+    const modelContent = response.candidates?.[0]?.content;
+    // Keep the model turn verbatim so the next turn resumes with its prior proposals in history.
+    if (modelContent) messages.push(modelContent);
+
+    const blocks = parseProposedBlocks(response.text);
+    return { blocks, messages };
+};

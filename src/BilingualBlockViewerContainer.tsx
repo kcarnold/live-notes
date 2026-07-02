@@ -51,12 +51,15 @@ export function BilingualBlockViewerContainer({
     return () => translationCache.unobserve(observer);
   }, [translationCache]);
 
-  // Convert Yjs data to props for pure component
+  // Convert Yjs data to props for pure component. Unaccepted AI proposals (status
+  // 'proposed') are filtered out so they never reach the audience/listener — only the
+  // editor sees them, in BlockEditor.
   const blocks: Block[] = useMemo(() => {
     void version; // Include version to trigger recompute on changes
     return sourceBlocks
       .toArray()
       .map(yMap => yMapToBlock(yMap))
+      .filter(block => block.status === 'confirmed')
       .sort(compareBlockPositions);
   }, [sourceBlocks, version]);
 

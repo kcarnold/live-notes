@@ -1028,6 +1028,77 @@ describe('BlockEditor', () => {
     });
   });
 
+  describe('AI Proposals (status: proposed)', () => {
+    it('shows accept/reject controls only on proposed blocks', () => {
+      const confirmed = createBlock('Confirmed', 'bullet', 0, positions[0]);
+      const proposed = createBlock('Suggested', 'bullet', 0, positions[1], 'proposed', 'ai');
+      addBlockToYArray(yArray, confirmed);
+      addBlockToYArray(yArray, proposed);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      // One accept and one reject control (for the single proposed block), no focus needed.
+      expect(screen.getAllByTitle(/Accept suggestion/i)).toHaveLength(1);
+      expect(screen.getAllByTitle(/Reject suggestion/i)).toHaveLength(1);
+    });
+
+    it('accepting a proposal flips it to confirmed (now visible to translation)', async () => {
+      const user = userEvent.setup();
+      const proposed = createBlock('Suggested', 'bullet', 0, positions[0], 'proposed', 'ai');
+      addBlockToYArray(yArray, proposed);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByTitle(/Accept suggestion/i));
+
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('status')).toBe('confirmed');
+        expect(yMap.get('origin')).toBe('ai'); // provenance preserved
+      });
+      // Control disappears once accepted.
+      expect(screen.queryByTitle(/Accept suggestion/i)).not.toBeInTheDocument();
+    });
+
+    it('rejecting a proposal removes it, even as the last block', async () => {
+      const user = userEvent.setup();
+      const proposed = createBlock('Suggested', 'bullet', 0, positions[0], 'proposed', 'ai');
+      addBlockToYArray(yArray, proposed);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByTitle(/Reject suggestion/i));
+
+      await waitFor(() => {
+        expect(yArray.length).toBe(0);
+      });
+    });
+
+    it('lets the reviewer edit a proposal in place before accepting', async () => {
+      const user = userEvent.setup();
+      const proposed = createBlock('Draft', 'bullet', 0, positions[0], 'proposed', 'ai');
+      addBlockToYArray(yArray, proposed);
+
+      render(<BlockEditor yArray={yArray} />);
+
+      await user.click(screen.getByText('Draft'));
+      const textarea = screen.getByRole('textbox');
+      await user.type(textarea, ' edited');
+
+      await waitFor(() => {
+        const yText = yArray.get(0).get('content') as Y.Text;
+        expect(yTextToString(yText)).toBe('Draft edited');
+      });
+
+      await user.click(screen.getByTitle(/Accept suggestion/i));
+      await waitFor(() => {
+        const yMap = yArray.get(0);
+        expect(yMap.get('status')).toBe('confirmed');
+        expect(yTextToString(yMap.get('content') as Y.Text)).toBe('Draft edited');
+      });
+    });
+  });
+
   describe('Empty Area Click', () => {
     it('creates a block when clicking empty area with no blocks', async () => {
       const user = userEvent.setup();
