@@ -8,7 +8,9 @@ export function useScrollToBottom(
 ) {
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const enabledRef = React.useRef(enabled);
-  enabledRef.current = enabled;
+  React.useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
   React.useEffect(() => {
     if (timeoutRef.current || !enabledRef.current) {
       return;
@@ -18,6 +20,10 @@ export function useScrollToBottom(
     if (!scrollParent || !target) return;
 
     timeoutRef.current = setTimeout(() => {
+      // Clear the handle first so a bailout below can't leave it stuck non-null,
+      // which would permanently block every future scroll for this component.
+      timeoutRef.current = null;
+
       const scrollParent = scrollParentRef.current;
       const target = targetRef.current;
       if (!scrollParent || !target || !enabledRef.current) return;
@@ -31,7 +37,6 @@ export function useScrollToBottom(
         top: scrollTop,
         behavior: 'smooth',
       });
-      timeoutRef.current = null;
     }, 100);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);

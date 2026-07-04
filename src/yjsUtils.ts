@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import diff from 'fast-diff';
 import { useText } from '@y-sweet/react';
 import * as Y from 'yjs';
@@ -14,25 +14,22 @@ export function yTextToString(yText: Y.Text): string {
 // Hook based on implementation here https://discuss.yjs.dev/t/plain-text-input-component-with-y-text/2358/2
 export const useAsPlainText = (name: string): [string, (newText: string) => void] => {
   const sharedText = useText(name);
-  const [text, setText] = useState(() => yTextToString(sharedText));
 
-  // Reset text state when name changes
-  useEffect(() => {
-    setText(yTextToString(sharedText));
-  }, [sharedText, name]);
-
-  useEffect(() => {
-    const observer = () => {
-      setText(yTextToString(sharedText));
-    };
-
-    sharedText.observe(observer);
-    return () => { sharedText.unobserve(observer); };
-  }, [sharedText]);
+  // Subscribe to the shared Y.Text as an external store. useSyncExternalStore
+  // re-reads the snapshot on every change and whenever `subscribe` changes (i.e.
+  // when `name` yields a different Y.Text), so no manual reset effect is needed.
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      sharedText.observe(onStoreChange);
+      return () => { sharedText.unobserve(onStoreChange); };
+    },
+    [sharedText],
+  );
+  const text = useSyncExternalStore(subscribe, () => yTextToString(sharedText));
 
   const setPlainText = (newText: string) => {
     setYTextFromString(sharedText, newText);
-    // Don't set the state here, as it will be set by the observer
+    // Don't set state here; the snapshot updates via the observer.
   };
 
   return [text, setPlainText];
