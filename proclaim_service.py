@@ -532,12 +532,29 @@ class ProclaimYjsService:
                 response = await client.post(
                     f"{self.ysweet_url}/api/translateItem",
                     json=body,
-                    timeout=60.0,
+                    timeout=3 * 60.0,
                 )
                 response.raise_for_status()
                 return response.json().get('translations')
         except (httpx.HTTPError, ValueError) as e:
-            logger.warning(f"Slide translation request failed: {e}")
+            # Timeout exceptions (ReadTimeout/ConnectTimeout/...) stringify to '', so log
+            # repr(e) to preserve the exception type. Include item context so we know which
+            # slide failed.
+            logger.warning(
+                f"Slide translation request failed for item {item_id} "
+                f"({item_title!r}, {len(slides)} slides): {e!r}"
+            )
+            if ph:
+                ph.capture_exception(
+                    e,
+                    distinct_id=DISTINCT_ID,
+                    properties={
+                        "item_id": item_id,
+                        "item_title": item_title,
+                        "num_slides": len(slides),
+                        "languages": SLIDE_TRANSLATION_LANGUAGES,
+                    },
+                )
             return None
 
     def _store_translations(self, slides: list, translations: Dict[str, Any]) -> None:
