@@ -284,7 +284,7 @@ def get_slides_for_song(content: dict, content_key: str = '_richtextfield:Lyrics
     return split_into_slides(text)
 
 
-def _is_blank_item(item_kind: str, item_title: str) -> bool:
+def is_blank_item(item_kind: str, item_title: str) -> bool:
     """Whether an item renders as a blank slide (image slideshow, offering, etc.)."""
     return item_kind in BLANK_ITEM_KINDS or item_title.lower() in BLANK_ITEM_TITLES
 
@@ -323,7 +323,7 @@ def parse_item_translation(
     item_kind = service_item.get('ServiceItemKind') or 'Unknown'
     item_title = service_item.get('Title') or 'Unknown'
 
-    if _is_blank_item(item_kind, item_title):
+    if is_blank_item(item_kind, item_title):
         logger.info(f"Showing blank item: {item_title}")
         return ServiceItemWithSlides(itemId=item_id, title=item_title, slides=[''], itemKind=item_kind)
 
@@ -360,7 +360,7 @@ def parse_item_original(db: ProclaimDB, item_id: str) -> Optional[ServiceItemWit
     item_kind = service_item.get('ServiceItemKind') or 'Unknown'
     item_title = service_item.get('Title') or 'Unknown'
 
-    if _is_blank_item(item_kind, item_title):
+    if is_blank_item(item_kind, item_title):
         return ServiceItemWithSlides(itemId=item_id, title=item_title, slides=[''], itemKind=item_kind)
 
     main_key = MAIN_CONTENT_KEYS.get(item_kind)
@@ -410,7 +410,7 @@ def existing_translation_text(
     content = json.loads(service_item['Content'])
     item_kind = service_item.get('ServiceItemKind') or 'Unknown'
     item_title = service_item.get('Title') or 'Unknown'
-    if _is_blank_item(item_kind, item_title):
+    if is_blank_item(item_kind, item_title):
         return None
 
     translation_key = f'slideOutput:{translation_screen_idx-1}:RichTextXml'

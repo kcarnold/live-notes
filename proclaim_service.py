@@ -65,6 +65,7 @@ from pycrdt.websocket.websocket import HttpxWebsocket
 from proclaim_lib import (
     ServiceItemWithSlides,
     ProclaimDB,
+    is_blank_item,
     parse_item_original,
     service_item_signatures,
     slide_translation_key,
@@ -388,14 +389,20 @@ class ProclaimYjsService:
 
     def update_status_in_yjs(self, item_id: str, slide_index: int):
         """Update current status in Yjs"""
-        # Clip slide index to valid range
+        # Clip slide index to valid range. Blank items (image slideshows, offering,
+        # etc.) collapse to a single blank slide, but Proclaim keeps reporting the
+        # slideshow's own advancing index as it loops — that's expected, not an
+        # anomaly, so clip it quietly for those.
         if self.current_item_slides:
-            max_index = len(self.current_item_slides.slides) - 1
+            item = self.current_item_slides
+            blank = is_blank_item(item.itemKind, item.title)
+            clip_log = logger.debug if blank else logger.warning
+            max_index = len(item.slides) - 1
             if slide_index > max_index:
-                logger.warning(f"Slide index {slide_index} out of range for item {item_id}, clipping to {max_index}")
+                clip_log(f"Slide index {slide_index} out of range for item {item_id}, clipping to {max_index}")
                 slide_index = max_index
             if slide_index < 0:
-                logger.warning(f"Slide index {slide_index} less than 0 for item {item_id}, clipping to 0")
+                clip_log(f"Slide index {slide_index} less than 0 for item {item_id}, clipping to 0")
                 slide_index = 0
         with self.ydoc.transaction():
             self.status_map['itemId'] = item_id
@@ -464,6 +471,14 @@ class ProclaimYjsService:
             self.last_item_id = item_id
             self.last_slide_index = slide_index
         elif slide_index != self.last_slide_index:
+            # Blank items (image slideshows, offering, etc.) render as a single
+            # blank slide, but Proclaim keeps advancing its own slide index as the
+            # slideshow loops. Ignore those slide-only changes so we don't churn
+            # logs and redundant Yjs writes for a view that never changes.
+            item = self.current_item_slides
+            if item and is_blank_item(item.itemKind, item.title):
+                self.last_slide_index = slide_index
+                return
             logger.info(f"Slide changed to {slide_index}")
             self.update_status_in_yjs(item_id, slide_index)
             self.last_slide_index = slide_index

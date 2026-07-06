@@ -266,6 +266,46 @@ def test_sync_service_order_pushes_items_and_caches_revisions():
         assert calls == ['i1', 'i2', 'i1']
 
 
+def test_apply_status_ignores_slide_loop_on_blank_item():
+    """A looping image slideshow keeps reporting advancing slide indices, but the
+    item renders as a single blank slide. Slide-only changes for such items must not
+    churn Yjs writes or the clip warning — the status stays pinned to slide 0."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    blank = ServiceItemWithSlides('img1', 'Slideshow', [''], 'ImageSlideshow')
+    service.items_by_id = {'img1': blank}
+
+    # First status on this item pushes slide 0.
+    service._apply_status(status(item_id='img1', slide_index=0))
+    assert service.status_map['itemId'] == 'img1'
+    assert service.status_map['slideIndex'] == 0
+
+    update_spy = mock.Mock(wraps=service.update_status_in_yjs)
+    service.update_status_in_yjs = update_spy
+
+    # The slideshow loops: Proclaim advances the index, but nothing should be pushed.
+    for idx in (1, 2, 3):
+        service._apply_status(status(item_id='img1', slide_index=idx))
+
+    update_spy.assert_not_called()
+    assert service.status_map['slideIndex'] == 0
+    assert service.last_slide_index == 3
+
+
+def test_apply_status_pushes_slide_change_on_normal_item():
+    """A real multi-slide item must still push slide-index changes."""
+    from proclaim_lib import ServiceItemWithSlides
+
+    service = make_service()
+    item = ServiceItemWithSlides('i1', 'Song', ['A', 'B', 'C'], 'SongLyrics')
+    service.items_by_id = {'i1': item}
+
+    service._apply_status(status(item_id='i1', slide_index=0))
+    service._apply_status(status(item_id='i1', slide_index=2))
+    assert service.status_map['slideIndex'] == 2
+
+
 def test_store_translations_writes_content_addressed_keys():
     """Per-slide results land in slideTranslations under language:normalized-text keys."""
     from proclaim_lib import slide_translation_key
