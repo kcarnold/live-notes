@@ -16,9 +16,8 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 ## Design docs
 
 - [slide-translations-plan.md](slide-translations-plan.md) — slide translation agent design.
-- Replay harness design: see the tracking issue
-  ([#70 area](https://github.com/kcarnold/live-notes/issues)) — record-at-the-boundary
-  replay of full services for testing and accountability.
+- Replay harness design: [#70](https://github.com/kcarnold/live-notes/issues/70) —
+  record-at-the-boundary replay of full services for testing and accountability.
 
 ## Subsystem references (repo root)
 
