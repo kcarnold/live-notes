@@ -12,6 +12,9 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Proclaim integration**: Python service syncing Proclaim presentation slides to Yjs
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
+- **Live speech translation**: LiveKit rooms + Gemini Live ([live-audio/](live-audio/)) — a broadcaster publishes mic audio; per-language translator bots stream it through Gemini Live and publish translated audio + live transcripts
+
+**Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the component map (what runs where, who writes what into the shared Yjs doc). [docs/README.md](docs/README.md) is the docs index; [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) is the manual pre-service smoke checklist — PR descriptions should declare which of its sections they touch.
 
 ## Development Commands
 
