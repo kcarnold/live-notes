@@ -97,16 +97,19 @@ uv run proclaim_service.py
 uv run pytest
 
 # Run a single test
-uv run pytest tests/test_proclaim_service.py::test_reconnects_after_websocket_drop
+uv run pytest tests/test_slide_sync_runtime.py::test_reconnects_after_websocket_drop
 ```
 
-Tests live in [tests/](tests/) and cover the service's connection lifecycle (lazy connect,
-off-air disconnect, auto-reconnect with backoff, state re-push). They fake the Proclaim DB,
-the Y-Sweet websocket, and the Yjs Provider, and scale the timing constants down via the
-`fast_timing` fixture so the loops run in milliseconds — no real Proclaim or Y-Sweet needed.
-Async tests run on the asyncio backend via the `anyio_backend` fixture in
-[tests/conftest.py](tests/conftest.py), which also sets `YSWEET_URL` (asserted at import time)
-and puts the repo root on `sys.path`.
+Tests live in [tests/](tests/), split to match the decoupled modules: `test_slide_feed`,
+`test_proclaim_feed`, `test_yjs_publisher`, `test_slide_translator`, `test_slide_sync_runtime`
+(connection lifecycle: lazy connect, off-air disconnect, auto-reconnect with backoff, state
+re-push), `test_slide_seam` (replayed feed drives the real consumers), and `test_proclaim_lib`.
+The shared fakes for the Proclaim DB, the Y-Sweet websocket, and the Yjs Provider live in
+[tests/helpers.py](tests/helpers.py); timing is scaled down by injecting it (constructor args)
+so loops run in milliseconds — no real Proclaim or Y-Sweet needed. Async tests run on the
+asyncio backend via the `anyio_backend` fixture in [tests/conftest.py](tests/conftest.py),
+which also sets `YSWEET_URL` and puts the repo root on `sys.path`. The new library modules are
+import-clean (no `YSWEET_URL` needed to import them).
 
 ### Deployment
 ```bash
@@ -366,7 +369,14 @@ The app has two modes determined by URL hash (`#editor`):
 ### Backend
 - [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
 - [nlp.ts](nlp.ts) - Gemini API integration for translation
-- [proclaim_service.py](proclaim_service.py) - Python service that syncs Proclaim presentation data to Yjs
+- Proclaim → Yjs sync (Python), decoupled into a slide feed + consumers:
+  - [proclaim_service.py](proclaim_service.py) - thin entrypoint: env/config, telemetry, and wiring
+  - [slide_feed.py](slide_feed.py) - the seam: `FeedSnapshot` (serializable), `SlideFeed` Protocol, `SnapshotBus`
+  - [proclaim_feed.py](proclaim_feed.py) - `ProclaimClient` + `ProclaimFeed` (the source), emits a snapshot per poll
+  - [yjs_publisher.py](yjs_publisher.py) - `YjsSlidePublisher` (client consumer), single-transaction map writes
+  - [slide_translator.py](slide_translator.py) - `SlideTranslator` (translation consumer), seeds `slideTranslations`
+  - [slide_sync_runtime.py](slide_sync_runtime.py) - `SlideSyncRuntime`: doc lifecycle, connect/reconnect, fan-out
+  - [proclaim_lib.py](proclaim_lib.py) - DB access + rich-text/XML slide parsing (unchanged, shared)
 
 ### Frontend Core
 - [App.tsx](src/App.tsx) - Main React app with routing and layout system
