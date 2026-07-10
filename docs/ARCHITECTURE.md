@@ -91,4 +91,10 @@ writer once each component announces its clientID (planned: via the status heart
   publisher also fixed #67's status/presentation desync.)
 - The replay harness (tracking issue supersedes #69) extends these seams into recorded,
   shareable fixtures with per-component real/simulated switches; the `FeedSnapshot`
-  `to_json`/`from_json` round-trip is the slot where recorded Proclaim output plugs in.
+  `to_json`/`from_json` round-trip is the slot where recorded Proclaim output plugs in. The
+  Proclaim slice of this lives in `slide_replay.py`: `proclaim_service.py --record PATH`
+  wraps the live feed to append each snapshot to a JSONL stream, `--replay PATH` re-emits a
+  recording as a `SlideFeed` (honoring the recorded cadence) so the unchanged runtime replays
+  it against Y-Sweet, and `replay_records_through_consumers` plays a recording through the
+  real consumers offline — the network-free regression test, driven by a committed synthetic
+  fixture (`tests/fixtures/synthetic_service.jsonl`).

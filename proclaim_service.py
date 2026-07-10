@@ -20,6 +20,7 @@ import logging
 import os
 import signal
 import socket
+import time
 from typing import Any, Dict, List, Optional
 
 import anyio
@@ -31,6 +32,8 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
 from proclaim_feed import DEFAULT_PROCLAIM_BASE_URL, ProclaimFeed
+from slide_feed import SlideFeed
+from slide_replay import RecordingSlideFeed, ReplaySlideFeed, load_records
 from slide_sync_runtime import RuntimeTiming, SlideSyncRuntime
 from slide_translator import SlideTranslator
 from yjs_publisher import YjsSlidePublisher
@@ -154,12 +157,44 @@ def make_translate_fn(ysweet_url: str, languages: List[str]):
     return translate
 
 
-def build_runtime(doc_id: Optional[str]) -> SlideSyncRuntime:
-    """Wire the feed + consumers into a runtime from the module configuration."""
-    feed = ProclaimFeed(
+def _build_feed(
+    *,
+    record_path: Optional[str],
+    replay_path: Optional[str],
+    replay_speed: float,
+) -> SlideFeed:
+    """Build the slide source: a live ``ProclaimFeed``, a ``ReplaySlideFeed`` (``--replay``),
+    or a live feed wrapped in a ``RecordingSlideFeed`` (``--record``)."""
+    if replay_path:
+        records = load_records(replay_path)
+        # speed > 0 scales real time (2x => half the delays); speed <= 0 replays instantly.
+        time_scale = (1.0 / replay_speed) if replay_speed > 0 else 0.0
+        logger.info(
+            f"Replaying {len(records)} recorded snapshots from {replay_path} "
+            f"(speed {replay_speed}x)"
+        )
+        return ReplaySlideFeed(records, time_scale=time_scale)
+
+    feed: SlideFeed = ProclaimFeed(
         proclaim_base_url=PROCLAIM_BASE_URL,
         order_sync_interval=SERVICE_ORDER_SYNC_INTERVAL,
         report_exception=report_exception,
+    )
+    if record_path:
+        feed = RecordingSlideFeed(feed, record_path)
+    return feed
+
+
+def build_runtime(
+    doc_id: Optional[str],
+    *,
+    record_path: Optional[str] = None,
+    replay_path: Optional[str] = None,
+    replay_speed: float = 1.0,
+) -> SlideSyncRuntime:
+    """Wire the feed + consumers into a runtime from the module configuration."""
+    feed = _build_feed(
+        record_path=record_path, replay_path=replay_path, replay_speed=replay_speed
     )
     publisher = YjsSlidePublisher()
     translator = SlideTranslator(
@@ -169,7 +204,9 @@ def build_runtime(doc_id: Optional[str]) -> SlideSyncRuntime:
         report_exception=report_exception,
     )
     timing = RuntimeTiming(
-        poll_interval=POLL_INTERVAL,
+        # In replay mode the feed owns the cadence (it honors recorded timing), so don't add
+        # the live on-air poll delay on top of it.
+        poll_interval=0.0 if replay_path else POLL_INTERVAL,
         poll_interval_off_air=POLL_INTERVAL_OFF_AIR,
         off_air_disconnect_after=OFF_AIR_DISCONNECT_AFTER,
         reconnect_backoff_initial=RECONNECT_BACKOFF_INITIAL,
@@ -202,18 +239,42 @@ async def main():
              "DateGiven (falling back to today's date).",
     )
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument(
+        '--record', metavar='PATH',
+        help="Record the slide feed's FeedSnapshot stream to PATH (JSONL) while running live, "
+             "for later replay (issue #70).",
+    )
+    parser.add_argument(
+        '--replay', metavar='PATH',
+        help="Replay a recorded FeedSnapshot stream (JSONL) instead of polling Proclaim. "
+             "Defaults to a fresh doc-test-<epoch> document so it never clobbers real data.",
+    )
+    parser.add_argument(
+        '--replay-speed', type=float, default=1.0,
+        help="Replay speed multiplier (2 = twice as fast); <= 0 replays as fast as possible.",
+    )
     args = parser.parse_args()
 
     if args.debug:
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug logging enabled")
 
+    if args.record and args.replay:
+        parser.error("--record and --replay are mutually exclusive")
+
     doc_id = args.doc_id or os.getenv('PROCLAIM_DOC_ID')
+    if args.replay and not doc_id:
+        doc_id = f'doc-test-{int(time.time())}'
 
     logger.info(f"Proclaim URL: {PROCLAIM_BASE_URL}")
     logger.info(f"Poll interval: {POLL_INTERVAL}s (on air), {POLL_INTERVAL_OFF_AIR}s (off air)")
 
-    runtime = build_runtime(doc_id)
+    runtime = build_runtime(
+        doc_id,
+        record_path=args.record,
+        replay_path=args.replay,
+        replay_speed=args.replay_speed,
+    )
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(runtime.run)
