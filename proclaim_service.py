@@ -520,7 +520,13 @@ class ProclaimYjsService:
         """
         if not slides or not SLIDE_TRANSLATION_LANGUAGES:
             return None
-        body: Dict[str, Any] = {"slides": slides, "languages": SLIDE_TRANSLATION_LANGUAGES}
+        # docId names the per-day doc the server writes the agent conversation into (the
+        # same doc this service is connected to).
+        body: Dict[str, Any] = {
+            "slides": slides,
+            "languages": SLIDE_TRANSLATION_LANGUAGES,
+            "docId": self.doc_id,
+        }
         if item_title and item_title != "Unknown":
             body["itemTitle"] = item_title
         if item_id:
