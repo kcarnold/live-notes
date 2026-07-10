@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import anyio
 import httpx
@@ -74,7 +74,7 @@ class SlideSyncRuntime:
         # True when the doc date came from the on-air show (authoritative, no midnight roll).
         self.doc_date_from_show = False
 
-        self.ydoc = Doc()
+        self.ydoc: Doc = Doc()
         self.publisher.bind(self.ydoc)
         self.translator.bind(self.ydoc)
 
@@ -223,7 +223,7 @@ class SlideSyncRuntime:
                 await self._poll_until_session_end(websocket, bus)
                 session_tg.cancel_scope.cancel()
 
-    async def _poll_until_session_end(self, websocket, bus: SnapshotBus) -> None:
+    async def _poll_until_session_end(self, websocket: Any, bus: SnapshotBus) -> None:
         """Poll the feed and fan snapshots out until the session should end.
 
         Returns on sustained off air or a date rollover; raises on a websocket problem.
