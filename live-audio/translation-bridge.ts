@@ -84,6 +84,82 @@ export function nextBackoffMs(
   return Math.round(cap / 2 + Math.random() * (cap / 2));
 }
 
+/**
+ * Minimal structural views of the LiveKit room objects the subscription decision
+ * touches, so the decision can be unit-tested with tiny fakes (no live `Room`).
+ */
+export interface AudioPublicationLike {
+  /** TrackKind in production; a predicate (`isAudio`) decides what counts as audio. */
+  kind: unknown;
+  /** Manually subscribe/unsubscribe (autoSubscribe is off on the bridge's room). */
+  setSubscribed(subscribed: boolean): void;
+}
+export interface AudioParticipantLike {
+  identity: string;
+  trackPublications: Iterable<[string, AudioPublicationLike]>;
+}
+
+/**
+ * Wire the bridge's room so the organizer's microphone audio always reaches Gemini,
+ * regardless of publish timing. This is the fix for a production outage: the old
+ * code took an early return when the organizer was already in the room and so never
+ * registered a future-publish listener — if the mic track landed a beat *after* the
+ * bridge started (the common join/getUserMedia race), the bridge subscribed to
+ * nothing and stayed active but permanently deaf.
+ *
+ * The decision has three parts, all of which must run every time:
+ *   1. Subscribe to any organizer audio already published when we start.
+ *   2. Subscribe to any organizer audio published later (`TrackPublished`).
+ *   3. Pipe each subscribed organizer audio track to Gemini exactly once
+ *      (`TrackSubscribed`), deduped so a track can't be piped twice.
+ *
+ * Kept pure (no `Room`, no LiveKit enums) so the timing cases are unit-testable.
+ */
+export function wireOrganizerAudioSubscription<Track>(params: {
+  organizerIdentity: string;
+  existingParticipants: Iterable<AudioParticipantLike>;
+  isAudio: (pub: AudioPublicationLike) => boolean;
+  onTrackPublished: (
+    handler: (pub: AudioPublicationLike, participant: AudioParticipantLike) => void
+  ) => void;
+  onTrackSubscribed: (
+    handler: (
+      track: Track,
+      pub: AudioPublicationLike,
+      participant: AudioParticipantLike
+    ) => void
+  ) => void;
+  pipe: (track: Track) => void;
+}): void {
+  const subscribeIfOrganizerAudio = (
+    pub: AudioPublicationLike,
+    participant: AudioParticipantLike
+  ) => {
+    if (participant.identity === params.organizerIdentity && params.isAudio(pub)) {
+      pub.setSubscribed(true);
+    }
+  };
+
+  // 1. Already-published organizer audio.
+  for (const participant of params.existingParticipants) {
+    for (const [, pub] of participant.trackPublications) {
+      subscribeIfOrganizerAudio(pub, participant);
+    }
+  }
+
+  // 2. Organizer audio published after we start (the case the old early return missed).
+  params.onTrackPublished(subscribeIfOrganizerAudio);
+
+  // 3. Pipe each organizer audio track once, no matter how it got subscribed.
+  const piped = new Set<Track>();
+  params.onTrackSubscribed((track, pub, participant) => {
+    if (participant.identity !== params.organizerIdentity || !params.isAudio(pub)) return;
+    if (piped.has(track)) return;
+    piped.add(track);
+    params.pipe(track);
+  });
+}
+
 export class TranslationBridge {
   private room: Room | null = null;
   private geminiWs: WebSocket | null = null;
@@ -678,85 +754,33 @@ export class TranslationBridge {
 
   private async subscribeToOrganizer(): Promise<void> {
     if (!this.room) return;
+    const room = this.room;
 
-    // Find the organizer participant and subscribe to their audio
-    const participants = this.room.remoteParticipants;
-
-    for (const [, participant] of participants) {
-      if (participant.identity === this.organizerIdentity) {
-        this.subscribeToParticipantAudio(participant);
-        return;
-      }
-    }
-
-    // If organizer hasn't joined yet, wait for them
-    console.log(
-      `[TranslationBridge:${this.targetLanguage}] Waiting for organizer ${this.organizerIdentity}...`
-    );
-
-    // Listen for the organizer to publish their track
-    this.room.on(
-      RoomEvent.TrackPublished,
-      (
-        publication: RemoteTrackPublication,
-        participant: RemoteParticipant
-      ) => {
-        if (
-          participant.identity === this.organizerIdentity &&
-          publication.kind === TrackKind.KIND_AUDIO
-        ) {
-          publication.setSubscribed(true);
-        }
-      }
-    );
-
-    // Once subscribed, pipe to Gemini
-    this.room.on(
-      RoomEvent.TrackSubscribed,
-      (
-        track: RemoteAudioTrack,
-        publication: RemoteTrackPublication,
-        participant: RemoteParticipant
-      ) => {
-        if (
-          participant.identity === this.organizerIdentity &&
-          publication.kind === TrackKind.KIND_AUDIO
-        ) {
-          this.pipeTrackToGemini(track);
-        }
-      }
-    );
-  }
-
-  /**
-   * Manually subscribe to a participant's audio track (needed when autoSubscribe is off).
-   */
-  private subscribeToParticipantAudio(
-    participant: RemoteParticipant
-  ): void {
-    for (const [, publication] of participant.trackPublications) {
-      if (publication.kind === TrackKind.KIND_AUDIO) {
-        // Manually subscribe — this triggers TrackSubscribed event
-        publication.setSubscribed(true);
-      }
-    }
-
-    // Also listen for TrackSubscribed to pipe to Gemini
-    this.room!.on(
-      RoomEvent.TrackSubscribed,
-      (
-        track: RemoteAudioTrack,
-        pub: RemoteTrackPublication,
-        p: RemoteParticipant
-      ) => {
-        if (
-          p.identity === this.organizerIdentity &&
-          pub.kind === TrackKind.KIND_AUDIO
-        ) {
-          this.pipeTrackToGemini(track);
-        }
-      }
-    );
+    // autoSubscribe is off, so we drive subscription ourselves. The decision lives
+    // in a pure helper (unit-tested) so publish-timing races can't silently regress:
+    // it subscribes to organizer audio present now AND audio published later, and
+    // pipes each track to Gemini exactly once.
+    wireOrganizerAudioSubscription<RemoteAudioTrack>({
+      organizerIdentity: this.organizerIdentity,
+      existingParticipants: room.remoteParticipants.values(),
+      isAudio: (pub) => pub.kind === TrackKind.KIND_AUDIO,
+      onTrackPublished: (handler) =>
+        room.on(
+          RoomEvent.TrackPublished,
+          (publication: RemoteTrackPublication, participant: RemoteParticipant) =>
+            handler(publication, participant)
+        ),
+      onTrackSubscribed: (handler) =>
+        room.on(
+          RoomEvent.TrackSubscribed,
+          (
+            track: RemoteAudioTrack,
+            publication: RemoteTrackPublication,
+            participant: RemoteParticipant
+          ) => handler(track, publication, participant)
+        ),
+      pipe: (track) => this.pipeTrackToGemini(track),
+    });
   }
 
   private pipeTrackToGemini(track: RemoteAudioTrack): void {
