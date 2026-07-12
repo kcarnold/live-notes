@@ -61,14 +61,14 @@ describe("ListenViewer", () => {
             status: "ready",
             targetLanguage: "fr",
           }),
-        } as Response);
+        } as unknown as Response);
       }
       if (url.includes("/api/livekit/token")) {
         return Promise.resolve({
-          json:  () => ({ token: "token-123", serverUrl: "wss://example.com" }),
-        } as Response);
+          json: () => ({ token: "token-123", serverUrl: "wss://example.com" }),
+        } as unknown as Response);
       }
-      return Promise.resolve({ json: () => ({}) } as Response);
+      return Promise.resolve({ json: () => ({}) } as unknown as Response);
     });
     vi.stubGlobal("fetch", fetchMock);
   });
