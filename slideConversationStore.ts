@@ -18,6 +18,7 @@ import * as Y from 'yjs';
 import { createYjsProvider, type YSweetProvider } from '@y-sweet/client';
 import type { DocumentManager } from '@y-sweet/sdk';
 import type { Content } from '@google/genai';
+import type { TokenUsage } from './nlp.ts';
 
 export type SlideConversationStatus = 'running' | 'idle' | 'error';
 
@@ -32,6 +33,13 @@ export interface SlideConversation {
   /** Raw Gemini history, stored verbatim so a resume replays the agent faithfully. */
   messages: Content[];
   status: SlideConversationStatus;
+  /**
+   * Token usage summed across every agent run for this conversation (the initial draft plus
+   * each follow-up). `cachedContentTokenCount` shows how much of the re-sent prompt Gemini's
+   * context cache actually served — a running total stuck near 0 means we're paying full
+   * price for the prefix on every round. Absent on conversations created before this existed.
+   */
+  usage?: TokenUsage;
   updatedAt: number;
 }
 

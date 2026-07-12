@@ -11,8 +11,8 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
-import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider } from './nlp.ts';
-import type { TranslationTodo } from './nlp.ts';
+import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider, emptyUsage, mergeUsage } from './nlp.ts';
+import type { TranslationTodo, TokenUsage, AgentObservability } from './nlp.ts';
 import { BIBLE_TRANSLATIONS, type BibleToolCall } from './bible.ts';
 import { SlideLibrary } from './slideLibrary.ts';
 import { translateItem } from './src/slideItemTranslation.ts';
@@ -104,6 +104,43 @@ const slideConversations = new SlideConversationStore(documentManager);
 /** Stable conversation key: the Proclaim itemId when present, else a content hash. */
 function conversationKey(itemId: string | undefined, slides: string[]): string {
   return itemId && itemId.trim() ? itemId.trim() : `hash:${slidesHash(slides)}`;
+}
+
+/**
+ * PostHog LLM-observability tags for a slide-translation conversation. The conversation id
+ * is the trace id, so every generation (initial draft + follow-ups) groups into one trace;
+ * the day's docId is the distinct id, so a day's review work groups under one "user".
+ */
+function slideObservability(
+  conversationId: string,
+  docId: string,
+  extra?: Record<string, unknown>,
+): AgentObservability {
+  return {
+    distinctId: docId,
+    traceId: conversationId,
+    properties: { conversationId, docId, ...extra },
+  };
+}
+
+/**
+ * Report a Bible lookup to PostHog, keyed to the same conversation as the LLM trace so it
+ * lines up with the agent's generations (`$ai_trace_id`) instead of the old hardcoded
+ * 'slide-review' distinct id that lumped every lookup together.
+ */
+function recordBibleLookup(call: BibleToolCall, conversationId: string, docId: string): void {
+  phClient.capture({
+    distinctId: docId,
+    event: 'bible_lookup',
+    properties: {
+      $ai_trace_id: conversationId,
+      conversationId,
+      reference: call.reference,
+      ok: call.ok,
+      foundLanguages: call.foundLanguages,
+      missingLanguages: call.missingLanguages,
+    },
+  });
 }
 
 const app = express();
@@ -328,11 +365,21 @@ app.post('/api/translateItem', async (req, res) => {
   }
   if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
 
+  // Stable conversation id up front so it can tag the LLM trace (and any bible_lookup events)
+  // as the agent runs — this is what makes a conversation's generations group in PostHog.
+  const conversationId = conversationKey(itemId, slides);
+  const observability = slideObservability(conversationId, docId, {
+    itemTitle: itemTitle || undefined,
+    source: 'translateItem',
+  });
+
   const lookup = slideLibrary.toLookup();
   // Bible lookups the model made while drafting — reported to PostHog and the review UI.
   const bibleLookups: BibleToolCall[] = [];
   // The raw agent history, captured so we can persist it for review + follow-ups.
   let conversationMessages: Content[] = [];
+  // Token usage across the draft's model calls (surfaced so cache hits/cost are visible).
+  let usage: TokenUsage = emptyUsage();
   const translations = await translateItem({
     slides,
     languages: requestedLanguages,
@@ -346,21 +393,16 @@ app.post('/api/translateItem', async (req, res) => {
         generalContext: SLIDE_TRANSLATION_CONTEXT,
         itemTitle: itemTitle || undefined,
         model: STRONG_MODEL,
+        observability,
         onToolCall: (call) => {
           bibleLookups.push(call);
-          phClient.capture({
-            distinctId: 'slide-review',
-            event: 'bible_lookup',
-            properties: {
-              reference: call.reference,
-              ok: call.ok,
-              foundLanguages: call.foundLanguages,
-              missingLanguages: call.missingLanguages,
-            },
-          });
+          recordBibleLookup(call, conversationId, docId);
         },
         onConversation: (messages) => {
           conversationMessages = messages;
+        },
+        onUsage: (runUsage) => {
+          usage = mergeUsage(usage, runUsage);
         },
       }),
   });
@@ -370,7 +412,6 @@ app.post('/api/translateItem', async (req, res) => {
   // seed a context-only conversation — slides + current translations + general context — so a
   // later follow-up resumes with real context instead of replying blind, without spending a
   // model call now.
-  const conversationId = conversationKey(itemId, slides);
   const seededMessages: Content[] = conversationMessages.length > 0
     ? conversationMessages
     : [{
@@ -392,6 +433,7 @@ app.post('/api/translateItem', async (req, res) => {
     languages: requestedLanguages,
     messages: seededMessages,
     status: 'idle',
+    usage,
   });
 
   return res.json({ ok: true, translations, bibleLookups, conversationId });
@@ -426,19 +468,25 @@ app.post('/api/slideConversation/message', async (req, res) => {
 
   const bibleLanguages = conversation.languages.filter((language) => BIBLE_TRANSLATIONS[language]);
   const bibleLookups: BibleToolCall[] = [];
+  // Same trace id as the initial draft so this follow-up's generations group with it.
+  const observability = slideObservability(itemId, docId, { source: 'followUp' });
   try {
     const result = await runSlideTranslationAgent(geminiProvider, {
       sourceSlides: conversation.slides,
       messages: conversation.messages, // mutated in place
       model: STRONG_MODEL,
       bibleLanguages,
+      observability,
       onToolCall: (call) => {
         bibleLookups.push(call);
+        recordBibleLookup(call, itemId, docId);
         // Stream the agent's progress (new tool-call/response messages) to watchers.
         writeConversation(conversationsMap, conversation);
       },
     });
     conversation.status = 'idle';
+    // Fold this run's tokens into the conversation's running total (initial draft + follow-ups).
+    conversation.usage = mergeUsage(conversation.usage ?? emptyUsage(), result.usage);
     writeConversation(conversationsMap, conversation);
 
     // Flatten revised translations for the browser to apply (auto / llm-agent provenance).
