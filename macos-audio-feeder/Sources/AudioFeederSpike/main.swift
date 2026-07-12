@@ -87,8 +87,45 @@ func makeBuffer(_ samples: [Float], sampleRate: Double) -> AVAudioPCMBuffer? {
     return buffer
 }
 
+/// Taps the frames actually handed to WebRTC on the local (published) audio track and prints a
+/// once-per-second heartbeat with the RMS level. Non-silent RMS here means audio really is being
+/// published — so any "no sound" problem is downstream (subscription/listener). Silence/no frames
+/// means the app-audio → engine path never delivered anything.
+final class TapRenderer: NSObject, AudioRenderer, @unchecked Sendable {
+    private let lock = NSLock()
+    private var frames = 0
+    private var sumSquares = 0.0
+    private var lastPrint = Date()
+
+    func render(pcmBuffer: AVAudioPCMBuffer) {
+        let n = Int(pcmBuffer.frameLength)
+        var energy = 0.0
+        if let ch = pcmBuffer.floatChannelData {
+            for i in 0..<n { let v = Double(ch[0][i]); energy += v * v }
+        } else if let ch = pcmBuffer.int16ChannelData {
+            for i in 0..<n { let v = Double(ch[0][i]) / 32768.0; energy += v * v }
+        }
+        lock.lock()
+        frames += n
+        sumSquares += energy
+        let now = Date()
+        if now.timeIntervalSince(lastPrint) >= 1.0 {
+            let rms = frames > 0 ? (sumSquares / Double(frames)).squareRoot() : 0
+            print(String(format: "[tap] local track: %d frames/s, rms=%.4f", frames, rms))
+            frames = 0; sumSquares = 0; lastPrint = now
+        }
+        lock.unlock()
+    }
+}
+
 let args = Args.parse()
 let sampleRate = 48_000.0
+
+// Route the SDK's logs to stdout. The default OSLogger sends everything to macOS unified
+// logging (subsystem io.livekit.sdk) where it's invisible in a terminal — so warnings like
+// "Engine is not running" from the app-audio path never show. PrintLogger prints them here.
+// Must be set before any other SDK logging happens.
+LiveKitSDK.setLogger(PrintLogger(minLevel: .debug))
 
 print("[spike] server = \(args.serverURL)")
 print("[spike] room   = \(args.docID)")
@@ -136,18 +173,47 @@ do {
     exit(1)
 }
 
-// 4) Feed a continuous sine tone, ~100 ms per push, on a background task.
+// Tap the published local track so we can see whether real frames reach WebRTC. The track may
+// take a moment to appear after setMicrophone; poll briefly, then attach the renderer.
+let tap = TapRenderer()
+var attached = false
+for _ in 0..<20 {
+    if let pub = room.localParticipant.localAudioTracks.first,
+       let track = pub.track as? LocalAudioTrack {
+        track.add(audioRenderer: tap)
+        attached = true
+        print("[spike] tap attached to local audio track \(pub.sid)")
+        break
+    }
+    try? await Task.sleep(nanoseconds: 100_000_000)
+}
+if !attached { print("[spike] WARNING: never found a local audio track to tap") }
+
+// 4) Feed a continuous sine tone on a background task.
+// IMPORTANT: keep each buffer at or below the engine's maximumFramesToRender (logged as 3072 =
+// 64ms @ 48k). The SDK's MixerEngineObserver warns that exceeding it triggers
+// kAudioUnitErr_TooManyFramesToProcess (-10874), which renders as silence — our first attempt
+// pushed 4800-frame (100ms) buffers and the published track was dead silent (rms=0). Use 50ms
+// buffers, pushed a touch faster than realtime so the player node never underruns.
 var generator = ToneGenerator(frequency: args.frequency, amplitude: 0.25, sampleRate: sampleRate)
-let framesPerPush = Int(sampleRate * 0.1)
+let framesPerPush = Int(sampleRate * 0.05) // 2400 frames = 50ms, under the 3072 render cap
 
 let feeder = Task {
+    var pushes = 0
+    var lastBeat = Date()
     while !Task.isCancelled {
         let samples = generator.next(framesPerPush)
         if let buffer = makeBuffer(samples, sampleRate: sampleRate) {
             // <<< API UNDER TEST >>> feed app audio to the publish mixer.
             AudioManager.shared.mixer.capture(appAudio: buffer)
+            pushes += 1
         }
-        try? await Task.sleep(nanoseconds: 100_000_000) // 100 ms
+        let now = Date()
+        if now.timeIntervalSince(lastBeat) >= 1.0 {
+            print("[feed] pushed \(pushes) buffers/s; manualRendering=\(AudioManager.shared.isManualRenderingMode)")
+            pushes = 0; lastBeat = now
+        }
+        try? await Task.sleep(nanoseconds: 40_000_000) // 40 ms sleep vs 50 ms of audio → slight lead
     }
 }
 
