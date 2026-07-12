@@ -25,6 +25,20 @@ export interface TranslateItemResult {
 
 export type SlideConversationStatus = 'running' | 'idle' | 'error';
 
+/**
+ * Token usage summed across an item's agent runs. Mirrors the server's `TokenUsage`
+ * (nlp.ts). `cachedContentTokenCount` is the tell for whether Gemini's context cache is
+ * serving the re-sent prompt — near-0 against a large `promptTokenCount` means it isn't.
+ */
+export interface TokenUsage {
+  promptTokenCount: number;
+  cachedContentTokenCount: number;
+  candidatesTokenCount: number;
+  thoughtsTokenCount: number;
+  totalTokenCount: number;
+  callCount: number;
+}
+
 /** The server-side agent conversation for one item (raw Gemini history + snapshot). */
 export interface SlideConversation {
   itemId: string;
@@ -34,6 +48,8 @@ export interface SlideConversation {
   languages: string[];
   messages: Content[];
   status: SlideConversationStatus;
+  /** Running token total for this conversation; absent on pre-existing conversations. */
+  usage?: TokenUsage;
   updatedAt: number;
 }
 

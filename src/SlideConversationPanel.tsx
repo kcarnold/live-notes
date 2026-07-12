@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Content, SlideConversation } from './slideTranslationApi';
+import type { Content, SlideConversation, TokenUsage } from './slideTranslationApi';
 import { useStrings } from './useLocale';
 
 /**
@@ -98,6 +98,30 @@ function MessageParts({ message, msgKey }: { message: Content; msgKey: string })
   return <div className="flex flex-col gap-1">{rendered}</div>;
 }
 
+/**
+ * One-line token summary: total prompt/output tokens, how many were served from Gemini's
+ * context cache, and the model-call count. The cache figure is the whole point — if it stays
+ * near 0 while prompt tokens are large, the re-sent prompt isn't being cached and cost is
+ * higher than it should be.
+ */
+function UsageSummary({ usage }: { usage: TokenUsage }) {
+  const cachePct =
+    usage.promptTokenCount > 0
+      ? Math.round((usage.cachedContentTokenCount / usage.promptTokenCount) * 100)
+      : 0;
+  return (
+    <p className="text-xs text-gray-400 dark:text-gray-500 font-mono" title="Token usage across all agent runs for this item">
+      {usage.promptTokenCount.toLocaleString()} in
+      {' · '}
+      {usage.candidatesTokenCount.toLocaleString()} out
+      {' · '}
+      {usage.cachedContentTokenCount.toLocaleString()} cached ({cachePct}%)
+      {' · '}
+      {usage.callCount} {usage.callCount === 1 ? 'call' : 'calls'}
+    </p>
+  );
+}
+
 export interface SlideConversationPanelProps {
   conversation: SlideConversation | null;
   busy: boolean;
@@ -133,6 +157,11 @@ export function SlideConversationPanel({
         </h3>
         {conversation?.status === 'running' && (
           <span className="text-xs text-blue-600 dark:text-blue-400">{s.agentThinking}</span>
+        )}
+        {conversation?.usage && conversation.usage.callCount > 0 && (
+          <span className="ml-auto">
+            <UsageSummary usage={conversation.usage} />
+          </span>
         )}
       </div>
 
