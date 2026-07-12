@@ -48,18 +48,15 @@ interface LiveKitConfig {
 }
 
 /**
- * A translation session is "healthy" only while it has at least one human listener
- * AND a broadcaster present. With no listeners the bots are pointless; with no
- * broadcaster there's no source audio to translate. Either way the session is dead
- * weight (and still burning a Gemini session) and should be reaped. Bot identities
- * (organizer-*, translator-*) are excluded from the listener count.
+ * A translation session is "healthy" while a broadcaster (organizer) is present.
+ * We deliberately keep the default translator running even with zero listeners so
+ * there's always at least an English transcript of a live talk — Gemini isn't billed
+ * for silence (the bridge suspends its socket when the mic goes quiet), so an idle
+ * broadcaster is cheap. Once the broadcaster leaves there's no source audio at all,
+ * so the session is dead weight (still holding a Gemini session) and gets reaped.
  */
 export function isSessionHealthy(participantIdentities: string[]): boolean {
-  const hasListener = participantIdentities.some(
-    (id) => !id.startsWith("organizer-") && !id.startsWith("translator-")
-  );
-  const hasOrganizer = participantIdentities.some((id) => id.startsWith("organizer-"));
-  return hasListener && hasOrganizer;
+  return participantIdentities.some((id) => id.startsWith("organizer-"));
 }
 
 class TranslationSessionManager {
@@ -166,6 +163,24 @@ class TranslationSessionManager {
       countSubscriber: true,
       writesSourceTranscript: false,
     });
+  }
+
+  /**
+   * Ensure the default translator runs for a broadcasting session, independent of
+   * any listener. Called when the organizer starts broadcasting so there's always an
+   * English transcript. Doesn't count a subscriber — the reaper (broadcaster
+   * presence), not a listener count, keeps this bridge alive.
+   */
+  async ensureBroadcast(sessionId: string, organizerIdentity: string): Promise<void> {
+    this.lastHealthyAt.set(sessionId, Date.now());
+    const writer = this.getOrCreateWriter(sessionId);
+    await this.ensureBridge(
+      sessionId,
+      TranslationSessionManager.DEFAULT_LANGUAGE,
+      organizerIdentity,
+      writer,
+      { countSubscriber: false, writesSourceTranscript: true }
+    );
   }
 
   private getOrCreateWriter(sessionId: string): TranscriptWriter | null {
@@ -291,6 +306,10 @@ class TranslationSessionManager {
       `[SessionManager] Unsubscribed from ${targetLanguage} in session ${sessionId} (${bridge.subscriberCount} remaining)`
     );
 
+    // The default bridge is the always-on English-transcript source; keep it running
+    // while the broadcaster is present. The reaper tears it down once they leave.
+    if (targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE) return;
+
     if (bridge.subscriberCount === 0) {
       console.log(`[SessionManager] No more subscribers for ${targetLanguage}, tearing down bridge`);
       await bridge.stop();
@@ -348,11 +367,12 @@ class TranslationSessionManager {
   }
 
   // ---------------------------------------------------------------------------
-  // Presence reaper: the authoritative teardown. A bot that nobody is listening
-  // to — or whose broadcaster has left (no source audio) — is dead weight and is
-  // still burning a Gemini session, so we tear the whole session down once it has
-  // been unhealthy past a grace window. This does not depend on the client's
-  // best-effort unsubscribe beacon firing.
+  // Presence reaper: the authoritative teardown. A session whose broadcaster has
+  // left has no source audio to translate, so it's dead weight (still holding a
+  // Gemini session) and the whole session is torn down once it has been unhealthy
+  // past a grace window. Listener count no longer gates this — the default bridge
+  // stays up for the transcript while the broadcaster is present, and silence
+  // suspension keeps an idle broadcaster from costing anything.
   // ---------------------------------------------------------------------------
   private startReaper(): void {
     if (this.reaperTimer) return;
@@ -392,7 +412,7 @@ class TranslationSessionManager {
       const last = this.lastHealthyAt.get(sessionId) ?? now;
       if (now - last > TranslationSessionManager.REAP_GRACE_MS) {
         console.log(
-          `[SessionManager] Reaping session ${sessionId} — no listeners or no broadcaster for ${Math.round(
+          `[SessionManager] Reaping session ${sessionId} — no broadcaster for ${Math.round(
             (now - last) / 1000
           )}s`
         );

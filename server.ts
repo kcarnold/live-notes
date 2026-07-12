@@ -223,6 +223,25 @@ app.post('/api/livekit/translate', async (req, res) => {
   }
 });
 
+// The organizer calls this when they start broadcasting. It ensures the default
+// translator bot is running even with zero listeners, so a live talk always has at
+// least an English transcript. Cheap: the bridge suspends its Gemini session when
+// the mic is silent, so an idle broadcaster isn't billed.
+app.post('/api/livekit/broadcast/start', async (req, res) => {
+  try {
+    if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
+    const sessionId = req.body?.sessionId as string | undefined;
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+    const manager = TranslationSessionManager.getInstance();
+    await manager.ensureBroadcast(sessionId, ORGANIZER_IDENTITY);
+    return res.json({ success: true });
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('LiveKit broadcast start error:', error);
+    return res.status(500).json({ error: 'Failed to start broadcast translation: ' + (error as Error).message });
+  }
+});
+
 // List active translator bots + listener counts for a room (drives the speaker dashboard).
 app.get('/api/livekit/translate/status', (req, res) => {
   try {

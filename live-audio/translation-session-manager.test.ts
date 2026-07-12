@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { isSessionHealthy } from "./translation-session-manager.ts";
 
-// The presence reaper (fix for: "translator kept running after the last client
-// disconnected") tears a session down once it is unhealthy past a grace window.
-// `isSessionHealthy` is that decision: keep running only while a human listener
-// AND a broadcaster are both present.
+// The presence reaper tears a session down once it is unhealthy past a grace
+// window. `isSessionHealthy` is that decision: keep running while a broadcaster
+// (organizer) is present, so a live talk always has at least an English transcript,
+// even with zero listeners. Silence suspension keeps an idle broadcaster cheap.
 describe("isSessionHealthy", () => {
   it("is healthy with a listener and the broadcaster present", () => {
     expect(
@@ -13,9 +13,10 @@ describe("isSessionHealthy", () => {
     ).toBe(true);
   });
 
-  it("is unhealthy when the last listener has left (only bots remain)", () => {
-    // This is the reported leak: bots still in the room but nobody listening.
-    expect(isSessionHealthy(["organizer-host", "translator-fr", "translator-es"])).toBe(false);
+  it("stays healthy with the broadcaster present but no listeners", () => {
+    // The always-on transcript case: the default translator keeps running so the
+    // organizer sees their English transcript even before anyone joins.
+    expect(isSessionHealthy(["organizer-host", "translator-fr", "translator-es"])).toBe(true);
   });
 
   it("is unhealthy when the broadcaster has left (no source audio)", () => {
@@ -26,8 +27,8 @@ describe("isSessionHealthy", () => {
     expect(isSessionHealthy([])).toBe(false);
   });
 
-  it("does not count translator bots as listeners", () => {
+  it("does not count translator bots as a broadcaster", () => {
     // A translator identity must never keep a session alive on its own.
-    expect(isSessionHealthy(["organizer-host", "translator-fr"])).toBe(false);
+    expect(isSessionHealthy(["translator-fr", "translator-es"])).toBe(false);
   });
 });

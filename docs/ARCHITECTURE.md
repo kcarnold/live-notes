@@ -35,10 +35,14 @@ derived data) drives the testing/replay strategy.
 - **Express server** (`server.ts`): Y-Sweet token issuing (the auth chokepoint), translation
   endpoints, TTS with disk cache, `/api/config`; hosts the live-audio subsystem in-process.
 - **live-audio** (`live-audio/`): `translation-session-manager` spawns one
-  `translation-bridge` per (session, language) when a listener wants it and reaps idle ones;
-  each bridge subscribes to the organizer's LiveKit track (16 kHz in), streams to Gemini
-  Live, publishes translated audio (24 kHz out), and writes the transcript into Yjs via
-  `transcript-writer`.
+  `translation-bridge` per (session, language) — the default/English one whenever a
+  broadcaster is present (so there's always a transcript), extra languages on listener
+  demand — and reaps a session once its broadcaster leaves. Each bridge subscribes to the
+  organizer's LiveKit track (16 kHz in), streams to Gemini Live, publishes translated audio
+  (24 kHz out), and writes the transcript into Yjs via `transcript-writer`. To avoid paying
+  Gemini to translate silence, a bridge tears down its Gemini socket after ~30 s below
+  −30 dBFS and reopens it on the first non-silent frame; the LiveKit participant/track stay
+  live throughout, so listeners never resubscribe.
 - **proclaim_service.py**: polls Proclaim's local HTTP API (~1 s) and reads its SQLite DB,
   pushes presentations + slide status into Yjs. Installed as a macOS LaunchAgent.
 - **Y-Sweet**: persistence and fan-out for the per-service Y.Doc (`doc-YYYY-MM-DD`).
@@ -67,10 +71,11 @@ writer once each component announces its clientID (planned: via the status heart
 
 ## Lifecycle notes that surprise people
 
-- **Bridges are demand-driven**: a translation bridge exists only while the session has at
-  least one human listener AND a broadcaster (`translation-session-manager.ts`). Connecting
-  clients therefore *changes* system behavior — preflight checks must include a synthetic
-  listener, and "nothing is translating" is often just "nobody is listening yet."
+- **Bridges are presence-driven**: the default (English) translation bridge exists whenever a
+  broadcaster is present, even with zero listeners; extra-language bridges are still listener-
+  driven (`translation-session-manager.ts`). A silent mic suspends the Gemini socket rather
+  than tearing the bridge down, so "nothing is translating" can mean "nobody is speaking" —
+  preflight checks that want audio out must feed non-silent audio, not just connect.
 - **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
   show's scheduled date), so a service's state lives in one doc per date.
 - **Editor vs viewer** is enforced server-side via Y-Sweet token scope, keyed off the
