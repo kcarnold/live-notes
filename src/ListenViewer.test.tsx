@@ -32,7 +32,7 @@ vi.mock("./getDocId", () => ({
   getDocId: () => "doc-test",
 }));
 
-vi.mock("@livekit/components-react", async () => {
+vi.mock("@livekit/components-react", () => {
   return {
     LiveKitRoom: ({ children, className }: MockProps) => (
       <div data-testid="livekit-room" className={className}>
@@ -56,7 +56,7 @@ describe("ListenViewer", () => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.includes("/api/livekit/translate")) {
         return Promise.resolve({
-          json: async () => ({
+          json: () => ({
             translatorIdentity: "translator-1",
             status: "ready",
             targetLanguage: "fr",
@@ -65,12 +65,12 @@ describe("ListenViewer", () => {
       }
       if (url.includes("/api/livekit/token")) {
         return Promise.resolve({
-          json: async () => ({ token: "token-123", serverUrl: "wss://example.com" }),
+          json:  () => ({ token: "token-123", serverUrl: "wss://example.com" }),
         } as Response);
       }
-      return Promise.resolve({ json: async () => ({}) } as Response);
+      return Promise.resolve({ json: () => ({}) } as Response);
     });
-    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+    vi.stubGlobal("fetch", fetchMock);
   });
 
   it("keeps the LiveKit room from forcing the whole pane to full height", async () => {
