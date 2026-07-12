@@ -141,6 +141,7 @@ function recordBibleLookup(call: BibleToolCall, conversationId: string, docId: s
       missingLanguages: call.missingLanguages,
     },
   });
+}
 
 // !!! TEMPORARY BACK-COMPAT SHIM — DELETE ME (see /api/translateItem) !!!
 // Mirrors the frontend's getDocId() default (`doc-YYYY-MM-DD`, local date) so a
