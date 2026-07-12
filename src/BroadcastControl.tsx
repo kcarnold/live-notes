@@ -76,18 +76,6 @@ function BroadcastDashboard({ docId }: { docId: string }) {
     (p) => !p.identity.startsWith("translator-")
   ).length;
 
-  // Once the organizer is connected, ensure the default translator is running even
-  // with no listeners, so a live talk always has at least an English transcript.
-  useEffect(() => {
-    void fetch("/api/livekit/broadcast/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: docId }),
-    }).catch(() => {
-      // Best-effort; the dashboard still works and listeners can start translation.
-    });
-  }, [docId]);
-
   // Poll active translations for the dashboard.
   useEffect(() => {
     let active = true;
