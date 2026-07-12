@@ -106,6 +106,15 @@ function conversationKey(itemId: string | undefined, slides: string[]): string {
   return itemId && itemId.trim() ? itemId.trim() : `hash:${slidesHash(slides)}`;
 }
 
+// !!! TEMPORARY BACK-COMPAT SHIM — DELETE ME (see /api/translateItem) !!!
+// Mirrors the frontend's getDocId() default (`doc-YYYY-MM-DD`, local date) so a
+// Proclaim client too old to send `docId` still targets the right per-day doc.
+function currentDayDocId(): string {
+  const d = new Date();
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `doc-${ymd}`;
+}
+
 const app = express();
 app.use(express.static("dist"));
 app.use(express.json());
@@ -322,11 +331,28 @@ app.post('/api/translateItem', async (req, res) => {
   // screen can find it by itemId), else a content hash for ad-hoc pastes.
   const itemId = (req.body?.itemId as string | undefined)?.trim();
   // The per-day doc the conversation belongs to (where the browser reads it live).
-  const docId = (req.body?.docId as string | undefined)?.trim();
+  let docId = (req.body?.docId as string | undefined)?.trim();
   if (!Array.isArray(slides) || requestedLanguages.length === 0) {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
   }
-  if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
+  // ===========================================================================
+  // !!!  TEMPORARY BACK-COMPAT SHIM — DELETE ME  !!!
+  // ---------------------------------------------------------------------------
+  // A Proclaim client pinned to pre-#64 code (Jul 2026) doesn't send `docId`.
+  // Rather than 400 that client's slide-translation calls, default to the
+  // current-day doc so it keeps seeding translations. The translations flow
+  // back in the HTTP response regardless; only the server-written conversation
+  // map lands in this defaulted doc, which nobody watches for that old client.
+  //
+  // This exists ONLY to bridge one un-updatable client. Once every Proclaim
+  // client is on code that sends `docId`, RESTORE the hard 400 below and remove
+  // this block + `currentDayDocId()`:
+  //     if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
+  // ===========================================================================
+  if (!docId) {
+    docId = currentDayDocId();
+    console.warn(`[translateItem] TEMPORARY SHIM: missing docId, defaulting to ${docId}. DELETE ME once all Proclaim clients send docId.`);
+  }
 
   const lookup = slideLibrary.toLookup();
   // Bible lookups the model made while drafting — reported to PostHog and the review UI.
