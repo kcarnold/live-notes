@@ -33,7 +33,6 @@ vi.mock("./getDocId", () => ({
 }));
 
 vi.mock("@livekit/components-react", async () => {
-  const React = await import("react");
   return {
     LiveKitRoom: ({ children, className }: MockProps) => (
       <div data-testid="livekit-room" className={className}>
