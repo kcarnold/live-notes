@@ -116,99 +116,53 @@ export interface AudioParticipantLike {
   trackPublications: Iterable<[string, AudioPublicationLike]>;
 }
 
-/** Handle for keeping an organizer-audio subscription alive across session rebuilds. */
-export interface OrganizerAudioSubscription<Track> {
-  /**
-   * Re-run the subscription decision against the room as it is *now*. Call after a
-   * LiveKit full reconnect, which invalidates remote track state. Idempotent:
-   * `setSubscribed(true)` on an already-subscribed publication is a no-op.
-   */
-  resubscribe(): void;
-  /**
-   * Forget a track so a future `TrackSubscribed` for it pipes again. Call when a
-   * track's audio stream ends — the pipe-once dedupe must not outlive the track.
-   */
-  forgetTrack(track: Track): void;
-}
-
 /**
- * Wire the bridge's room so the organizer's microphone audio always reaches Gemini,
- * regardless of publish timing *or* session rebuilds. This is the fix for two
- * production outages, both of the same shape — the bridge stays `active` while
- * receiving no audio at all ("active but deaf"), which nothing throws on and nothing
- * notices. See docs/live-audio-resilience.md.
+ * Subscribe to every organizer audio publication in the room *right now*. Returns how
+ * many publications it acted on, which is the bridge's "am I actually wired up?" signal.
  *
- * The decision has three parts, all of which must run every time:
- *   1. Subscribe to any organizer audio already published right now.
- *   2. Subscribe to any organizer audio published later (`TrackPublished`).
- *   3. Pipe each subscribed organizer audio track to Gemini exactly once
- *      (`TrackSubscribed`), deduped so a track can't be piped twice.
+ * This is a **reconcile**, not an event handler: it takes the room's current state and
+ * drives it toward the desired state, and it is idempotent (`setSubscribed(true)` on an
+ * already-subscribed publication is a no-op). Callers re-run it whenever the participant
+ * list could have changed and never have to reason about *which* change happened.
  *
- * Outage 1 (publish race): an early return when the organizer was already in the room
- * meant no future-publish listener was registered, so a mic track landing a beat after
- * the bridge started was never subscribed. Hence: no early return, all three always run.
+ * That shape is the fix for two production outages, both of which left the bridge
+ * `active` but receiving no audio at all — "active but deaf", which nothing throws on
+ * and nothing notices. Both were the same mistake: subscription was decided *once*, from
+ * an event, and the decision then drifted from reality.
  *
- * Outage 2 (full reconnect): the subscription was built once at startup and never
- * rebuilt. A LiveKit full reconnect re-creates remote participants and tracks as new
- * objects, and neither (1) nor (2) fires for an already-published track — so the bridge
- * never re-subscribed. Hence: `participants` is a *callback*, not a snapshot (a snapshot
- * taken at startup describes a room that no longer exists), and `resubscribe()` replays
- * step 1 on demand.
+ *   - Outage 1 (publish race): the organizer was in the room but published their mic a
+ *     beat later, and the code that handled "organizer is here" took an early return
+ *     before registering a listener for "organizer published something".
+ *   - Outage 2 (full reconnect): LiveKit rebuilt the session, re-creating remote
+ *     participants and their tracks as *new objects*. Per LiveKit's documented sequence a
+ *     full reconnect emits `ParticipantConnected` for everyone already in the room — but
+ *     **no `TrackPublished`** for their existing publications. So neither the startup
+ *     enumeration nor the publish listener ever fired again, and the bridge streamed
+ *     silence to Gemini for six minutes.
+ *
+ * Reconciling is convergent rather than event-exhaustive: being wrong about any single
+ * event costs nothing so long as some later trigger re-runs this. Enumerating events
+ * correctly is a game we have now lost twice; this stops playing it. (The frontend's
+ * ListenViewer already worked this way — re-running subscription on participant changes —
+ * which is exactly why attendees kept hearing the speaker while the bridges went deaf.)
  *
  * Kept pure (no `Room`, no LiveKit enums) so the timing cases are unit-testable.
  */
-export function wireOrganizerAudioSubscription<Track>(params: {
+export function reconcileOrganizerAudio(params: {
   organizerIdentity: string;
-  /** The room's remote participants *as of the call*. Re-read on every resubscribe(). */
-  participants: () => Iterable<AudioParticipantLike>;
+  participants: Iterable<AudioParticipantLike>;
   isAudio: (pub: AudioPublicationLike) => boolean;
-  onTrackPublished: (
-    handler: (pub: AudioPublicationLike, participant: AudioParticipantLike) => void
-  ) => void;
-  onTrackSubscribed: (
-    handler: (
-      track: Track,
-      pub: AudioPublicationLike,
-      participant: AudioParticipantLike
-    ) => void
-  ) => void;
-  pipe: (track: Track) => void;
-}): OrganizerAudioSubscription<Track> {
-  const subscribeIfOrganizerAudio = (
-    pub: AudioPublicationLike,
-    participant: AudioParticipantLike
-  ) => {
-    if (participant.identity === params.organizerIdentity && params.isAudio(pub)) {
+}): number {
+  let subscribed = 0;
+  for (const participant of params.participants) {
+    if (participant.identity !== params.organizerIdentity) continue;
+    for (const [, pub] of participant.trackPublications) {
+      if (!params.isAudio(pub)) continue;
       pub.setSubscribed(true);
+      subscribed++;
     }
-  };
-
-  // 1. Organizer audio published as of now. Replayed by resubscribe() after a reconnect.
-  const subscribeToCurrent = () => {
-    for (const participant of params.participants()) {
-      for (const [, pub] of participant.trackPublications) {
-        subscribeIfOrganizerAudio(pub, participant);
-      }
-    }
-  };
-  subscribeToCurrent();
-
-  // 2. Organizer audio published after we start (the case the old early return missed).
-  params.onTrackPublished(subscribeIfOrganizerAudio);
-
-  // 3. Pipe each organizer audio track once, no matter how it got subscribed.
-  const piped = new Set<Track>();
-  params.onTrackSubscribed((track, pub, participant) => {
-    if (participant.identity !== params.organizerIdentity || !params.isAudio(pub)) return;
-    if (piped.has(track)) return;
-    piped.add(track);
-    params.pipe(track);
-  });
-
-  return {
-    resubscribe: subscribeToCurrent,
-    forgetTrack: (track) => piped.delete(track),
-  };
+  }
+  return subscribed;
 }
 
 /**
@@ -278,11 +232,11 @@ export class TranslationBridge {
   private framesDroppedWhileDown: number = 0;
 
   // Organizer-audio liveness. The bridge's defining failure mode is going deaf while
-  // staying `active` (see docs/live-audio-resilience.md), so the input side is kept
-  // rebuildable and watched. `audioSubscription` is the handle used to re-drive
-  // subscription after LiveKit rebuilds the session; `lastOrganizerFrameAt` is the
-  // liveness signal (0 = no organizer audio has ever arrived).
-  private audioSubscription: OrganizerAudioSubscription<RemoteAudioTrack> | null = null;
+  // staying `active` (see docs/live-audio-resilience.md), so the input side is
+  // continuously reconciled and watched. `pipedTracks` dedupes piping (TrackSubscribed
+  // can be delivered redundantly) and is cleared when a track's stream ends, so a
+  // re-subscribed track pipes again. `lastOrganizerFrameAt` is the liveness signal
+  // (0 = no organizer audio has ever arrived).
   private pipedTracks: Set<RemoteAudioTrack> = new Set();
   private lastOrganizerFrameAt: number = 0;
   private lastStallRecoveryAt: number = 0;
@@ -377,7 +331,6 @@ export class TranslationBridge {
       clearInterval(this.stallWatchdog);
       this.stallWatchdog = null;
     }
-    this.audioSubscription = null;
     this.pipedTracks.clear();
 
     // Stop any in-flight reconnect so it doesn't resurrect the socket after teardown.
@@ -440,17 +393,13 @@ export class TranslationBridge {
       this.record("livekit_reconnecting");
     });
 
-    // The 2026-07-12 outage. A *full* reconnect (as opposed to a resume) rebuilds session
-    // state: remote participants and their tracks come back as new objects, the old
-    // AudioStream ends, and — because autoSubscribe is off — nothing re-subscribes us.
-    // Neither the startup enumeration nor TrackPublished fires for a track that was
-    // already published, so without this the bridge stays `active` and permanently deaf.
+    // A *full* reconnect (the 2026-07-12 outage) rebuilds session state: remote
+    // participants and their tracks come back as new objects and the old AudioStream
+    // ends. Recovery is not handled here — it falls out of the reconcile triggers wired
+    // in subscribeToOrganizer, which is the point of that shape.
     this.room.on(RoomEvent.Reconnected, () => {
-      console.log(
-        `[TranslationBridge:${this.targetLanguage}] LiveKit reconnected — re-subscribing to organizer audio`
-      );
+      console.log(`[TranslationBridge:${this.targetLanguage}] LiveKit reconnected`);
       this.record("livekit_reconnected");
-      this.rebuildOrganizerSubscription("reconnected");
     });
 
     // Not load-bearing, but this is the vocabulary the next incident will be read in:
@@ -901,53 +850,47 @@ export class TranslationBridge {
     if (!this.room) return;
     const room = this.room;
 
-    // autoSubscribe is off, so we drive subscription ourselves. The decision lives
-    // in a pure helper (unit-tested) so publish-timing races can't silently regress:
-    // it subscribes to organizer audio present now AND audio published later, and
-    // pipes each track to Gemini exactly once.
-    //
-    // `participants` is a callback, not a snapshot: resubscribe() must see the room as
-    // it is after a reconnect, not as it was at startup.
-    this.audioSubscription = wireOrganizerAudioSubscription<RemoteAudioTrack>({
-      organizerIdentity: this.organizerIdentity,
-      participants: () => room.remoteParticipants.values(),
-      isAudio: (pub) => pub.kind === TrackKind.KIND_AUDIO,
-      onTrackPublished: (handler) =>
-        room.on(
-          RoomEvent.TrackPublished,
-          (publication: RemoteTrackPublication, participant: RemoteParticipant) =>
-            handler(publication, participant)
-        ),
-      onTrackSubscribed: (handler) =>
-        room.on(
-          RoomEvent.TrackSubscribed,
-          (
-            track: RemoteAudioTrack,
-            publication: RemoteTrackPublication,
-            participant: RemoteParticipant
-          ) => handler(track, publication, participant)
-        ),
-      pipe: (track) => this.pipeTrackToGemini(track),
-    });
+    // autoSubscribe is off, so we drive subscription ourselves — but we do it by
+    // *reconciling* against the room's current state, never by trusting a single event.
+    // Every trigger below runs the same idempotent reconcile; none of them is individually
+    // load-bearing. That's deliberate: the two outages this bridge has had were both a
+    // missing event (a late publish, then a full reconnect that re-creates participants
+    // without re-emitting TrackPublished), and enumerating events correctly is a game we
+    // kept losing. Missing one trigger here costs nothing as long as another still fires.
+    room.on(RoomEvent.ParticipantConnected, () => this.reconcile("participant_connected"));
+    room.on(RoomEvent.TrackPublished, () => this.reconcile("track_published"));
+    room.on(RoomEvent.Reconnected, () => this.reconcile("reconnected"));
 
+    // Piping is separate from subscribing: a track can be delivered to us more than once,
+    // and must reach Gemini exactly once. The dedupe is cleared when a stream ends, so a
+    // track that comes back after a reconnect pipes again.
+    room.on(
+      RoomEvent.TrackSubscribed,
+      (track: RemoteAudioTrack, pub: RemoteTrackPublication, participant: RemoteParticipant) => {
+        if (participant.identity !== this.organizerIdentity) return;
+        if (pub.kind !== TrackKind.KIND_AUDIO) return;
+        if (this.pipedTracks.has(track)) return;
+        this.pipedTracks.add(track);
+        this.pipeTrackToGemini(track);
+      }
+    );
+
+    this.reconcile("start");
     this.startStallWatchdog();
   }
 
   /**
-   * Re-drive organizer subscription after the audio path has been invalidated (LiveKit
-   * rebuilt the session, a stream ended, or the watchdog found us deaf). Forgets the
-   * tracks we were piping so a fresh `TrackSubscribed` for them pipes again — the
-   * pipe-once dedupe is there to absorb redundant deliveries, and must not outlive the
-   * track it's deduping.
+   * Drive the room's subscriptions toward "we are subscribed to the organizer's audio".
+   * Safe to call at any time, from any trigger, as often as we like.
    */
-  private rebuildOrganizerSubscription(trigger: string): void {
-    if (this.status !== "active" || !this.audioSubscription) return;
-    for (const track of this.pipedTracks) {
-      this.audioSubscription.forgetTrack(track);
-    }
-    this.pipedTracks.clear();
-    this.audioSubscription.resubscribe();
-    this.record("organizer_audio_resubscribe", { trigger });
+  private reconcile(trigger: string): void {
+    if (!this.room || this.status === "closed") return;
+    const subscribed = reconcileOrganizerAudio({
+      organizerIdentity: this.organizerIdentity,
+      participants: this.room.remoteParticipants.values(),
+      isAudio: (pub) => pub.kind === TrackKind.KIND_AUDIO,
+    });
+    this.record("organizer_audio_reconciled", { trigger, publications: subscribed });
   }
 
   /**
@@ -974,10 +917,10 @@ export class TranslationBridge {
       this.lastStallRecoveryAt = now;
       const stalledMs = now - this.lastOrganizerFrameAt;
       console.warn(
-        `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — attempting to recover subscription`
+        `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription`
       );
       this.record("organizer_audio_stalled", { stalledMs });
-      this.rebuildOrganizerSubscription("stall");
+      this.reconcile("stall");
     }, STALL_CHECK_INTERVAL_MS);
     // Don't hold the process open on this timer alone.
     this.stallWatchdog.unref?.();
@@ -987,7 +930,6 @@ export class TranslationBridge {
     console.log(
       `[TranslationBridge:${this.targetLanguage}] Subscribed to organizer audio track, piping to Gemini`
     );
-    this.pipedTracks.add(track);
     this.record("organizer_audio_piped");
 
     const audioStream = new AudioStream(track, {
@@ -1001,21 +943,27 @@ export class TranslationBridge {
     const readLoop = async () => {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) return "ended";
+        if (done) return;
         this.sendAudioToGemini(value);
       }
     };
 
-    // The stream *ending* is an event, not an exit. A bare `break` here is what made
-    // the 2026-07-12 outage silent: LiveKit's full reconnect ended this stream, the
-    // loop fell out, and nothing logged it or rebuilt the subscription.
+    // The stream *ending* is an event, not an exit. A bare `break` here is what made the
+    // 2026-07-12 outage silent: LiveKit's full reconnect ended this stream, the loop fell
+    // out, and nothing logged it. Forget the track so that if it comes back we pipe it
+    // again, then reconcile in case the replacement is already sitting in the room.
+    const streamClosed = (why: string) => {
+      this.pipedTracks.delete(track);
+      this.reconcile(why);
+    };
+
     readLoop()
       .then(() => {
         console.warn(
           `[TranslationBridge:${this.targetLanguage}] Organizer audio stream ended`
         );
         this.record("organizer_audio_stream_ended");
-        this.rebuildOrganizerSubscription("stream_ended");
+        streamClosed("stream_ended");
       })
       .catch((err: Error) => {
         console.error(
@@ -1023,7 +971,7 @@ export class TranslationBridge {
           err
         );
         this.record("organizer_audio_stream_error", { message: err.message });
-        this.rebuildOrganizerSubscription("stream_error");
+        streamClosed("stream_error");
       });
   }
 

@@ -3,11 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   nextBackoffMs,
   parseGoAwayTimeLeftMs,
+  reconcileOrganizerAudio,
   shouldRecoverStalledInput,
-  wireOrganizerAudioSubscription,
   type AudioParticipantLike,
   type AudioPublicationLike,
-  type OrganizerAudioSubscription,
 } from "./translation-bridge.ts";
 
 // The Gemini Live session is periodically terminated; the bridge reconnects with
@@ -75,253 +74,118 @@ describe("nextBackoffMs", () => {
     expect(ms).toBeLessThanOrEqual(1_000);
   });
 });
-
-// wireOrganizerAudioSubscription is the fix for a production outage where the
-// bridge went "active but deaf": when the organizer was already in the room but
-// published their mic a beat late (the join/getUserMedia race), the old early
-// return meant no TrackPublished listener was ever registered, so the late track
-// was never subscribed and no audio reached Gemini. These tests exercise the four
-// publish-timing cases against a fake room that delivers TrackSubscribed
-// asynchronously (as LiveKit does), asserting each organizer track is piped once.
-describe("wireOrganizerAudioSubscription", () => {
+// reconcileOrganizerAudio is the fix for two production outages, both of which left the
+// bridge "active but deaf" — joined, publishing, holding a healthy Gemini socket, and
+// receiving no audio at all. Both had the same root cause: subscription was decided once,
+// from an event, and then drifted from reality.
+//
+//   1. The organizer was in the room but published their mic a beat late, and the
+//      "organizer is here" path returned early without listening for the publish.
+//   2. A LiveKit full reconnect re-created the participants and their tracks as new
+//      objects. Per LiveKit's documented sequence that emits ParticipantConnected for
+//      everyone already in the room, but *no* TrackPublished for their existing
+//      publications — so nothing re-subscribed, and two bridges streamed silence for six
+//      minutes while reporting healthy.
+//
+// Reconciling against current room state makes both unrepresentable: there is no stored
+// decision to go stale. These tests pin that — especially that it reads the room as it
+// *is*, not as it was when the bridge started.
+describe("reconcileOrganizerAudio", () => {
   const ORGANIZER = "organizer-host";
 
-  // A published track. Calling setSubscribed(true) doesn't fire TrackSubscribed
-  // inline — the real SDK delivers it after a server round-trip — so we queue it on
-  // the room and let the test flush(), which is what makes registration order
-  // (enumerate vs. listen) irrelevant, exactly as in production.
   class FakePublication implements AudioPublicationLike {
     subscribed = false;
     setSubscribedCalls = 0;
-    constructor(
-      readonly track: object,
-      readonly participant: FakeParticipant,
-      private readonly room: FakeRoom,
-      readonly kind: string = "audio"
-    ) {}
+    constructor(readonly kind: string = "audio") {}
     setSubscribed(subscribed: boolean): void {
       this.setSubscribedCalls++;
-      if (subscribed && !this.subscribed) {
-        this.subscribed = true;
-        this.room.queueSubscribed(this.track, this, this.participant);
-      }
+      this.subscribed = subscribed;
     }
   }
 
   class FakeParticipant implements AudioParticipantLike {
     readonly trackPublications = new Map<string, FakePublication>();
     constructor(readonly identity: string) {}
-    publish(pub: FakePublication): void {
+    publish(pub: FakePublication): this {
       this.trackPublications.set(String(this.trackPublications.size), pub);
+      return this;
     }
   }
 
-  type PublishedHandler = (pub: AudioPublicationLike, p: AudioParticipantLike) => void;
-  type SubscribedHandler = (
-    track: object,
-    pub: AudioPublicationLike,
-    p: AudioParticipantLike
-  ) => void;
+  const reconcile = (participants: FakeParticipant[]) =>
+    reconcileOrganizerAudio({
+      organizerIdentity: ORGANIZER,
+      participants,
+      isAudio: (pub) => (pub as FakePublication).kind === "audio",
+    });
 
-  class FakeRoom {
-    participants: FakeParticipant[] = [];
-    private publishedHandlers: PublishedHandler[] = [];
-    private subscribedHandlers: SubscribedHandler[] = [];
-    private pending: Array<[object, AudioPublicationLike, AudioParticipantLike]> = [];
+  it("subscribes to the organizer's published audio", () => {
+    const mic = new FakePublication();
+    const organizer = new FakeParticipant(ORGANIZER).publish(mic);
 
-    participant(identity: string): FakeParticipant {
-      const p = new FakeParticipant(identity);
-      this.participants.push(p);
-      return p;
-    }
-
-    onTrackPublished = (h: PublishedHandler) => this.publishedHandlers.push(h);
-    onTrackSubscribed = (h: SubscribedHandler) => this.subscribedHandlers.push(h);
-
-    // Simulate the organizer publishing a track after the bridge has started.
-    emitPublished(pub: FakePublication, p: FakeParticipant): void {
-      p.publish(pub);
-      for (const h of this.publishedHandlers) h(pub, p);
-    }
-
-    queueSubscribed(track: object, pub: AudioPublicationLike, p: AudioParticipantLike): void {
-      this.pending.push([track, pub, p]);
-    }
-
-    // Deliver all queued TrackSubscribed events (the async server round-trip).
-    flush(): void {
-      const batch = this.pending;
-      this.pending = [];
-      for (const [track, pub, p] of batch) {
-        for (const h of this.subscribedHandlers) h(track, pub, p);
-      }
-    }
-
-    /**
-     * A LiveKit *full* reconnect: session state is rebuilt, so remote participants and
-     * their tracks come back as brand-new objects. Crucially it fires neither
-     * TrackPublished (the track was already published) nor any disconnect — which is
-     * exactly why the bridge never noticed the 2026-07-12 outage.
-     */
-    fullReconnect(): FakePublication {
-      this.participants = [];
-      const organizer = this.participant(ORGANIZER);
-      const pub = new FakePublication({}, organizer, this);
-      organizer.publish(pub);
-      return pub;
-    }
-
-    wire(pipe: (track: object) => void): OrganizerAudioSubscription<object> {
-      return wireOrganizerAudioSubscription<object>({
-        organizerIdentity: ORGANIZER,
-        participants: () => this.participants,
-        isAudio: (pub) => (pub as FakePublication).kind === "audio",
-        onTrackPublished: this.onTrackPublished,
-        onTrackSubscribed: this.onTrackSubscribed,
-        pipe,
-      });
-    }
-  }
-
-  it("subscribes and pipes when the organizer's mic is already published (happy path)", () => {
-    const room = new FakeRoom();
-    const organizer = room.participant(ORGANIZER);
-    const track = {};
-    const pub = new FakePublication(track, organizer, room);
-    organizer.publish(pub);
-
-    const piped: object[] = [];
-    room.wire((t) => piped.push(t));
-    room.flush();
-
-    expect(pub.subscribed).toBe(true);
-    expect(piped).toEqual([track]);
+    expect(reconcile([organizer])).toBe(1);
+    expect(mic.subscribed).toBe(true);
   });
 
-  it("subscribes and pipes when the organizer joins and publishes later", () => {
-    const room = new FakeRoom();
-    const piped: object[] = [];
-    room.wire((t) => piped.push(t));
+  it("is a no-op when the organizer is present but hasn't published yet (outage 1's race)", () => {
+    // The bridge starts inside the organizer's join/getUserMedia window. Reconcile finds
+    // nothing to do — and, crucially, stores no decision that would need undoing. The
+    // TrackPublished trigger will simply run it again a moment later.
+    const organizer = new FakeParticipant(ORGANIZER);
 
-    // Organizer wasn't in the room at start; they join and publish now.
-    const organizer = room.participant(ORGANIZER);
-    const track = {};
-    room.emitPublished(new FakePublication(track, organizer, room), organizer);
-    room.flush();
-
-    expect(piped).toEqual([track]);
+    expect(reconcile([organizer])).toBe(0);
   });
 
-  it("subscribes and pipes when the organizer is present but publishes the mic late (the outage race)", () => {
-    const room = new FakeRoom();
-    // Organizer is already in the room, but with no published track yet.
-    const organizer = room.participant(ORGANIZER);
+  it("subscribes to the organizer's new track objects after a full reconnect (outage 2)", () => {
+    const firstMic = new FakePublication();
+    const before = new FakeParticipant(ORGANIZER).publish(firstMic);
+    expect(reconcile([before])).toBe(1);
 
-    const piped: object[] = [];
-    room.wire((t) => piped.push(t));
+    // LiveKit rebuilds the session: same identity, brand-new participant and publication
+    // objects, and no TrackPublished event. Reconcile reads the room as it is now.
+    const republishedMic = new FakePublication();
+    const after = new FakeParticipant(ORGANIZER).publish(republishedMic);
 
-    // The mic track lands a beat after the bridge started — the case the old early
-    // return dropped on the floor, leaving the bridge active but deaf.
-    const track = {};
-    room.emitPublished(new FakePublication(track, organizer, room), organizer);
-    room.flush();
-
-    expect(piped).toEqual([track]);
+    expect(reconcile([after])).toBe(1);
+    expect(republishedMic.subscribed).toBe(true);
   });
 
-  it("pipes each track exactly once even if TrackSubscribed is delivered twice", () => {
-    const room = new FakeRoom();
-    const organizer = room.participant(ORGANIZER);
-    const track = {};
-    const pub = new FakePublication(track, organizer, room);
-    organizer.publish(pub);
+  it("is idempotent — repeated reconciles don't thrash the subscription", () => {
+    // The watchdog reconciles on a timer, and several triggers can fire at once. None of
+    // that may disturb a healthy subscription.
+    const mic = new FakePublication();
+    const organizer = new FakeParticipant(ORGANIZER).publish(mic);
 
-    const piped: object[] = [];
-    room.wire((t) => piped.push(t));
-    room.flush();
-    // A redundant delivery of the same subscription must not double-pipe.
-    room.queueSubscribed(track, pub, organizer);
-    room.flush();
+    reconcile([organizer]);
+    reconcile([organizer]);
+    reconcile([organizer]);
 
-    expect(piped).toEqual([track]);
+    expect(mic.subscribed).toBe(true);
+    expect(mic.setSubscribedCalls).toBe(3); // always true, never toggled off
   });
 
-  it("ignores non-organizer participants and non-audio tracks", () => {
-    const room = new FakeRoom();
-    const organizer = room.participant(ORGANIZER);
-    const someoneElse = room.participant("attendee-xyz");
-    // Organizer publishes video (not audio); attendee publishes audio.
-    organizer.publish(new FakePublication({}, organizer, room, "video"));
-    someoneElse.publish(new FakePublication({}, someoneElse, room, "audio"));
+  it("ignores non-organizer participants and the organizer's non-audio tracks", () => {
+    const organizerVideo = new FakePublication("video");
+    const organizer = new FakeParticipant(ORGANIZER).publish(organizerVideo);
+    // Another translator bot's published audio, and an attendee — neither is our input.
+    const otherBot = new FakeParticipant("translator-es").publish(new FakePublication());
+    const attendee = new FakeParticipant("attendee-xyz").publish(new FakePublication());
 
-    const piped: object[] = [];
-    room.wire((t) => piped.push(t));
-    room.flush();
-
-    expect(piped).toEqual([]);
+    expect(reconcile([organizer, otherBot, attendee])).toBe(0);
+    expect(organizerVideo.subscribed).toBe(false);
   });
 
-  // The 2026-07-12 outage: a full reconnect replaced the organizer's track with a new
-  // object and fired no TrackPublished, so the startup-only subscription never rebuilt
-  // and both bridges streamed silence to Gemini for six minutes while reporting healthy.
-  it("re-subscribes to the organizer's new track after a full reconnect (the outage)", () => {
-    const room = new FakeRoom();
-    const organizer = room.participant(ORGANIZER);
-    const firstTrack = {};
-    organizer.publish(new FakePublication(firstTrack, organizer, room));
+  it("subscribes to every organizer audio publication, not just the first", () => {
+    const a = new FakePublication();
+    const b = new FakePublication();
+    const organizer = new FakeParticipant(ORGANIZER).publish(a).publish(b);
 
-    const piped: object[] = [];
-    const subscription = room.wire((t) => piped.push(t));
-    room.flush();
-    expect(piped).toEqual([firstTrack]);
-
-    // LiveKit rebuilds the session. The old stream is dead; the bridge forgets it.
-    const republished = room.fullReconnect();
-    subscription.forgetTrack(firstTrack);
-    subscription.resubscribe();
-    room.flush();
-
-    expect(republished.subscribed).toBe(true);
-    expect(piped).toEqual([firstTrack, republished.track]);
+    expect(reconcile([organizer])).toBe(2);
+    expect(a.subscribed && b.subscribed).toBe(true);
   });
 
-  it("resubscribe() is idempotent when the subscription is already healthy", () => {
-    const room = new FakeRoom();
-    const organizer = room.participant(ORGANIZER);
-    const track = {};
-    const pub = new FakePublication(track, organizer, room);
-    organizer.publish(pub);
-
-    const piped: object[] = [];
-    const subscription = room.wire((t) => piped.push(t));
-    room.flush();
-
-    // The watchdog may fire against a live subscription (e.g. the speaker is just
-    // muted). That must not re-pipe a track we're already reading, or double the input.
-    subscription.resubscribe();
-    room.flush();
-
-    expect(piped).toEqual([track]);
-  });
-
-  it("forgetTrack() lets a re-subscribed track pipe again, without it the dedupe blocks recovery", () => {
-    const room = new FakeRoom();
-    const organizer = room.participant(ORGANIZER);
-    const track = {};
-    const pub = new FakePublication(track, organizer, room);
-    organizer.publish(pub);
-
-    const piped: object[] = [];
-    const subscription = room.wire((t) => piped.push(t));
-    room.flush();
-
-    // If LiveKit hands back the *same* track object, the pipe-once dedupe would
-    // otherwise refuse to re-pipe it and the bridge would stay deaf.
-    room.queueSubscribed(track, pub, organizer);
-    subscription.forgetTrack(track);
-    room.flush();
-
-    expect(piped).toEqual([track, track]);
+  it("tolerates an empty room", () => {
+    expect(reconcile([])).toBe(0);
   });
 });
 

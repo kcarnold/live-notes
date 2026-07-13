@@ -23,7 +23,7 @@ Deafness is the failure mode to design against, because it is the one the happy-
 see. A crash is loud and gets restarted. A bridge that is merely *not receiving* looks, from every
 signal the sample code emits, exactly like a bridge whose speaker has paused.
 
-## Failure mode 1 — the publish race (fixed earlier)
+## Failure mode 1 — the publish race
 
 The organizer is already in the room when the bridge starts, but their mic track lands a beat later
 (the usual `join` / `getUserMedia` race). The sample's shape is:
@@ -38,15 +38,16 @@ if (organizer) {
 room.on(TrackPublished, subscribe);   // unreachable in the racing case
 ```
 
-The early return is the bug: presence and publication are independent, and the code treats them as
-one. The remedy is that **all three** of these must run unconditionally, every time:
+The early return is the bug: **presence and publication are independent**, and the code treats them
+as one. Note which way round this is — the organizer joining *after* the bridge was the path that
+worked, because it fell through to the listener. The broken case is the organizer being *present but
+not yet publishing*.
 
-1. subscribe to organizer audio already published at start;
-2. subscribe to organizer audio published later (`TrackPublished`);
-3. pipe each subscribed organizer track to the model exactly once (`TrackSubscribed`), deduped.
-
-That is what `wireOrganizerAudioSubscription` does, and it is kept free of LiveKit types so the
-publish-timing cases are unit-testable without a room.
+What makes that narrow window reachable in production is that bridges are spawned on demand when a
+**listener** subscribes to a language ([translation-session-manager.ts](../live-audio/translation-session-manager.ts)).
+A listener landing on the page during the organizer's join/mic gap spawns a bridge directly into the
+race — and since the session manager keeps that bridge alive, it stays deaf for everyone on that
+language until the process restarts.
 
 ## Failure mode 2 — the full reconnect (2026-07-12)
 
@@ -81,22 +82,33 @@ which is precisely when LiveKit recorded the bridges' full reconnect.
 
 ### The mechanism
 
-On a **full** reconnect (as opposed to a *resume*), the LiveKit SDK tears down and rebuilds session
-state: remote participants and their tracks come back as **new objects**. The SDK is explicit that
-this happens — `RoomEvent.LocalTrackRepublished` exists precisely to tell you it auto-republished
-your local tracks during one.
+A LiveKit **full** reconnect (as opposed to a *resume*) is documented as being
+[identical to everyone leaving the room and coming back](https://docs.livekit.io/intro/basics/connect/).
+The published sequence is:
 
-Three things then conspire:
+1. `ParticipantDisconnected` for other participants
+2. `LocalTrackUnpublished` for any published local tracks
+3. `Reconnecting`
+4. *(the full reconnect)*
+5. `Reconnected`
+6. **`ParticipantConnected` for everyone currently in the room**
+7. Local tracks are republished → `LocalTrackPublished`
+
+Read step 6 carefully, and note what is *absent*: remote participants come back carrying their
+existing publications, and **no `TrackPublished` fires for them**. There was no new publication —
+just a participant we're being told about for the first time (again).
+
+That is the whole outage. Three things conspire:
 
 1. **The old `AudioStream` ends.** Its reader returns `done: true`, and the read loop —
    `while (true) { const { done, value } = await reader.read(); if (done) break; ... }` — takes the
    `break` and **exits silently**. A bare `break` on `done` is the single most load-bearing line of
    sample code in the file, and it says nothing when the thing it is reading from dies.
-2. **Nothing re-subscribes.** With `autoSubscribe: false` the bridge drives subscription itself, but
-   it only ever calls `setSubscribed(true)` from the two paths above: participants present *at
-   startup*, and `TrackPublished`. Neither fires for an already-published track after a reconnect.
-3. **Nothing notices.** The bridge listened for `Disconnected` (which does not fire — a full
-   reconnect is `Reconnecting` → `Reconnected`, internally), so `status` stayed `"active"`.
+2. **Nothing re-subscribes.** With `autoSubscribe: false` the bridge drove subscription itself, but
+   only from two triggers: participants present *at startup*, and `TrackPublished`. Per the sequence
+   above, **neither fires after a full reconnect.**
+3. **Nothing notices.** The bridge listened for `Disconnected`, which does not fire (a full reconnect
+   is `Reconnecting` → `Reconnected`, internally), so `status` stayed `"active"`.
 
 The server log is a photograph of all three: `Joined room` appears exactly once per bridge, so the
 reconnect happened entirely *inside* the SDK, invisible to bridge code; `Subscribed to organizer
@@ -110,40 +122,68 @@ ended, quietly, and no code was watching.
 > herring. **A subsystem that reconnects diligently to the wrong side of the pipe will happily
 > reconnect its way through an outage.**
 
-Attendees were unaffected because the browser SDK uses `autoSubscribe: true` and re-subscribes
-itself. Only the bridges, with hand-rolled subscription, had no path back.
+### Why the attendees were fine
 
-## The remedy: three independent layers
+Not because they subscribe differently — attendees also run `autoSubscribe: false` and drive
+`setSubscribed` by hand. They survived because of *when* they do it
+([ListenViewer.tsx](../src/ListenViewer.tsx)):
 
-Any *one* of the first two would have prevented this outage; the second alone would have healed it
-without a redeploy. They are deliberately redundant, because the lesson of having now fixed this
-class of bug twice is that the next trigger will be one nobody enumerated.
+```ts
+// Re-running on participant changes is essential for late joiners — the track is
+// already published, so no per-track event fires for us.
+useEffect(() => {
+  for (const participant of remoteParticipants) { /* …setSubscribed(wanted) */ }
+}, [room, translatorIdentity, isOriginal, remoteParticipants, audioOn]);
+```
 
-### 1. Correctness — rebuild the subscription when the session is rebuilt
+`useRemoteParticipants()` re-renders on participant changes, and step 6 above fires
+`ParticipantConnected` for everyone — so the effect re-runs and re-drives subscription. The frontend
+had **continuously reconciled** subscription; the bridge had a **once-at-startup** one. Same SDK,
+same options, opposite outcome. The comment in that effect is the lesson the bridge hadn't learned.
 
-Treat `Reconnected` as "your remote-track state was just invalidated," because it was. Re-run the
-subscription decision from scratch: re-enumerate the room's current participants and re-subscribe
-to organizer audio. This requires the subscription helper to take a **`() => participants`
-callback rather than a snapshot iterable** — a snapshot captured at startup describes a room that
-no longer exists.
+## The remedy: reconcile, then watch
 
-Likewise, treat the read loop's `done` as an event, not an exit: log it, report it, forget the dead
-track so a fresh `TrackSubscribed` for it can pipe again, and re-subscribe.
+### 1. Correctness — reconcile against current state, don't react to events
 
-The pipe-once dedupe must therefore be **invalidatable**. Deduping on track identity forever is
-correct for redundant `TrackSubscribed` deliveries and wrong for a track that has since died.
+The fix is not "also handle `Reconnected`." That would patch this trigger and leave the next one.
+Both outages are the same mistake in different clothes: **subscription was decided once, from an
+event, and the decision then drifted from reality.**
+
+So don't store a decision. Keep one idempotent function —
+
+```ts
+reconcileOrganizerAudio({ organizerIdentity, participants, isAudio })  // subscribe to what's there now
+```
+
+— that drives the room's *current* state toward "we are subscribed to the organizer's audio", and
+run it from every trigger that could plausibly matter: startup, `ParticipantConnected`,
+`TrackPublished`, `Reconnected`, and the watchdog below.
+
+This is convergent rather than event-exhaustive, and that distinction is the entire point. **No
+single trigger is load-bearing.** Getting one wrong, or failing to anticipate one, costs nothing so
+long as some other trigger still fires. Enumerating LiveKit's event semantics correctly is a game
+we lost twice; this stops playing it.
+
+Piping stays separate from subscribing: a track may be delivered to us more than once and must reach
+the model exactly once, so `TrackSubscribed` dedupes on track identity. That dedupe is cleared when a
+stream ends — deduping forever is right for redundant deliveries and wrong for a track that has died.
+
+And treat the read loop's `done` as an event, not an exit: log it, report it, drop the track from the
+dedupe, reconcile.
 
 ### 2. Detection — a stall watchdog
 
-Correctness fixes the trigger you understand. The watchdog covers the ones you do not.
+Correctness fixes the triggers you understand. The watchdog covers the ones you do not.
 
 Audio arrives on a fixed 100ms cadence, so its *absence* is unambiguous and cheap to check: if the
-bridge is `active` and has received audio before but none for ~15s, it is deaf. Report it, then
-attempt recovery (forget the tracks, re-subscribe), on a cooldown so a genuinely muted speaker
-produces one telemetry event rather than a retry storm.
+bridge is `active` and has received audio before but none for ~15s, it is deaf. Report it and
+reconcile, on a cooldown so a genuinely muted speaker produces one telemetry event rather than a
+retry storm.
 
-This is the layer that converts "dead until a human redeploys" into "self-heals in fifteen
-seconds," and it does so **without needing to know why**.
+This is the layer that converts "dead until a human redeploys" into "self-heals in fifteen seconds",
+and it does so **without needing to know why**. If a future failure is one reconcile can't fix, the
+next escalation is to tear down and recreate the bridge — which is exactly what the manual redeploy
+did.
 
 Note the seam: liveness is measured where organizer audio *enters* the bridge, not where it reaches
 the model. A stalled Gemini socket is a different failure with its own (working) recovery; conflating
@@ -164,10 +204,14 @@ a line in the log.
 For anyone carrying these back to the Gemini Live + LiveKit sample, the three defects are, in
 order of severity:
 
-1. **The subscription is built once and never rebuilt.** A sample that sets `autoSubscribe: false`
-   and hand-drives `setSubscribed(true)` *must* re-drive it on `Reconnected`, or it is guaranteed to
-   go permanently deaf on the first full reconnect. This is not an edge case; it is what happens to
-   every long-running session eventually.
+1. **Subscription is decided from events, not reconciled against state.** A sample that sets
+   `autoSubscribe: false` and hand-drives `setSubscribed(true)` from "organizer is here" and
+   "organizer published" is guaranteed to go permanently deaf on the first full reconnect, because
+   LiveKit's documented reconnect sequence fires *neither* of those. Reconcile from the current
+   participant list on every plausible trigger instead — then no single trigger is load-bearing, and
+   the sample stops depending on a reading of event semantics that most users will get wrong.
+   (Setting `autoSubscribe: true` also fixes it, by making the server own re-subscription. Either is
+   fine; deciding once from an event is not.)
 2. **`if (done) break;` swallows the death of the input.** The read loop's terminal condition is a
    real event and should be surfaced to the caller.
 3. **Deafness is unobservable.** There is no liveness signal on the audio path, so a bridge that has
