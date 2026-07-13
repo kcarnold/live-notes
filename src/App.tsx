@@ -24,6 +24,7 @@ import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
 import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
+import { StatusViewContainer } from "./StatusView";
 import { getDocId } from "./getDocId";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
@@ -164,6 +165,7 @@ function HomePage() {
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText|bilingual-${selectedLang}#editor`}>Note-Taker</a> |{" "}
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText,broadcast|bilingual-${selectedLang}#editor`}>Broadcaster</a>
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/slideReview#editor">{s.reviewSlidesLink}</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/status">{s.statusTitle}</a>
         </div>
       </div>
     </div>
@@ -261,6 +263,10 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 
   if (componentStr === 'currentSlide') {
     return <CurrentSlideViewerContainer />;
+  }
+
+  if (componentStr === 'status') {
+    return <StatusViewContainer />;
   }
 
   if (componentStr === 'slideReview') {
