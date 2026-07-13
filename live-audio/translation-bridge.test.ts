@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   nextBackoffMs,
   parseGoAwayTimeLeftMs,
+  shouldRecoverStalledInput,
   wireOrganizerAudioSubscription,
   type AudioParticipantLike,
   type AudioPublicationLike,
+  type OrganizerAudioSubscription,
 } from "./translation-bridge.ts";
 
 // The Gemini Live session is periodically terminated; the bridge reconnects with
@@ -122,7 +124,7 @@ describe("wireOrganizerAudioSubscription", () => {
   ) => void;
 
   class FakeRoom {
-    readonly participants: FakeParticipant[] = [];
+    participants: FakeParticipant[] = [];
     private publishedHandlers: PublishedHandler[] = [];
     private subscribedHandlers: SubscribedHandler[] = [];
     private pending: Array<[object, AudioPublicationLike, AudioParticipantLike]> = [];
@@ -155,10 +157,24 @@ describe("wireOrganizerAudioSubscription", () => {
       }
     }
 
-    wire(pipe: (track: object) => void): void {
-      wireOrganizerAudioSubscription<object>({
+    /**
+     * A LiveKit *full* reconnect: session state is rebuilt, so remote participants and
+     * their tracks come back as brand-new objects. Crucially it fires neither
+     * TrackPublished (the track was already published) nor any disconnect — which is
+     * exactly why the bridge never noticed the 2026-07-12 outage.
+     */
+    fullReconnect(): FakePublication {
+      this.participants = [];
+      const organizer = this.participant(ORGANIZER);
+      const pub = new FakePublication({}, organizer, this);
+      organizer.publish(pub);
+      return pub;
+    }
+
+    wire(pipe: (track: object) => void): OrganizerAudioSubscription<object> {
+      return wireOrganizerAudioSubscription<object>({
         organizerIdentity: ORGANIZER,
-        existingParticipants: this.participants,
+        participants: () => this.participants,
         isAudio: (pub) => (pub as FakePublication).kind === "audio",
         onTrackPublished: this.onTrackPublished,
         onTrackSubscribed: this.onTrackSubscribed,
@@ -243,5 +259,116 @@ describe("wireOrganizerAudioSubscription", () => {
     room.flush();
 
     expect(piped).toEqual([]);
+  });
+
+  // The 2026-07-12 outage: a full reconnect replaced the organizer's track with a new
+  // object and fired no TrackPublished, so the startup-only subscription never rebuilt
+  // and both bridges streamed silence to Gemini for six minutes while reporting healthy.
+  it("re-subscribes to the organizer's new track after a full reconnect (the outage)", () => {
+    const room = new FakeRoom();
+    const organizer = room.participant(ORGANIZER);
+    const firstTrack = {};
+    organizer.publish(new FakePublication(firstTrack, organizer, room));
+
+    const piped: object[] = [];
+    const subscription = room.wire((t) => piped.push(t));
+    room.flush();
+    expect(piped).toEqual([firstTrack]);
+
+    // LiveKit rebuilds the session. The old stream is dead; the bridge forgets it.
+    const republished = room.fullReconnect();
+    subscription.forgetTrack(firstTrack);
+    subscription.resubscribe();
+    room.flush();
+
+    expect(republished.subscribed).toBe(true);
+    expect(piped).toEqual([firstTrack, republished.track]);
+  });
+
+  it("resubscribe() is idempotent when the subscription is already healthy", () => {
+    const room = new FakeRoom();
+    const organizer = room.participant(ORGANIZER);
+    const track = {};
+    const pub = new FakePublication(track, organizer, room);
+    organizer.publish(pub);
+
+    const piped: object[] = [];
+    const subscription = room.wire((t) => piped.push(t));
+    room.flush();
+
+    // The watchdog may fire against a live subscription (e.g. the speaker is just
+    // muted). That must not re-pipe a track we're already reading, or double the input.
+    subscription.resubscribe();
+    room.flush();
+
+    expect(piped).toEqual([track]);
+  });
+
+  it("forgetTrack() lets a re-subscribed track pipe again, without it the dedupe blocks recovery", () => {
+    const room = new FakeRoom();
+    const organizer = room.participant(ORGANIZER);
+    const track = {};
+    const pub = new FakePublication(track, organizer, room);
+    organizer.publish(pub);
+
+    const piped: object[] = [];
+    const subscription = room.wire((t) => piped.push(t));
+    room.flush();
+
+    // If LiveKit hands back the *same* track object, the pipe-once dedupe would
+    // otherwise refuse to re-pipe it and the bridge would stay deaf.
+    room.queueSubscribed(track, pub, organizer);
+    subscription.forgetTrack(track);
+    room.flush();
+
+    expect(piped).toEqual([track, track]);
+  });
+});
+
+// The watchdog is the layer that doesn't need to know why the audio stopped. Organizer
+// audio arrives every 100ms, so a long gap is unambiguous — but "never started" is the
+// startup case, which the subscription wiring owns, and firing there would fight it.
+describe("shouldRecoverStalledInput", () => {
+  const stallMs = 15_000;
+
+  it("recovers when audio was flowing and then stopped", () => {
+    expect(
+      shouldRecoverStalledInput({ now: 100_000, lastFrameAt: 80_000, lastRecoveryAt: 0, stallMs })
+    ).toBe(true);
+  });
+
+  it("does not fire while audio is flowing", () => {
+    expect(
+      shouldRecoverStalledInput({ now: 100_000, lastFrameAt: 99_900, lastRecoveryAt: 0, stallMs })
+    ).toBe(false);
+  });
+
+  it("does not fire before any audio has ever arrived (that's the startup path)", () => {
+    expect(
+      shouldRecoverStalledInput({ now: 100_000, lastFrameAt: 0, lastRecoveryAt: 0, stallMs })
+    ).toBe(false);
+  });
+
+  it("holds off during the cooldown, so a muted speaker yields one event not a storm", () => {
+    // Stalled for 40s, but we already attempted recovery 5s ago.
+    expect(
+      shouldRecoverStalledInput({
+        now: 100_000,
+        lastFrameAt: 60_000,
+        lastRecoveryAt: 95_000,
+        stallMs,
+      })
+    ).toBe(false);
+  });
+
+  it("retries once the cooldown elapses and the input is still dead", () => {
+    expect(
+      shouldRecoverStalledInput({
+        now: 100_000,
+        lastFrameAt: 60_000,
+        lastRecoveryAt: 85_000,
+        stallMs,
+      })
+    ).toBe(true);
   });
 });
