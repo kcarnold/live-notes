@@ -27,6 +27,7 @@ import {
 import type { Content } from '@google/genai';
 
 import { AccessToken } from 'livekit-server-sdk';
+import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
 
 // Get API keys from environment variables, crash if not set
@@ -301,6 +302,63 @@ app.post('/api/livekit/translate/unsubscribe', async (req, res) => {
     phClient.captureException(error);
     console.error('LiveKit unsubscribe error:', error);
     return res.status(500).json({ error: 'Failed to unsubscribe' });
+  }
+});
+
+
+// Force a LiveKit reconnection scenario on a session's translator bridges.
+//
+// A full reconnect is what silently deafened both bridges on 2026-07-12, and it cannot be
+// waited for — it's the SDK's escalation when a resume fails, driven by server-side events
+// rather than by elapsed time. Without this route, verifying that the bridge survives one
+// means running a whole service and hoping. With it, the check takes seconds:
+//
+//   curl -X POST localhost:8000/api/livekit/translate/simulate \
+//     -H 'content-type: application/json' \
+//     -d '{"sessionId":"doc-2026-07-13","scenario":"fullReconnect"}'
+//
+// …then confirm translation audio keeps flowing and `organizer_audio_reconciled` fires with
+// trigger "reconnected". See docs/live-audio-resilience.md.
+//
+// Chaos endpoint: refuses to run in production, since it deliberately breaks a live room.
+const SIMULATE_SCENARIOS: Record<string, SimulateScenarioKind> = {
+  fullReconnect: SimulateScenarioKind.SIMULATE_FULL_RECONNECT,
+  signalReconnect: SimulateScenarioKind.SIMULATE_SIGNAL_RECONNECT,
+  nodeFailure: SimulateScenarioKind.SIMULATE_NODE_FAILURE,
+  migration: SimulateScenarioKind.SIMULATE_MIGRATION,
+  serverLeave: SimulateScenarioKind.SIMULATE_SERVER_LEAVE,
+};
+
+app.post('/api/livekit/translate/simulate', async (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_CHAOS_ENDPOINT !== '1') {
+      return res.status(403).json({ error: 'Chaos endpoint disabled in production' });
+    }
+    if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
+
+    const sessionId = req.body?.sessionId as string | undefined;
+    const scenario = (req.body?.scenario as string | undefined) ?? 'fullReconnect';
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+
+    const kind = SIMULATE_SCENARIOS[scenario];
+    if (kind === undefined) {
+      return res.status(400).json({
+        error: `Unknown scenario '${scenario}'`,
+        available: Object.keys(SIMULATE_SCENARIOS),
+      });
+    }
+
+    const manager = TranslationSessionManager.getInstance();
+    const languages = await manager.simulateScenario(sessionId, kind);
+    if (languages.length === 0) {
+      return res.status(404).json({ error: `No active translator bridges for ${sessionId}` });
+    }
+    console.warn(`[chaos] Simulated ${scenario} on ${sessionId} for: ${languages.join(', ')}`);
+    return res.json({ success: true, scenario, languages });
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('LiveKit simulate error:', error);
+    return res.status(500).json({ error: 'Failed to simulate scenario' });
   }
 });
 

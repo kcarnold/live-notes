@@ -9,6 +9,7 @@
  *   const bridge = await manager.getOrCreate(sessionId, targetLanguage, organizerIdentity);
  */
 
+import type { SimulateScenarioKind } from "@livekit/rtc-node";
 import type { DocumentManager } from "@y-sweet/sdk";
 import { RoomServiceClient } from "livekit-server-sdk";
 
@@ -271,6 +272,26 @@ class TranslationSessionManager {
       });
     }
     return result;
+  }
+
+  /**
+   * Force a LiveKit reconnection scenario on a session's bridges. **Testing only** — the
+   * caller is responsible for gating this (see the dev-only route in server.ts).
+   *
+   * This exists because the failure it reproduces cannot be waited for: a LiveKit full
+   * reconnect is the SDK's escalation when a resume fails, and it took a production outage
+   * to observe one. Being able to fire it on demand turns "run a service and hope" into a
+   * ten-second check. Returns the languages it fired at.
+   */
+  async simulateScenario(sessionId: string, kind: SimulateScenarioKind): Promise<string[]> {
+    const languageMap = this.translations.get(sessionId);
+    if (!languageMap) return [];
+    const fired: string[] = [];
+    for (const [language, bridge] of languageMap) {
+      await bridge.simulateScenario(kind);
+      fired.push(language);
+    }
+    return fired;
   }
 
   /**

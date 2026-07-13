@@ -199,6 +199,46 @@ subscribed to three room events and depended on nine. At minimum, log and report
 None of these change behavior. All of them turn the next incident from an archaeology exercise into
 a line in the log.
 
+## How this is tested
+
+Both outages lived in the **wiring**, not the logic. The subscribe decision was always correct; it
+just wasn't re-run. That has a sharp consequence for testing: a suite that only exercises pure
+helpers would have gone green, untouched, straight through both outages. Unit tests on
+`reconcileOrganizerAudio` prove it does the right thing *when called*. They cannot prove it gets
+called, and "gets called" is the entire bug.
+
+So [translation-bridge.e2e.test.ts](../live-audio/translation-bridge.e2e.test.ts) drives the real
+`TranslationBridge` against fakes of the only two things it talks to — a LiveKit room and a Gemini
+websocket — and asserts on the single thing a listener cares about: **is audio still reaching
+Gemini?** No test inspects internal state. Each one breaks the input the way production broke it and
+checks that frames resume.
+
+The load-bearing part of the fake is that `FakeRoom.fullReconnect()` reproduces LiveKit's documented
+sequence *exactly*, including the gap that caused the outage: `ParticipantConnected` for everyone
+already present, and **no `TrackPublished`** for their existing publications. Get that detail wrong
+and the test passes against broken code.
+
+Which is not hypothetical — **verify that a regression test can actually fail.** Run it against the
+code from before the fix (`git show <pre-fix-sha>:live-audio/translation-bridge.ts`) and confirm it
+goes red. Three of the five e2e tests fail against `9ff8822`, the code that was in production during
+the outage; the two that pass are the happy path and outage 1's race, which that commit already
+fixed. A regression test that has never been observed to fail is a guess about the bug, not a test
+of it.
+
+Coverage is deliberately split by what each layer can prove:
+
+| Test | Proves |
+| --- | --- |
+| happy path | the pipeline works at all |
+| late mic publish | outage 1 stays fixed |
+| full reconnect | outage 2 stays fixed |
+| input dies with **no room event at all** | the watchdog catches the unknown-unknown |
+| **only one trigger fires** | the convergence claim — no single trigger is load-bearing |
+
+That last one is the one worth stealing. It asserts the *property* the design rests on, rather than
+the behavior of any particular event, so it keeps holding even if LiveKit changes which events it
+emits — which is exactly the thing we have now been wrong about twice.
+
 ## Upstreaming notes
 
 For anyone carrying these back to the Gemini Live + LiveKit sample, the three defects are, in

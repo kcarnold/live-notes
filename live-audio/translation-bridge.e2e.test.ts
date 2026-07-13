@@ -134,6 +134,8 @@ class FakeRoom extends EventEmitter {
 
   constructor() {
     super();
+    // The bridge constructs its own Room, so this registry is how the test gets hold of it.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     lastRoom = this;
   }
 
@@ -280,14 +282,14 @@ const { TranslationBridge } = await import("./translation-bridge.ts");
 
 const ORGANIZER = "organizer-host";
 
-/** The socket the bridge is currently feeding. */
-const liveSocket = () => FakeGeminiSocket.instances.at(-1)!;
-
-/** Frames Gemini has received so far, across all sockets (a reconnect makes a new one). */
+/**
+ * Frames Gemini has received, across every socket it opened — a Gemini `goAway` reconnect
+ * makes a new one, and we don't care which socket the audio landed on, only that it landed.
+ */
 const framesToGemini = () =>
   FakeGeminiSocket.instances.reduce((n, s) => n + s.audioFramesReceived.length, 0);
 
-/** Speak `count` 100ms frames into the organizer's mic and let them propagate. */
+/** Speak `count` 100ms frames into a mic track and let them propagate. */
 async function speak(track: FakeRemoteTrack, count = 3): Promise<void> {
   for (let i = 0; i < count; i++) {
     track.push(new FakeAudioFrame());
@@ -295,7 +297,16 @@ async function speak(track: FakeRemoteTrack, count = 3): Promise<void> {
   }
 }
 
-async function startBridge() {
+/**
+ * Start a bridge. `seat` runs once the bridge has a Room but before its Gemini handshake
+ * completes, which is where the room's starting state gets decided (and where outage 1's
+ * race lives). Whatever `seat` returns is handed back to the test.
+ */
+async function boot<T>(seat: (room: FakeRoom) => T): Promise<{
+  bridge: InstanceType<typeof TranslationBridge>;
+  room: FakeRoom;
+  seated: T;
+}> {
   const bridge = new TranslationBridge("doc-test", "fr", ORGANIZER, {
     geminiApiKey: "fake-key",
     livekitUrl: "wss://fake.livekit",
@@ -303,11 +314,13 @@ async function startBridge() {
     livekitApiSecret: "fake",
   });
   const started = bridge.start();
-  // connectGemini polls for setupComplete every 100ms; let the handshake settle.
-  await vi.advanceTimersByTimeAsync(300);
+  await vi.advanceTimersByTimeAsync(10); // the bridge has constructed its Room
+  const room = lastRoom as FakeRoom;
+  const seated = seat(room);
+  await vi.advanceTimersByTimeAsync(300); // connectGemini polls for setupComplete every 100ms
   await started;
   await vi.advanceTimersByTimeAsync(10); // deliver the pending TrackSubscribed
-  return bridge;
+  return { bridge, room, seated };
 }
 
 describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
@@ -323,73 +336,21 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
   });
 
   it("pipes the organizer's mic to Gemini (happy path)", async () => {
-    const bridge = new TranslationBridge("doc-test", "fr", ORGANIZER, {
-      geminiApiKey: "k",
-      livekitUrl: "wss://fake",
-      livekitApiKey: "k",
-      livekitApiSecret: "s",
-    });
-    const started = bridge.start();
-    await vi.advanceTimersByTimeAsync(10);
-    const mic = lastRoom!.seatOrganizer(ORGANIZER);
-    await vi.advanceTimersByTimeAsync(300);
-    await started;
-    await vi.advanceTimersByTimeAsync(10);
-
-    await speak(mic);
-
-    expect(framesToGemini()).toBe(3);
-    expect(bridge.status).toBe("active");
-    await bridge.stop();
-  });
-
-  it("survives a LiveKit full reconnect — the 2026-07-12 outage", async () => {
-    // This is the regression test the whole rework exists for. Before the fix, the bridge
-    // stayed `active` here and streamed silence to Gemini until someone redeployed.
-    const bridge = new TranslationBridge("doc-test", "fr", ORGANIZER, {
-      geminiApiKey: "k",
-      livekitUrl: "wss://fake",
-      livekitApiKey: "k",
-      livekitApiSecret: "s",
-    });
-    const started = bridge.start();
-    await vi.advanceTimersByTimeAsync(10);
-    const room = lastRoom!;
-    const mic = room.seatOrganizer(ORGANIZER);
-    await vi.advanceTimersByTimeAsync(300);
-    await started;
-    await vi.advanceTimersByTimeAsync(10);
+    const { bridge, seated: mic } = await boot((room) => room.seatOrganizer(ORGANIZER));
 
     await speak(mic, 3);
+
     expect(framesToGemini()).toBe(3);
-
-    // LiveKit rebuilds the session. No TrackPublished, no Disconnected — the bridge is
-    // given nothing but ParticipantConnected and a dead AudioStream.
-    const newMic = room.fullReconnect();
-    await vi.advanceTimersByTimeAsync(50);
-
-    // The speaker keeps talking into the *new* track object.
-    await speak(newMic, 4);
-
-    expect(framesToGemini()).toBe(7); // audio resumed; we are not deaf
     expect(bridge.status).toBe("active");
     await bridge.stop();
   });
 
-  it("recovers when the organizer's mic publishes late (outage 1's race)", async () => {
-    const bridge = new TranslationBridge("doc-test", "fr", ORGANIZER, {
-      geminiApiKey: "k",
-      livekitUrl: "wss://fake",
-      livekitApiKey: "k",
-      livekitApiSecret: "s",
-    });
-    const started = bridge.start();
-    await vi.advanceTimersByTimeAsync(10);
-    const room = lastRoom!;
-    // Organizer is present but hasn't finished getUserMedia — nothing to subscribe to yet.
-    const organizer = room.seatOrganizerWithoutMic(ORGANIZER);
-    await vi.advanceTimersByTimeAsync(300);
-    await started;
+  it("recovers when the organizer's mic publishes late (outage 1: the join/getUserMedia race)", async () => {
+    // The organizer is in the room but hasn't finished getUserMedia, so there is nothing to
+    // subscribe to when the bridge starts. The mic lands a beat later.
+    const { bridge, room, seated: organizer } = await boot((r) =>
+      r.seatOrganizerWithoutMic(ORGANIZER)
+    );
 
     const mic = room.publishMicLate(organizer);
     await vi.advanceTimersByTimeAsync(10);
@@ -399,36 +360,44 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await bridge.stop();
   });
 
-  it("re-pipes when the audio stream dies with no room event at all (watchdog)", async () => {
-    // The unknown-unknown: the input goes silent and LiveKit tells us *nothing* — no
-    // reconnect, no unsubscribe, no disconnect. Only the stall watchdog can catch this.
-    const bridge = new TranslationBridge("doc-test", "fr", ORGANIZER, {
-      geminiApiKey: "k",
-      livekitUrl: "wss://fake",
-      livekitApiKey: "k",
-      livekitApiSecret: "s",
-    });
-    const started = bridge.start();
-    await vi.advanceTimersByTimeAsync(10);
-    const room = lastRoom!;
-    const mic = room.seatOrganizer(ORGANIZER);
-    await vi.advanceTimersByTimeAsync(300);
-    await started;
-    await vi.advanceTimersByTimeAsync(10);
+  it("survives a LiveKit full reconnect (outage 2: 2026-07-12)", async () => {
+    // The regression test this whole rework exists for. Before the fix the bridge stayed
+    // `active` here and streamed silence to Gemini until someone redeployed the server.
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
+
+    await speak(mic, 3);
+    expect(framesToGemini()).toBe(3);
+
+    // LiveKit rebuilds the session. The bridge is handed nothing but ParticipantConnected
+    // and a dead AudioStream: no TrackPublished, no Disconnected, no error.
+    const newMic = room.fullReconnect();
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The speaker keeps talking, now into the new track object.
+    await speak(newMic, 4);
+
+    expect(framesToGemini()).toBe(7); // audio resumed — we are not deaf
+    expect(bridge.status).toBe("active");
+    await bridge.stop();
+  });
+
+  it("recovers when the input dies with no room event at all (the unknown-unknown)", async () => {
+    // Neither outage's trigger: the media path just stops and LiveKit tells us nothing --
+    // no reconnect, no unsubscribe, no disconnect, no error. Only reconciling from a
+    // liveness signal can catch this, which is what the stall watchdog is for.
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
 
     await speak(mic, 2);
     expect(framesToGemini()).toBe(2);
 
-    // Swap the organizer's publication for a fresh one behind the bridge's back, and kill
-    // the old stream. No events fire. The bridge is now deaf and nothing has told it.
+    // Swap the organizer's publication behind the bridge's back and kill the old stream.
     mic.end();
-    const participant = room.remoteParticipants.get(ORGANIZER)!;
-    participant.trackPublications.clear();
+    const organizer = room.remoteParticipants.get(ORGANIZER) as FakeParticipant;
+    organizer.trackPublications.clear();
     const newMic = new FakeRemoteTrack();
-    participant.publish(new FakePublication(newMic, participant, room));
+    organizer.publish(new FakePublication(newMic, organizer, room));
 
-    // The stream-ended path reconciles immediately; even if it hadn't, the watchdog
-    // (15s stall threshold, checked every 5s) would.
+    // Let the watchdog run (15s stall threshold, checked every 5s).
     await vi.advanceTimersByTimeAsync(25_000);
     await speak(newMic, 3);
 
@@ -436,33 +405,21 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await bridge.stop();
   });
 
-  it("keeps feeding Gemini across a reconnect even if only ONE trigger fires", async () => {
-    // The convergence claim: no single trigger is load-bearing. Here the room emits
-    // Reconnected but — simulating an SDK whose event semantics we guessed wrong — never
-    // emits ParticipantConnected. Reconcile must still restore audio.
-    const bridge = new TranslationBridge("doc-test", "fr", ORGANIZER, {
-      geminiApiKey: "k",
-      livekitUrl: "wss://fake",
-      livekitApiKey: "k",
-      livekitApiSecret: "s",
-    });
-    const started = bridge.start();
-    await vi.advanceTimersByTimeAsync(10);
-    const room = lastRoom!;
-    const mic = room.seatOrganizer(ORGANIZER);
-    await vi.advanceTimersByTimeAsync(300);
-    await started;
-    await vi.advanceTimersByTimeAsync(10);
+  it("restores audio when only ONE reconnect trigger fires (no trigger is load-bearing)", async () => {
+    // The convergence claim in the docs: reconcile is driven by several triggers, and none
+    // of them individually matters. Here the room emits Reconnected and *nothing else* --
+    // simulating an SDK whose event semantics we guessed wrong, which is precisely the
+    // mistake that caused both outages. Audio must still come back.
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
     await speak(mic, 1);
 
-    // Session rebuilt by hand, emitting *only* Reconnected.
     mic.end();
     room.remoteParticipants.clear();
-    const participant = new FakeParticipant(ORGANIZER);
+    const organizer = new FakeParticipant(ORGANIZER);
     const newMic = new FakeRemoteTrack();
-    participant.publish(new FakePublication(newMic, participant, room));
-    room.remoteParticipants.set(ORGANIZER, participant);
-    room.emit(RoomEvent.Reconnected);
+    organizer.publish(new FakePublication(newMic, organizer, room));
+    room.remoteParticipants.set(ORGANIZER, organizer);
+    room.emit(RoomEvent.Reconnected); // ...and no ParticipantConnected, no TrackPublished
 
     await vi.advanceTimersByTimeAsync(50);
     await speak(newMic, 3);

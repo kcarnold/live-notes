@@ -36,13 +36,16 @@ import {
   DisconnectReason,
   TrackPublishOptions,
   TrackSource,
-  RemoteTrack,
   RemoteTrackPublication,
   RemoteParticipant,
   RemoteAudioTrack,
   TrackKind,
   AudioStream,
+  SimulateScenarioKind,
 } from "@livekit/rtc-node";
+// RemoteTrack is a type-only export (a union alias), so it must not be imported as a value —
+// tsc accepts it either way, but ESM fails at runtime with "does not provide an export named".
+import type { RemoteTrack } from "@livekit/rtc-node";
 import WebSocket from "ws";
 import type { TranscriptWriter } from "./transcript-writer.ts";
 
@@ -319,6 +322,29 @@ export class TranslationBridge {
       this.status = "error";
       throw error;
     }
+  }
+
+  /**
+   * Force a LiveKit reconnection scenario on this bridge's room. **Testing only.**
+   *
+   * A full reconnect is what caused the 2026-07-12 outage, and it is not something you can
+   * wait for: it's the SDK's escalation when a resume fails, triggered by server-side
+   * events, not by elapsed time. Without this, verifying the fix means running a service and
+   * hoping. With it, the check takes seconds and can be repeated.
+   *
+   * This is also the only way to test the fix against the *real* SDK rather than against our
+   * model of it — the e2e fakes encode our reading of LiveKit's documented reconnect
+   * sequence, and this is what confirms that reading is right.
+   */
+  async simulateScenario(kind: SimulateScenarioKind): Promise<void> {
+    if (!this.room) throw new Error("Bridge is not connected to a room");
+    console.warn(
+      `[TranslationBridge:${this.targetLanguage}] Simulating LiveKit scenario ${SimulateScenarioKind[kind] ?? kind}`
+    );
+    this.record("livekit_scenario_simulated", {
+      scenario: SimulateScenarioKind[kind] ?? String(kind),
+    });
+    await this.room.simulateScenario(kind);
   }
 
   async stop(): Promise<void> {

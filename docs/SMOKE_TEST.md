@@ -42,6 +42,23 @@ an incident happens that this list would not have caught, add a line.
 - [ ] **The #69 race**: start the Listen client *first*, then start broadcasting — bridge
       must still pick up the source audio (transcript flows).
 - [ ] Stop and restart the broadcaster mid-session; transcript resumes without a reload.
+- [ ] **The LiveKit full reconnect** (the 2026-07-12 outage — see
+      [live-audio-resilience.md](live-audio-resilience.md)). With a bridge running and the
+      speaker talking, force the reconnect that once deafened every translator for six
+      minutes:
+
+      curl -X POST localhost:8000/api/livekit/translate/simulate \
+        -H 'content-type: application/json' \
+        -d '{"sessionId":"doc-YYYY-MM-DD","scenario":"fullReconnect"}'
+
+      Translated audio and transcript must resume within a few seconds. In the server log:
+      `LiveKit reconnected`, then `organizer_audio_reconciled` with `trigger: "reconnected"`.
+      A silent bridge that still reports `active` is the exact failure this is checking for —
+      it looks healthy from every other signal.
+
+      Do this rather than waiting: a full reconnect is the SDK's escalation when a resume
+      fails, so it can't be provoked by running longer. `scenario` also accepts
+      `signalReconnect`, `nodeFailure`, `migration`, `serverLeave`.
 
 ## 5. TTS (text-to-speech on translated notes)
 
