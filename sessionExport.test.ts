@@ -37,7 +37,31 @@ describe('buildSessionExport', () => {
     expect(data.notes[0].type).toBe('heading');
     expect(data.notes[0].translations.French).toBe('Premier point');
     expect(data.notes[1].translations).toEqual({});
+    expect(data.noteLanguages).toEqual(['French']);
     expect(data.date).toContain('2026');
+  });
+
+  it('discovers note/slide/audio languages independently from the doc', () => {
+    const doc = new Y.Doc();
+    // Notes translated into Spanish (and a colon in the content must not confuse parsing).
+    doc.getArray('sourceBlocks').push([block('b1', 'a0', 'Verse: John 3:16')]);
+    doc.getMap<string>('notesTranslationCache').set('Spanish:Verse: John 3:16', 'Versículo: Juan 3:16');
+    // Slides translated into French only.
+    doc.getMap('proclaimPresentations').set('i1', { title: 'Reading', slides: ['A verse'] });
+    doc.getMap<SlideTranslationEntry>('slideTranslations').set(slideTranslationKey('French', 'A verse'), {
+      text: 'Un verset',
+      status: 'reviewed',
+      provenance: 'human',
+    });
+    // Audio in German.
+    doc.getText('liveTranscript-de').insert(0, 'Guten Morgen.');
+
+    const data = buildSessionExport(doc, 'doc-2026-07-13');
+
+    expect(data.noteLanguages).toEqual(['Spanish']);
+    expect(data.notes[0].translations.Spanish).toBe('Versículo: Juan 3:16');
+    expect(data.slideLanguages).toEqual(['French']);
+    expect(data.liveTranscripts.map((t) => t.code)).toEqual(['de']);
   });
 
   it('drops empty blocks', () => {
@@ -69,8 +93,10 @@ describe('buildSessionExport', () => {
       provenance: 'llm',
     });
 
-    const data = buildSessionExport(doc, 'doc-2026-07-13', ['French']);
+    const data = buildSessionExport(doc, 'doc-2026-07-13');
 
+    // Only French has stored slide translations, so it's the only discovered language.
+    expect(data.slideLanguages).toEqual(['French']);
     // Service order wins: item-b before item-a.
     expect(data.presentations.map((p) => p.title)).toEqual(['Reading', 'Hymn']);
     expect(data.presentations[0].slides[0].translations.French.entry.text).toBe('Un verset');

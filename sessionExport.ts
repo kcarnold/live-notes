@@ -11,7 +11,12 @@
  *   - `proclaimPresentations` Y.Map itemId -> { title, slides: string[] }
  *   - `proclaimServiceOrder`  Y.Map `order` -> itemId[]
  *   - `slideTranslations`     Y.Map slideTranslationKey(lang, text) -> entry
- *   - `transcriptDoc`         Y.XmlFragment (live speech transcript)
+ *   - `liveTranscript-{code}` Y.Text per language (live speech translation)
+ *   - `transcriptDoc`         Y.XmlFragment (legacy Web Speech API transcript)
+ *
+ * Languages are never hard-coded: each section discovers the languages actually
+ * present in the doc (notes and slides may translate into different sets, and the
+ * live-audio transcripts use a different — BCP-47 — namespace again).
  */
 import * as Y from 'yjs';
 import {
@@ -20,12 +25,6 @@ import {
   type SlideTranslationEntry,
   type ResolvedSlideTranslation,
 } from './src/slideTranslation.ts';
-
-/**
- * Languages included in an export. Kept in sync with `configAtoms.languages`
- * (the frontend can't be imported here without pulling in React).
- */
-export const EXPORT_LANGUAGES = ['French', 'Haitian Creole', 'Spanish'] as const;
 
 // --- Structured, render-agnostic representation -------------------------------
 
@@ -65,7 +64,10 @@ export interface SessionExport {
   /** Human date parsed from a `doc-YYYY-MM-DD` id, else undefined. */
   date?: string;
   generatedAt: string;
-  languages: string[];
+  /** Languages the notes were translated into, discovered from the doc. */
+  noteLanguages: string[];
+  /** Languages the slides were translated into, discovered from the doc. */
+  slideLanguages: string[];
   notes: ExportedNoteLine[];
   presentations: ExportedPresentation[];
   /**
@@ -84,6 +86,21 @@ const LIVE_TRANSCRIPT_SOURCE_CODE = 'en';
 
 // --- Y.Doc extraction ---------------------------------------------------------
 
+/**
+ * Discover the languages in a content-addressed translation map. Both
+ * `notesTranslationCache` and `slideTranslations` key on `${language}:${content}`,
+ * and a language name never contains a colon, so the segment before the first
+ * colon is the language. Returned sorted for stable output.
+ */
+function languagesFromMapKeys<T>(map: Y.Map<T>): string[] {
+  const languages = new Set<string>();
+  for (const key of map.keys()) {
+    const idx = key.indexOf(':');
+    if (idx > 0) languages.add(key.slice(0, idx));
+  }
+  return [...languages].sort((a, b) => a.localeCompare(b));
+}
+
 interface RawBlock {
   type: 'heading' | 'bullet';
   level: number;
@@ -93,9 +110,10 @@ interface RawBlock {
 }
 
 /** Read + sort the note blocks the way the block editor does (by fractional position). */
-function extractNotes(ydoc: Y.Doc, languages: readonly string[]): ExportedNoteLine[] {
+function extractNotes(ydoc: Y.Doc): { notes: ExportedNoteLine[]; languages: string[] } {
   const yBlocks = ydoc.getArray<Y.Map<unknown>>('sourceBlocks');
   const cache = ydoc.getMap<string>('notesTranslationCache');
+  const languages = languagesFromMapKeys(cache);
 
   const blocks: RawBlock[] = yBlocks.toArray().map((yMap) => {
     const content = yMap.get('content');
@@ -114,7 +132,7 @@ function extractNotes(ydoc: Y.Doc, languages: readonly string[]): ExportedNoteLi
     a.position < b.position ? -1 : a.position > b.position ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   );
 
-  return blocks
+  const notes = blocks
     .filter((b) => b.content.trim() !== '')
     .map((b) => {
       const trimmed = b.content.trim();
@@ -123,15 +141,20 @@ function extractNotes(ydoc: Y.Doc, languages: readonly string[]): ExportedNoteLi
         const t = cache.get(`${lang}:${trimmed}`);
         if (typeof t === 'string' && t.trim() !== '') translations[lang] = t;
       }
-      return { type: b.type, level: b.level, content: b.content.trim(), translations };
+      return { type: b.type, level: b.level, content: trimmed, translations };
     });
+
+  // Only surface languages that actually translate a current note (drop stale-cache-only ones).
+  const usedLanguages = languages.filter((lang) => notes.some((n) => n.translations[lang]));
+  return { notes, languages: usedLanguages };
 }
 
 /** Read each presentation (in service order when available) with resolved slide translations. */
-function extractPresentations(ydoc: Y.Doc, languages: readonly string[]): ExportedPresentation[] {
+function extractPresentations(ydoc: Y.Doc): { presentations: ExportedPresentation[]; languages: string[] } {
   const presentationsMap = ydoc.getMap<{ title?: string; slides?: unknown[] }>('proclaimPresentations');
   const serviceOrderMap = ydoc.getMap<string[]>('proclaimServiceOrder');
   const translationsMap = ydoc.getMap<SlideTranslationEntry>('slideTranslations');
+  const languages = languagesFromMapKeys(translationsMap);
 
   const lookup = (lang: string, slideText: string) =>
     translationsMap.get(slideTranslationKey(lang, slideText));
@@ -166,7 +189,13 @@ function extractPresentations(ydoc: Y.Doc, languages: readonly string[]): Export
       slides: exportedSlides,
     });
   }
-  return presentations;
+
+  // Only keep columns for languages that resolve on at least one shown slide (a
+  // language keyed only by stale content, no longer on any slide, would be all-empty).
+  const usedLanguages = languages.filter((lang) =>
+    presentations.some((p) => p.slides.some((s) => s.translations[lang])),
+  );
+  return { presentations, languages: usedLanguages };
 }
 
 /** Flatten a transcript Y.XmlFragment to plain text, one line per block element. */
@@ -233,18 +262,17 @@ function docIdToDate(docId: string): string | undefined {
 }
 
 /** Build the structured export from a fully-synced Y.Doc. */
-export function buildSessionExport(
-  ydoc: Y.Doc,
-  docId: string,
-  languages: readonly string[] = EXPORT_LANGUAGES,
-): SessionExport {
+export function buildSessionExport(ydoc: Y.Doc, docId: string): SessionExport {
+  const { notes, languages: noteLanguages } = extractNotes(ydoc);
+  const { presentations, languages: slideLanguages } = extractPresentations(ydoc);
   return {
     docId,
     date: docIdToDate(docId),
     generatedAt: new Date().toISOString(),
-    languages: [...languages],
-    notes: extractNotes(ydoc, languages),
-    presentations: extractPresentations(ydoc, languages),
+    noteLanguages,
+    slideLanguages,
+    notes,
+    presentations,
     liveTranscripts: extractLiveTranscripts(ydoc),
     transcript: extractTranscript(ydoc),
   };
@@ -362,8 +390,8 @@ export function renderSessionHtml(data: SessionExport): string {
   const title = data.date ? `Live Notes — ${data.date}` : `Live Notes — ${data.docId}`;
   const generated = new Date(data.generatedAt).toLocaleString('en-US');
 
-  const notesHtml = renderNotes(data.notes, data.languages);
-  const presentationsHtml = renderPresentations(data.presentations, data.languages);
+  const notesHtml = renderNotes(data.notes, data.noteLanguages);
+  const presentationsHtml = renderPresentations(data.presentations, data.slideLanguages);
   const liveTranscriptsHtml = renderLiveTranscripts(data.liveTranscripts);
   const transcriptHtml = renderTranscript(data.transcript);
   const body =
