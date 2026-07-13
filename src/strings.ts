@@ -72,6 +72,7 @@ export interface AppStrings {
 
   // Navigation
   goHome: string;
+  downloadSession: string;
 
   // Layout diagram component labels
   componentSourceText: string;
@@ -155,6 +156,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Next',
     untitledPresentation: 'Untitled Presentation',
     goHome: 'Go home',
+    downloadSession: 'Download session',
     componentSourceText: 'Source Text',
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
@@ -231,6 +233,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Suivant',
     untitledPresentation: 'Pr\u00e9sentation sans titre',
     goHome: 'Accueil',
+    downloadSession: 'Télécharger la session',
     componentSourceText: 'Texte source',
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
@@ -307,6 +310,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Siguiente',
     untitledPresentation: 'Presentaci\u00f3n sin t\u00edtulo',
     goHome: 'Ir al inicio',
+    downloadSession: 'Descargar sesión',
     componentSourceText: 'Texto fuente',
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
@@ -383,6 +387,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Apr\u00e8',
     untitledPresentation: 'Prezantasyon San Tit',
     goHome: 'Retounen lakay',
+    downloadSession: 'Telechaje sesyon an',
     componentSourceText: 'Teks sous',
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',

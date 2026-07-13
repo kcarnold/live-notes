@@ -423,6 +423,16 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
         <ConnectionStatusWidget connectionStatus={connectionStatus} />
       </div>
       <a
+        href={`/api/session/export?doc=${encodeURIComponent(getDocId())}`}
+        download
+        className="fixed bottom-16 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 dark:bg-gray-700/80 text-white shadow-md hover:bg-gray-700/80 dark:hover:bg-gray-600/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
+        title={s.downloadSession}
+        aria-label={s.downloadSession}
+        style={{ fontSize: '1.3rem', boxShadow: '0 2px 8px rgba(0,0,0,0.10)' }}
+      >
+        <span style={{ fontSize: '1.3rem', lineHeight: 1 }}>⬇️</span>
+      </a>
+      <a
         href="/"
         className="fixed bottom-4 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 dark:bg-gray-700/80 text-white shadow-md hover:bg-gray-700/80 dark:hover:bg-gray-600/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
         title={s.goHome}

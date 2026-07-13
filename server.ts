@@ -25,6 +25,8 @@ import {
   setStatusIn,
 } from './slideConversationStore.ts';
 import type { Content } from '@google/genai';
+import * as Y from 'yjs';
+import { buildSessionExport, renderSessionHtml, sessionExportFilename } from './sessionExport.ts';
 
 import { AccessToken } from 'livekit-server-sdk';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
@@ -548,6 +550,37 @@ app.post('/api/slideConversation/note', async (req, res) => {
   });
   if (!updated) return res.status(404).json({ ok: false, error: 'No conversation' });
   return res.json({ ok: true, conversation: updated });
+});
+
+// One-click session export: fetch a session's Y-Sweet doc as an update (no live
+// websocket needed) and render everything in it — notes + translations, slides +
+// their translations, and the live transcript — into a single, self-contained,
+// human-readable HTML page that downloads as an attachment.
+app.get('/api/session/export', async (req, res) => {
+  const docId = (req.query?.doc as string | undefined)?.trim();
+  if (!docId) {
+    return res.status(400).json({ error: 'Missing doc query parameter' });
+  }
+  try {
+    const update = await documentManager.getDocAsUpdate(docId);
+    const ydoc = new Y.Doc();
+    Y.applyUpdate(ydoc, update);
+
+    const data = buildSessionExport(ydoc, docId);
+    const html = renderSessionHtml(data);
+    ydoc.destroy();
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${sessionExportFilename(docId)}"`,
+    );
+    return res.send(html);
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('Session export error:', error);
+    return res.status(500).json({ error: 'Failed to export session' });
+  }
 });
 
 // TTS request deduplication: Map of cache key -> Promise
