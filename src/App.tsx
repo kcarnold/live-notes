@@ -24,6 +24,7 @@ import { CurrentSlideViewerContainer } from "./CurrentSlideViewer";
 import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
 import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
+import { StatusViewContainer } from "./StatusView";
 import { getDocId } from "./getDocId";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
@@ -164,6 +165,7 @@ function HomePage() {
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText|bilingual-${selectedLang}#editor`}>Note-Taker</a> |{" "}
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href={`/sourceText,broadcast|bilingual-${selectedLang}#editor`}>Broadcaster</a>
           <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/slideReview#editor">{s.reviewSlidesLink}</a>
+          <a className="underline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" href="/status">{s.statusTitle}</a>
         </div>
       </div>
     </div>
@@ -261,6 +263,10 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 
   if (componentStr === 'currentSlide') {
     return <CurrentSlideViewerContainer />;
+  }
+
+  if (componentStr === 'status') {
+    return <StatusViewContainer />;
   }
 
   if (componentStr === 'slideReview') {
@@ -422,16 +428,6 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
       <div className="absolute top-2 right-2 z-10 flex items-center space-x-2">
         <ConnectionStatusWidget connectionStatus={connectionStatus} />
       </div>
-      <a
-        href={`/api/session/export?doc=${encodeURIComponent(getDocId())}`}
-        download
-        className="fixed bottom-16 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 dark:bg-gray-700/80 text-white shadow-md hover:bg-gray-700/80 dark:hover:bg-gray-600/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
-        title={s.downloadSession}
-        aria-label={s.downloadSession}
-        style={{ fontSize: '1.3rem', boxShadow: '0 2px 8px rgba(0,0,0,0.10)' }}
-      >
-        <span style={{ fontSize: '1.3rem', lineHeight: 1 }}>⬇️</span>
-      </a>
       <a
         href="/"
         className="fixed bottom-4 right-4 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-gray-500/70 dark:bg-gray-700/80 text-white shadow-md hover:bg-gray-700/80 dark:hover:bg-gray-600/80 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
