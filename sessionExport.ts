@@ -50,6 +50,16 @@ export interface ExportedPresentation {
   slides: ExportedSlide[];
 }
 
+export interface ExportedLiveTranscript {
+  /** BCP-47 code the transcript was published under (`en` is the source). */
+  code: string;
+  /** Localized display name for the code, e.g. "French" (falls back to the code). */
+  label: string;
+  /** True for the English source transcript produced by the primary bridge. */
+  isSource: boolean;
+  text: string;
+}
+
 export interface SessionExport {
   docId: string;
   /** Human date parsed from a `doc-YYYY-MM-DD` id, else undefined. */
@@ -58,8 +68,19 @@ export interface SessionExport {
   languages: string[];
   notes: ExportedNoteLine[];
   presentations: ExportedPresentation[];
+  /**
+   * Live speech-translation transcripts (English source + each target language),
+   * written by the live-audio pipeline into `liveTranscript-{code}` Y.Text keys.
+   */
+  liveTranscripts: ExportedLiveTranscript[];
+  /** Legacy Web Speech API transcript (`transcriptDoc`); empty in current sessions. */
   transcript: string;
 }
+
+/** Prefix the live-audio pipeline uses for per-language transcript Y.Text keys. */
+const LIVE_TRANSCRIPT_PREFIX = 'liveTranscript-';
+/** Code of the English source transcript (matches TranslationBridge.SOURCE_CODE). */
+const LIVE_TRANSCRIPT_SOURCE_CODE = 'en';
 
 // --- Y.Doc extraction ---------------------------------------------------------
 
@@ -166,6 +187,37 @@ function extractTranscript(ydoc: Y.Doc): string {
   return walk(fragment).trim();
 }
 
+/**
+ * Collect the live speech-translation transcripts. The pipeline creates a
+ * `liveTranscript-{code}` Y.Text per language on demand, so which codes exist
+ * varies by session — enumerate the doc's root types rather than guessing. The
+ * English source is listed first; the rest are sorted by localized label.
+ */
+function extractLiveTranscripts(ydoc: Y.Doc): ExportedLiveTranscript[] {
+  const displayNames = new Intl.DisplayNames(['en'], { type: 'language' });
+  const transcripts: ExportedLiveTranscript[] = [];
+
+  for (const key of ydoc.share.keys()) {
+    if (!key.startsWith(LIVE_TRANSCRIPT_PREFIX)) continue;
+    const text = ydoc.getText(key).toString().trim();
+    if (text === '') continue;
+    const code = key.slice(LIVE_TRANSCRIPT_PREFIX.length);
+    const isSource = code === LIVE_TRANSCRIPT_SOURCE_CODE;
+    let label: string;
+    try {
+      label = displayNames.of(code) ?? code;
+    } catch {
+      label = code;
+    }
+    transcripts.push({ code, label, isSource, text });
+  }
+
+  return transcripts.sort((a, b) => {
+    if (a.isSource !== b.isSource) return a.isSource ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
+}
+
 /** Parse `doc-YYYY-MM-DD` into a friendly date; undefined for other id shapes. */
 function docIdToDate(docId: string): string | undefined {
   const m = /^doc-(\d{4})-(\d{2})-(\d{2})$/.exec(docId);
@@ -193,6 +245,7 @@ export function buildSessionExport(
     languages: [...languages],
     notes: extractNotes(ydoc, languages),
     presentations: extractPresentations(ydoc, languages),
+    liveTranscripts: extractLiveTranscripts(ydoc),
     transcript: extractTranscript(ydoc),
   };
 }
@@ -274,15 +327,34 @@ function renderPresentations(presentations: ExportedPresentation[], languages: s
   return `<section><h2>Slides</h2>${blocks}</section>`;
 }
 
-function renderTranscript(transcript: string): string {
-  if (transcript.trim() === '') return '';
-  const paragraphs = transcript
+/** Split accumulated transcript text into escaped <p> paragraphs. */
+function renderTranscriptParagraphs(text: string): string {
+  return text
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line !== '')
     .map((line) => `<p>${escapeHtml(line)}</p>`)
     .join('\n');
-  return `<section><h2>Live transcript</h2><div class="transcript">${paragraphs}</div></section>`;
+}
+
+function renderLiveTranscripts(transcripts: ExportedLiveTranscript[]): string {
+  if (transcripts.length === 0) return '';
+  const blocks = transcripts
+    .map((t) => {
+      const heading = t.isSource ? `${escapeHtml(t.label)} (source)` : escapeHtml(t.label);
+      return `<div class="presentation"><h3>${heading}</h3><div class="transcript">${renderTranscriptParagraphs(
+        t.text,
+      )}</div></div>`;
+    })
+    .join('\n');
+  return `<section><h2>Live speech translation</h2>${blocks}</section>`;
+}
+
+function renderTranscript(transcript: string): string {
+  if (transcript.trim() === '') return '';
+  return `<section><h2>Transcript</h2><div class="transcript">${renderTranscriptParagraphs(
+    transcript,
+  )}</div></section>`;
 }
 
 /** Render the structured export to a single self-contained HTML document. */
@@ -292,9 +364,12 @@ export function renderSessionHtml(data: SessionExport): string {
 
   const notesHtml = renderNotes(data.notes, data.languages);
   const presentationsHtml = renderPresentations(data.presentations, data.languages);
+  const liveTranscriptsHtml = renderLiveTranscripts(data.liveTranscripts);
   const transcriptHtml = renderTranscript(data.transcript);
   const body =
-    [notesHtml, presentationsHtml, transcriptHtml].filter((s) => s !== '').join('\n') ||
+    [notesHtml, presentationsHtml, liveTranscriptsHtml, transcriptHtml]
+      .filter((s) => s !== '')
+      .join('\n') ||
     `<p class="empty">This session has no notes, slides, or transcript yet.</p>`;
 
   return `<!doctype html>

@@ -101,6 +101,29 @@ describe('buildSessionExport', () => {
     expect(data.transcript).toBe('Hello world.\nSecond line.');
   });
 
+  it('collects live speech-translation transcripts, source language first', () => {
+    const doc = new Y.Doc();
+    // Written by the live-audio pipeline as `liveTranscript-{code}` Y.Text.
+    doc.getText('liveTranscript-en').insert(0, 'The Lord is my shepherd.\n\n');
+    doc.getText('liveTranscript-fr').insert(0, "L'Éternel est mon berger.\n\n");
+    doc.getText('liveTranscript-es').insert(0, 'El Señor es mi pastor.\n\n');
+    doc.getText('liveTranscript-de'); // empty — should be dropped
+
+    const data = buildSessionExport(doc, 'doc-2026-07-13');
+
+    // English source is first; the rest are sorted by localized label (French, Spanish).
+    expect(data.liveTranscripts.map((t) => t.code)).toEqual(['en', 'fr', 'es']);
+    expect(data.liveTranscripts[0].isSource).toBe(true);
+    expect(data.liveTranscripts[0].label).toBe('English');
+    expect(data.liveTranscripts[1].label).toBe('French');
+    expect(data.liveTranscripts[1].text).toBe("L'Éternel est mon berger.");
+
+    const html = renderSessionHtml(data);
+    expect(html).toContain('Live speech translation');
+    expect(html).toContain('English (source)');
+    expect(html).toContain("L'Éternel est mon berger.");
+  });
+
   it('leaves date undefined for non-date doc ids', () => {
     const doc = new Y.Doc();
     const data = buildSessionExport(doc, 'doc5');
