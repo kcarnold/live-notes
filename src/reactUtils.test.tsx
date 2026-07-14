@@ -1,23 +1,40 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { act } from 'react';
-import { useScrollToBottom } from './reactUtils';
+import { useStickToBottom } from './reactUtils';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * A fake scroll-parent element that tracks scrollTo calls and reports a fixed
- * rect. Returns the mock separately so assertions target a plain mock (not an
+ * A fake scroll-parent element that tracks scrollTo calls, reports a fixed
+ * rect/size, and supports addEventListener/removeEventListener so the hook's
+ * scroll/wheel/touchmove listeners can be driven via `fire()`. Returns the
+ * scrollTo mock separately so assertions target a plain mock (not an
  * HTMLElement method, which trips @typescript-eslint/unbound-method).
  */
-function makeParent(bottom = 100, scrollTop = 50) {
+function makeParent({
+  bottom = 100,
+  scrollTop = 50,
+  scrollHeight = 950,
+  clientHeight = 900,
+} = {}) {
   const scrollTo = vi.fn();
+  const listeners: Record<string, (() => void)[]> = {};
   const el = {
     scrollTop,
+    scrollHeight,
+    clientHeight,
     scrollTo,
     getBoundingClientRect: () => ({ bottom }) as DOMRect,
+    addEventListener: (type: string, cb: () => void) => {
+      (listeners[type] ??= []).push(cb);
+    },
+    removeEventListener: (type: string, cb: () => void) => {
+      listeners[type] = (listeners[type] ?? []).filter((l) => l !== cb);
+    },
   } as unknown as HTMLElement;
-  return { el, scrollTo };
+  const fire = (type: string) => listeners[type]?.forEach((cb) => cb());
+  return { el, scrollTo, fire };
 }
 
 /** A fake target element that reports a fixed rect. */
@@ -27,7 +44,7 @@ function makeTarget(bottom = 200) {
   } as unknown as HTMLElement;
 }
 
-describe('useScrollToBottom', () => {
+describe('useStickToBottom', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -37,11 +54,11 @@ describe('useScrollToBottom', () => {
   });
 
   it('scrolls the parent so the target sits at the bottom after the debounce', () => {
-    const { el, scrollTo } = makeParent(100, 50);
+    const { el, scrollTo } = makeParent({ bottom: 100, scrollTop: 50 });
     const parentRef = { current: el };
     const targetRef = { current: makeTarget(200) };
 
-    renderHook(({ deps }) => useScrollToBottom(parentRef, targetRef, deps, true), {
+    renderHook(({ deps }) => useStickToBottom(parentRef, targetRef, deps), {
       initialProps: { deps: [0] as unknown[] },
     });
 
@@ -56,20 +73,79 @@ describe('useScrollToBottom', () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 150, behavior: 'smooth' });
   });
 
-  it('does not scroll when disabled', () => {
-    const { el, scrollTo } = makeParent();
+  it('does not auto-scroll once the reader has scrolled away from the bottom', () => {
+    const { el, scrollTo, fire } = makeParent({
+      scrollTop: 0,
+      scrollHeight: 1000,
+      clientHeight: 900,
+    });
     const parentRef = { current: el };
     const targetRef = { current: makeTarget() };
 
-    renderHook(({ deps }) => useScrollToBottom(parentRef, targetRef, deps, false), {
-      initialProps: { deps: [0] as unknown[] },
-    });
+    const { result, rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
 
+    // Reader scrolls up: 1000 - 0 - 900 = 100px from bottom (past the 80px threshold).
+    act(() => fire('scroll'));
+    expect(result.current.pinned).toBe(false);
+
+    rerender({ deps: [1] });
     act(() => {
-      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(200);
     });
 
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('holds off auto-scrolling while the reader is mid-gesture (wheel/touch)', () => {
+    const { el, scrollTo, fire } = makeParent();
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget() };
+
+    const { rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    act(() => fire('wheel'));
+    rerender({ deps: [1] });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    // Still within the post-gesture holdoff window: no scroll yet.
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    rerender({ deps: [2] });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    // Holdoff has elapsed and the reader never left the bottom, so it resumes.
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it('scrollToEnd jumps immediately and re-pins', () => {
+    const { el, scrollTo, fire } = makeParent({
+      scrollTop: 0,
+      scrollHeight: 1000,
+      clientHeight: 900,
+    });
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget() };
+
+    const { result } = renderHook(() => useStickToBottom(parentRef, targetRef, [0]));
+
+    act(() => fire('scroll'));
+    expect(result.current.pinned).toBe(false);
+
+    act(() => result.current.scrollToEnd());
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(result.current.pinned).toBe(true);
   });
 
   it('coalesces rapid dependency changes into a single scroll', () => {
@@ -78,7 +154,7 @@ describe('useScrollToBottom', () => {
     const targetRef = { current: makeTarget() };
 
     const { rerender } = renderHook(
-      ({ deps }) => useScrollToBottom(parentRef, targetRef, deps, true),
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
 
@@ -98,7 +174,7 @@ describe('useScrollToBottom', () => {
     const parentRef = { current: null as HTMLElement | null };
     const targetRef = { current: null as HTMLElement | null };
 
-    renderHook(({ deps }) => useScrollToBottom(parentRef, targetRef, deps, true), {
+    renderHook(({ deps }) => useStickToBottom(parentRef, targetRef, deps), {
       initialProps: { deps: [0] as unknown[] },
     });
 
@@ -118,7 +194,7 @@ describe('useScrollToBottom', () => {
     const targetRef = { current: makeTarget() as HTMLElement | null };
 
     const { rerender } = renderHook(
-      ({ deps }) => useScrollToBottom(parentRef, targetRef, deps, true),
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
 
