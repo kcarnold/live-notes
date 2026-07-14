@@ -12,9 +12,14 @@
  * limits, routine resets). To keep the audio from cutting out, the bridge listens
  * for the `goAway` warning and reconnects make-before-break — it opens a
  * replacement socket while the old one is still serving audio, then swaps once the
- * new one is ready. Unexpected closures fall back to a backoff reconnect. The
- * whole lifecycle is reported via the injected `recordEvent` telemetry sink so we
- * can see how often sessions drop and how long any gap lasts.
+ * new one is ready. Unexpected closures fall back to a backoff reconnect. When the
+ * overlap fails (the old socket dies before the replacement finishes setup, e.g. a
+ * short `goAway` lead time), input frames are buffered during the gap and flushed
+ * into the fresh session on setup, so a swap costs a little latency on that segment
+ * rather than dropped words. The same buffer covers the setup latency when the
+ * socket is reopened after a silence suspend. The whole lifecycle is reported via
+ * the injected `recordEvent` telemetry sink so we can see how often sessions drop
+ * and how long any gap lasts.
  */
 
 import {
@@ -62,6 +67,19 @@ const RECONNECT_BACKOFF = { initialMs: 1_000, maxMs: 30_000 };
 export const SILENCE_THRESHOLD_DBFS = -30;
 const SILENCE_SUSPEND_MS = 30_000;
 const SILENCE_CHECK_INTERVAL_MS = 5_000;
+
+// Input frames are 100 ms (AudioStream `frameSizeMs`). When the Gemini socket is
+// briefly unavailable — a reconnect gap where the old session closed before its
+// replacement finished setup, or the setup latency right after a silence resume — we
+// buffer input frames instead of dropping them, then flush them into the fresh
+// session once it's ready. So a session swap costs a little added latency on that
+// segment rather than clipped/lost words. Only frames that were never sent are
+// buffered, so nothing is ever sent twice and the transcript is never duplicated.
+// The buffer is bounded so a long outage can't grow it without limit; a short
+// pre-roll of the frames just before speech resumes gives the new session onset.
+const INPUT_FRAME_MS = 100;
+const MAX_BUFFERED_FRAMES = Math.round(4_000 / INPUT_FRAME_MS);
+const SILENCE_PREROLL_FRAMES = Math.round(300 / INPUT_FRAME_MS);
 
 /**
  * RMS level of a PCM16 frame in dBFS (0 dBFS = a full-scale 32768 amplitude).
@@ -244,6 +262,10 @@ export class TranslationBridge {
   private lastVoiceAt: number = 0;
   private silenceTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Undelivered input frames awaiting a ready socket, flushed on setupComplete.
+  // Only ever holds frames that were never sent, so flushing can't duplicate audio.
+  private pendingFrames: Int16Array[] = [];
+
   // Reconnect state. `pendingWs` is a replacement socket being established (during
   // a make-before-break swap or a backoff retry); `reconnecting` guards against
   // launching two overlapping reconnects (e.g. goAway then the actual close).
@@ -374,6 +396,7 @@ export class TranslationBridge {
     this.localTrack = null;
     this.geminiSetupComplete = false;
     this.suspended = false;
+    this.pendingFrames = [];
   }
 
   private async joinLiveKitRoom(): Promise<void> {
@@ -631,7 +654,7 @@ export class TranslationBridge {
       });
     }
 
-    this.flushDroppedFrames();
+    this.flushPendingFrames();
   }
 
   /** Start a reconnect unless one is already in flight. */
@@ -691,6 +714,8 @@ export class TranslationBridge {
     // intentional teardown rather than a session drop to reconnect from.
     this.suspended = true;
     this.geminiSetupComplete = false;
+    // Drop any stale gap buffer; from here we only keep a short silence pre-roll.
+    this.pendingFrames = [];
 
     this.reconnecting = false;
     if (this.reconnectTimer) {
@@ -828,11 +853,28 @@ export class TranslationBridge {
     }
   }
 
-  /** Report (and reset) any input audio dropped while the socket was down. */
-  private flushDroppedFrames(): void {
+  /**
+   * Replay input frames buffered while the socket was down into the freshly-ready
+   * session, then report any that overflowed the buffer (genuine loss). Called from
+   * onSocketReady, so `this.geminiWs` is the new active socket. Because only never-
+   * sent frames are buffered, this never re-sends audio — the transcript can't double.
+   */
+  private flushPendingFrames(): void {
+    const frames = this.pendingFrames;
+    this.pendingFrames = [];
+
+    if (frames.length > 0) {
+      const bufferedMs = frames.length * INPUT_FRAME_MS;
+      console.log(
+        `[TranslationBridge:${this.targetLanguage}] Flushing ${frames.length} buffered input frames (${bufferedMs}ms) into the fresh session`
+      );
+      for (const f of frames) this.sendFrameData(f);
+      this.record("gemini_input_flushed", { frames: frames.length, bufferedMs });
+    }
+
     if (this.framesDroppedWhileDown > 0) {
       console.log(
-        `[TranslationBridge:${this.targetLanguage}] Dropped ${this.framesDroppedWhileDown} input audio frames while reconnecting`
+        `[TranslationBridge:${this.targetLanguage}] Dropped ${this.framesDroppedWhileDown} input audio frames (buffer overflow) while reconnecting`
       );
       this.record("gemini_input_dropped", { frames: this.framesDroppedWhileDown });
       this.framesDroppedWhileDown = 0;
@@ -956,24 +998,50 @@ export class TranslationBridge {
       this.lastVoiceAt = Date.now();
       if (this.suspended) this.resumeFromSilence();
     }
-    // Still suspended → this is a silent frame; drop it without counting it as lost
-    // speech (the whole point is not to pay Gemini for silence).
-    if (this.suspended) return;
 
-    if (
-      !this.geminiWs ||
-      this.geminiWs.readyState !== WebSocket.OPEN ||
-      !this.geminiSetupComplete
-    ) {
-      // Socket is down (e.g. mid-reconnect): this speech is lost. Count it so the
-      // gap's impact is visible; flushed as a telemetry event when we recover.
-      this.framesDroppedWhileDown++;
+    // Still suspended → a silent frame with no session to feed. Keep only a short
+    // rolling pre-roll (so the resume flush carries the speech onset into the fresh
+    // session) and send nothing — the whole point is not to pay Gemini for silence.
+    if (this.suspended) {
+      this.bufferFrame(frame.data, true);
       return;
     }
 
+    const canSend =
+      !!this.geminiWs &&
+      this.geminiWs.readyState === WebSocket.OPEN &&
+      this.geminiSetupComplete;
+
+    if (canSend) {
+      this.sendFrameData(frame.data);
+    } else {
+      // Socket down but we're meant to be live (a reconnect gap, or the setup latency
+      // right after a silence resume). Buffer instead of dropping so the words aren't
+      // lost — they're flushed into the fresh session on setupComplete.
+      this.bufferFrame(frame.data, false);
+    }
+  }
+
+  /**
+   * Hold an undelivered input frame for later flush. `preroll` marks the
+   * intentional rolling window kept during silence (bounded tightly, evictions are
+   * expected); otherwise it's a live gap (bounded loosely, and an eviction is
+   * genuine lost speech worth counting). Frames are copied because the AudioStream
+   * reuses the backing buffer between reads.
+   */
+  private bufferFrame(int16: Int16Array, preroll: boolean): void {
+    const cap = preroll ? SILENCE_PREROLL_FRAMES : MAX_BUFFERED_FRAMES;
+    this.pendingFrames.push(new Int16Array(int16));
+    while (this.pendingFrames.length > cap) {
+      this.pendingFrames.shift();
+      if (!preroll) this.framesDroppedWhileDown++;
+    }
+  }
+
+  /** Serialize and send one PCM16 frame to the active Gemini socket. */
+  private sendFrameData(int16Data: Int16Array): void {
+    if (!this.geminiWs || this.geminiWs.readyState !== WebSocket.OPEN) return;
     try {
-      // Convert AudioFrame's Int16Array data to base64
-      const int16Data = frame.data;
       const buffer = Buffer.from(int16Data.buffer, int16Data.byteOffset, int16Data.byteLength);
       const base64 = buffer.toString("base64");
 
