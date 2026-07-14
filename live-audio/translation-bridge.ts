@@ -81,6 +81,15 @@ const INPUT_FRAME_MS = 100;
 const MAX_BUFFERED_FRAMES = Math.round(4_000 / INPUT_FRAME_MS);
 const SILENCE_PREROLL_FRAMES = Math.round(300 / INPUT_FRAME_MS);
 
+// Flushing the backlog into a fresh session leaves that segment running a little
+// behind live, and Gemini processes input at ~1x, so the lag doesn't drain on its
+// own. But silence carries no words: we collapse runs of dead air in the gap
+// backlog beyond this many consecutive frames, keeping short pauses as
+// utterance-boundary cues. Since speech has natural gaps, a swap that lands in a
+// pause then costs almost no added latency, and the recovered lag is bounded by how
+// much actual speech occurred during the gap.
+const MAX_GAP_SILENCE_FRAMES = Math.round(300 / INPUT_FRAME_MS);
+
 /**
  * RMS level of a PCM16 frame in dBFS (0 dBFS = a full-scale 32768 amplitude).
  * Returns -Infinity for pure digital silence. Used to decide whether the
@@ -265,6 +274,9 @@ export class TranslationBridge {
   // Undelivered input frames awaiting a ready socket, flushed on setupComplete.
   // Only ever holds frames that were never sent, so flushing can't duplicate audio.
   private pendingFrames: Int16Array[] = [];
+  // Consecutive silent frames currently at the tail of the gap backlog, used to
+  // collapse dead air (see MAX_GAP_SILENCE_FRAMES).
+  private bufferedSilenceRun: number = 0;
 
   // Reconnect state. `pendingWs` is a replacement socket being established (during
   // a make-before-break swap or a backoff retry); `reconnecting` guards against
@@ -397,6 +409,7 @@ export class TranslationBridge {
     this.geminiSetupComplete = false;
     this.suspended = false;
     this.pendingFrames = [];
+    this.bufferedSilenceRun = 0;
   }
 
   private async joinLiveKitRoom(): Promise<void> {
@@ -716,6 +729,7 @@ export class TranslationBridge {
     this.geminiSetupComplete = false;
     // Drop any stale gap buffer; from here we only keep a short silence pre-roll.
     this.pendingFrames = [];
+    this.bufferedSilenceRun = 0;
 
     this.reconnecting = false;
     if (this.reconnectTimer) {
@@ -862,6 +876,7 @@ export class TranslationBridge {
   private flushPendingFrames(): void {
     const frames = this.pendingFrames;
     this.pendingFrames = [];
+    this.bufferedSilenceRun = 0;
 
     if (frames.length > 0) {
       const bufferedMs = frames.length * INPUT_FRAME_MS;
@@ -994,7 +1009,8 @@ export class TranslationBridge {
   private sendAudioToGemini(frame: AudioFrame): void {
     // Silence gating. Track the last non-silent frame so the monitor knows when to
     // suspend, and reopen the socket the instant speech returns after a suspend.
-    if (!isSilentFrame(frame.data)) {
+    const silent = isSilentFrame(frame.data);
+    if (!silent) {
       this.lastVoiceAt = Date.now();
       if (this.suspended) this.resumeFromSilence();
     }
@@ -1003,7 +1019,7 @@ export class TranslationBridge {
     // rolling pre-roll (so the resume flush carries the speech onset into the fresh
     // session) and send nothing — the whole point is not to pay Gemini for silence.
     if (this.suspended) {
-      this.bufferFrame(frame.data, true);
+      this.bufferFrame(frame.data, { preroll: true, silent });
       return;
     }
 
@@ -1018,23 +1034,33 @@ export class TranslationBridge {
       // Socket down but we're meant to be live (a reconnect gap, or the setup latency
       // right after a silence resume). Buffer instead of dropping so the words aren't
       // lost — they're flushed into the fresh session on setupComplete.
-      this.bufferFrame(frame.data, false);
+      this.bufferFrame(frame.data, { preroll: false, silent });
     }
   }
 
   /**
-   * Hold an undelivered input frame for later flush. `preroll` marks the
-   * intentional rolling window kept during silence (bounded tightly, evictions are
-   * expected); otherwise it's a live gap (bounded loosely, and an eviction is
-   * genuine lost speech worth counting). Frames are copied because the AudioStream
-   * reuses the backing buffer between reads.
+   * Hold an undelivered input frame for later flush. `preroll` marks the intentional
+   * rolling window kept during silence (bounded tightly, evictions expected);
+   * otherwise it's a live gap (bounded loosely, and an eviction is genuine lost
+   * speech worth counting). In a gap we collapse long runs of silence so the flushed
+   * backlog — and thus the catch-up latency — is mostly speech. Frames are copied
+   * because the AudioStream reuses the backing buffer between reads.
    */
-  private bufferFrame(int16: Int16Array, preroll: boolean): void {
-    const cap = preroll ? SILENCE_PREROLL_FRAMES : MAX_BUFFERED_FRAMES;
+  private bufferFrame(int16: Int16Array, opts: { preroll: boolean; silent: boolean }): void {
+    if (!opts.preroll) {
+      if (opts.silent) {
+        if (this.bufferedSilenceRun >= MAX_GAP_SILENCE_FRAMES) return; // drop dead air
+        this.bufferedSilenceRun++;
+      } else {
+        this.bufferedSilenceRun = 0;
+      }
+    }
+
+    const cap = opts.preroll ? SILENCE_PREROLL_FRAMES : MAX_BUFFERED_FRAMES;
     this.pendingFrames.push(new Int16Array(int16));
     while (this.pendingFrames.length > cap) {
       this.pendingFrames.shift();
-      if (!preroll) this.framesDroppedWhileDown++;
+      if (!opts.preroll) this.framesDroppedWhileDown++;
     }
   }
 
