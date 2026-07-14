@@ -59,12 +59,20 @@ export type ReconnectTrigger = "goaway" | "close" | "resume";
 // Proclaim service's convention; see PROCLAIM_INTEGRATION.md).
 const RECONNECT_BACKOFF = { initialMs: 1_000, maxMs: 30_000 };
 
-// Silence gating: we don't want to pay Gemini to translate a silent mic. When the
-// organizer's input stays below SILENCE_THRESHOLD_DBFS for SILENCE_SUSPEND_MS, the
-// Gemini socket is torn down. The LiveKit translator participant and its published
-// track stay put — the translated audio simply goes quiet — so listeners never have
-// to resubscribe. The socket is reopened on the very first non-silent frame.
+// Silence gating uses two thresholds, because "have we been silent long enough to
+// stop paying?" and "is there any sound here worth keeping?" want opposite biases.
+//
+// SILENCE_THRESHOLD_DBFS (the strict *voice* bar) drives the suspend clock and the
+// resume trigger: only clear speech keeps the session alive / wakes it, so room tone
+// doesn't burn money and faint noise doesn't wake it to hallucinate on nothing.
+//
+// SILENCE_FLOOR_DBFS (the *dead-air* floor, well below the voice bar) is the only
+// thing the gap-collapse is allowed to drop. An unvoiced consonant (/s/, /f/, a
+// plosive burst diluted across a 100 ms frame) can read below the voice bar but sits
+// far above this floor, so it is always kept — we never trade a clipped consonant
+// for lower latency. Only genuine near-digital dead air collapses.
 export const SILENCE_THRESHOLD_DBFS = -30;
+export const SILENCE_FLOOR_DBFS = -50;
 const SILENCE_SUSPEND_MS = 30_000;
 const SILENCE_CHECK_INTERVAL_MS = 5_000;
 
@@ -79,15 +87,19 @@ const SILENCE_CHECK_INTERVAL_MS = 5_000;
 // pre-roll of the frames just before speech resumes gives the new session onset.
 const INPUT_FRAME_MS = 100;
 const MAX_BUFFERED_FRAMES = Math.round(4_000 / INPUT_FRAME_MS);
-const SILENCE_PREROLL_FRAMES = Math.round(300 / INPUT_FRAME_MS);
+// Pre-roll kept before the resume trigger, so an onset consonant that reads below
+// the voice bar (and so doesn't itself trigger resume) is still carried into the
+// fresh session by the flush rather than clipped.
+const SILENCE_PREROLL_FRAMES = Math.round(500 / INPUT_FRAME_MS);
 
 // Flushing the backlog into a fresh session leaves that segment running a little
 // behind live, and Gemini processes input at ~1x, so the lag doesn't drain on its
-// own. But silence carries no words: we collapse runs of dead air in the gap
-// backlog beyond this many consecutive frames, keeping short pauses as
+// own. But dead air carries no words: we collapse runs of below-floor silence in the
+// gap backlog beyond this many consecutive frames, keeping short pauses as
 // utterance-boundary cues. Since speech has natural gaps, a swap that lands in a
 // pause then costs almost no added latency, and the recovered lag is bounded by how
-// much actual speech occurred during the gap.
+// much actual speech occurred during the gap. Only below-floor frames collapse, so a
+// faint consonant is never dropped for latency (see SILENCE_FLOOR_DBFS).
 const MAX_GAP_SILENCE_FRAMES = Math.round(300 / INPUT_FRAME_MS);
 
 /**
@@ -1007,19 +1019,21 @@ export class TranslationBridge {
   }
 
   private sendAudioToGemini(frame: AudioFrame): void {
-    // Silence gating. Track the last non-silent frame so the monitor knows when to
-    // suspend, and reopen the socket the instant speech returns after a suspend.
-    const silent = isSilentFrame(frame.data);
-    if (!silent) {
+    // Silence gating. `isVoice` (strict bar) drives the suspend clock and resume; the
+    // raw level is passed on so the gap-collapse can tell a faint consonant (kept)
+    // from genuine dead air (droppable).
+    const dbfs = frameRmsDbfs(frame.data);
+    const isVoice = dbfs >= SILENCE_THRESHOLD_DBFS;
+    if (isVoice) {
       this.lastVoiceAt = Date.now();
       if (this.suspended) this.resumeFromSilence();
     }
 
-    // Still suspended → a silent frame with no session to feed. Keep only a short
+    // Still suspended → a quiet frame with no session to feed. Keep only a short
     // rolling pre-roll (so the resume flush carries the speech onset into the fresh
     // session) and send nothing — the whole point is not to pay Gemini for silence.
     if (this.suspended) {
-      this.bufferFrame(frame.data, { preroll: true, silent });
+      this.bufferFrame(frame.data, { preroll: true, dbfs });
       return;
     }
 
@@ -1034,7 +1048,7 @@ export class TranslationBridge {
       // Socket down but we're meant to be live (a reconnect gap, or the setup latency
       // right after a silence resume). Buffer instead of dropping so the words aren't
       // lost — they're flushed into the fresh session on setupComplete.
-      this.bufferFrame(frame.data, { preroll: false, silent });
+      this.bufferFrame(frame.data, { preroll: false, dbfs });
     }
   }
 
@@ -1042,13 +1056,14 @@ export class TranslationBridge {
    * Hold an undelivered input frame for later flush. `preroll` marks the intentional
    * rolling window kept during silence (bounded tightly, evictions expected);
    * otherwise it's a live gap (bounded loosely, and an eviction is genuine lost
-   * speech worth counting). In a gap we collapse long runs of silence so the flushed
-   * backlog — and thus the catch-up latency — is mostly speech. Frames are copied
-   * because the AudioStream reuses the backing buffer between reads.
+   * speech worth counting). In a gap we collapse long runs of *below-floor* dead air
+   * so the flushed backlog — and thus the catch-up latency — is mostly speech, while
+   * anything above the floor (including faint consonants) is always kept. Frames are
+   * copied because the AudioStream reuses the backing buffer between reads.
    */
-  private bufferFrame(int16: Int16Array, opts: { preroll: boolean; silent: boolean }): void {
+  private bufferFrame(int16: Int16Array, opts: { preroll: boolean; dbfs: number }): void {
     if (!opts.preroll) {
-      if (opts.silent) {
+      if (opts.dbfs < SILENCE_FLOOR_DBFS) {
         if (this.bufferedSilenceRun >= MAX_GAP_SILENCE_FRAMES) return; // drop dead air
         this.bufferedSilenceRun++;
       } else {

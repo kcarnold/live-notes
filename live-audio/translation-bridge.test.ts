@@ -5,6 +5,7 @@ import {
   isSilentFrame,
   nextBackoffMs,
   parseGoAwayTimeLeftMs,
+  SILENCE_FLOOR_DBFS,
   SILENCE_THRESHOLD_DBFS,
   wireOrganizerAudioSubscription,
   type AudioParticipantLike,
@@ -57,6 +58,30 @@ describe("isSilentFrame", () => {
     const frame = toneFrame(2048); // ~-24 dBFS
     expect(isSilentFrame(frame, -20)).toBe(true);
     expect(isSilentFrame(frame, -30)).toBe(false);
+  });
+});
+
+// Two thresholds keep a faint consonant from being clipped. The voice bar
+// (SILENCE_THRESHOLD_DBFS) is strict — it drives suspend/resume — so a quiet
+// unvoiced consonant reads "silent" for that purpose. But the gap-collapse only
+// drops frames below the much lower dead-air floor (SILENCE_FLOOR_DBFS), and a
+// consonant sits above the floor, so it is always kept.
+describe("silence thresholds", () => {
+  it("keeps the dead-air floor safely below the voice bar", () => {
+    expect(SILENCE_FLOOR_DBFS).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+  });
+
+  it("puts a faint consonant-level frame below the voice bar but above the floor", () => {
+    // ~-42 dBFS: quiet enough to read as non-voice, but well above the dead-air
+    // floor, so the gap-collapse must never drop it.
+    const faint = frameRmsDbfs(toneFrame(256));
+    expect(faint).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+    expect(faint).toBeGreaterThan(SILENCE_FLOOR_DBFS);
+  });
+
+  it("puts genuine dead air below the floor", () => {
+    // ~-54 dBFS: near-digital-silence room tone, the only thing collapse may drop.
+    expect(frameRmsDbfs(toneFrame(64))).toBeLessThan(SILENCE_FLOOR_DBFS);
   });
 });
 
