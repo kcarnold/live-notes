@@ -36,13 +36,17 @@ an incident happens that this list would not have caught, add a line.
 
 ## 4. Live audio translation
 
-- [ ] Start broadcasting (mic level meter moves). With **no listener yet**, the English
-      transcript still flows — the default translator runs whenever the broadcaster is present.
+- [ ] Start broadcasting (mic level meter moves).
 - [ ] On the viewer device, join Listen for one language **after** broadcast started:
       transcript deltas appear, translated audio plays after tapping play.
 - [ ] **The #69 race**: start the Listen client *first*, then start broadcasting — bridge
       must still pick up the source audio (transcript flows).
 - [ ] Stop and restart the broadcaster mid-session; transcript resumes without a reload.
+
+Cost path (only when `LIVE_AUDIO_SILENCE_GATING` is enabled — off by default):
+
+- [ ] With **no listener yet**, the English transcript still flows — the default translator
+      runs whenever the broadcaster is present.
 - [ ] **Silence suspend/resume**: stay silent >30 s (server logs "Suspending Gemini after…");
       then speak — the first words resume translation ("resuming Gemini after…") without the
       listener resubscribing.
@@ -54,6 +58,7 @@ an incident happens that this list would not have caught, add a line.
 
 ## 6. Teardown sanity
 
-- [ ] Close all listener tabs **and** stop the broadcaster; confirm the session gets reaped
-      (server logs) — no orphaned Gemini sessions burning quota. (With the broadcaster still
-      present, the default translator is expected to stay up for the transcript.)
+- [ ] Close all listener tabs; confirm translator bots get reaped (server logs) — no orphaned
+      Gemini sessions burning quota. (With the cost path enabled, closing listeners is not
+      enough: the default translator stays up for the transcript until the broadcaster also
+      leaves.)

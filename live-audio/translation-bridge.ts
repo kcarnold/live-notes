@@ -308,6 +308,12 @@ export class TranslationBridge {
   private readonly writesSourceTranscript: boolean;
   // Telemetry sink (PostHog, injected by the server). Null in tests / when unset.
   private readonly recordEvent: RecordEvent | null;
+  // Cost optimization: when off (the default) the bridge never suspends its Gemini
+  // socket for silence — the silence monitor isn't started, so it behaves exactly as
+  // before this feature (always-on session). The goaway/reconnect buffering below is
+  // independent and always active. Gated so the reliability fixes can ship while the
+  // suspend/resume cost path is still being validated.
+  private readonly silenceGatingEnabled: boolean;
 
   // The source (input) transcript is published under this language code.
   static readonly SOURCE_CODE = "en";
@@ -324,6 +330,7 @@ export class TranslationBridge {
       writer?: TranscriptWriter | null;
       writesSourceTranscript?: boolean;
       recordEvent?: RecordEvent | null;
+      silenceGatingEnabled?: boolean;
     }
   ) {
     this.sessionId = sessionId;
@@ -337,6 +344,7 @@ export class TranslationBridge {
     this.writer = config.writer ?? null;
     this.writesSourceTranscript = config.writesSourceTranscript ?? false;
     this.recordEvent = config.recordEvent ?? null;
+    this.silenceGatingEnabled = config.silenceGatingEnabled ?? false;
   }
 
   /** Emit a telemetry event tagged with this bridge's language and identity. */
@@ -367,9 +375,10 @@ export class TranslationBridge {
 
       this.status = "active";
       // Start the silence clock now so an organizer who joins but never speaks
-      // still suspends after the grace window rather than immediately.
+      // still suspends after the grace window rather than immediately. Only when the
+      // cost path is enabled — otherwise the socket stays up for the whole session.
       this.lastVoiceAt = Date.now();
-      this.startSilenceMonitor();
+      if (this.silenceGatingEnabled) this.startSilenceMonitor();
       console.log(
         `[TranslationBridge:${this.targetLanguage}] Bridge is active`
       );

@@ -35,6 +35,7 @@ Required environment variables (`.env`):
 Optional environment variables:
 - `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
+- `LIVE_AUDIO_SILENCE_GATING` - Enable the live-audio cost path: silence suspend/resume + always-on default translator (default: off). goaway/reconnect fixes are independent and always on. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 - `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
 - `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
 - `POSTHOG_CLI_TOKEN` - PostHog CLI token (for sourcemap uploads during Docker build)

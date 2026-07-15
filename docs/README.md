@@ -12,6 +12,8 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 
 - [SMOKE_TEST.md](SMOKE_TEST.md) — the pre-service manual smoke-test checklist, and how PRs
   declare which sections they touch.
+- [OBSERVABILITY.md](OBSERVABILITY.md) — what to observe about the live-audio backend
+  (status/liveness) and where to pull it from: PostHog events, in-process state, LiveKit, Yjs.
 
 ## Design docs
 
