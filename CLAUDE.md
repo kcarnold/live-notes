@@ -12,6 +12,9 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Proclaim integration**: Python service syncing Proclaim presentation slides to Yjs
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
+- **Live speech translation**: LiveKit rooms + Gemini Live ([live-audio/](live-audio/)) — a broadcaster publishes mic audio; per-language translator bots stream it through Gemini Live and publish translated audio + live transcripts
+
+**Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the component map (what runs where, who writes what into the shared Yjs doc). [docs/README.md](docs/README.md) is the docs index; [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) is the manual pre-service smoke checklist — PR descriptions should declare which of its sections they touch.
 
 ## Development Commands
 
@@ -65,6 +68,9 @@ npm test -- path/to/test.ts --run
 # Lint code
 npm run lint
 
+# Type-check without a full production build
+npm run typecheck
+
 # Build for production (requires npm install first)
 npm run build
 
@@ -75,6 +81,7 @@ npm start
 **Important**:
 - Always run `npm install` before building or testing, especially in fresh environments. The build will fail with module resolution errors if dependencies aren't installed.
 - When running tests via tools/agents, use `--no-color` flag to disable ANSI color codes in output.
+- The root `tsconfig.json` is a solution-style config (`files: []` + `references`), so plain `tsc --noEmit -p .` silently checks nothing. Use `npm run typecheck` (or `tsc -b`) to actually type-check.
 
 ### Python (Proclaim service)
 
@@ -464,3 +471,7 @@ function TranslatedTextViewerContainer({ language }: ContainerProps) {
 - Vitest for test runner
 - @testing-library/react for component testing
 - Global Audio mock in [test/setup.ts](src/test/setup.ts)
+
+## LiveKit
+
+LiveKit is a fast-evolving project. Always refer to the latest documentation. Run `lk docs --help` to see available commands. Key commands: `lk docs overview`, `lk docs search`, `lk docs get-page`, `lk docs code-search`, `lk docs changelog`, `lk docs pricing-info`. Run `lk docs <command> --help` before using a command for the first time. Prefer browsing (`overview`, `get-page`) over search, and `search` over `code-search`, as docs pages provide better context than raw code.

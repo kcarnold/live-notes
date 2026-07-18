@@ -5,10 +5,11 @@
 // this pane and never disturbs the outline / slide views.
 //
 // The transcript shows immediately and unconditionally (it reads the shared Yjs
-// doc, no LiveKit needed). To keep that transcript flowing this pane joins the
-// LiveKit room on mount — that both spins up the translator bot and keeps the
-// session healthy — but the translated *audio* stays muted until the listener
-// presses the play button. In other words: read for free, opt in to hear.
+// doc, no LiveKit needed). Nothing touches LiveKit until the listener presses
+// "Listen Live": that join both spins up the translator bot and keeps the session
+// healthy. The tradeoff (accepted deliberately) is that the transcript stays dark
+// until the first listener in a session opts in — no viewer holds a LiveKit
+// connection just to read. In other words: read for free, opt in to hear.
 import { useEffect, useState } from "react";
 import {
   LiveKitRoom,
@@ -147,15 +148,21 @@ export function ListenViewer({ language }: { language: string }) {
   const docId = getDocId();
   const [conn, setConn] = useState<ConnectInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Audio is opt-in: the transcript flows without it, the button toggles sound.
+  // The listener has opted into live audio (pressed "Listen Live"). Until then we
+  // never touch LiveKit — no room join, no bot spin-up. Once true it stays true;
+  // `audioOn` handles muting without dropping the connection.
+  const [wantLive, setWantLive] = useState(false);
+  // Whether translated audio is actually playing. Toggled by play/stop once
+  // connected; the transcript flows regardless.
   const [audioOn, setAudioOn] = useState(false);
   // Bumped by the retry button to re-run the connect effect.
   const [attempt, setAttempt] = useState(0);
 
-  // Connect on mount (no button): joining the room spins up the bot and keeps the
-  // session healthy, so the transcript starts (and keeps) flowing right away. The
-  // audio itself stays muted until the listener presses play.
+  // Connect only after the listener opts in. Joining the room spins up the bot and
+  // keeps the session healthy, so the transcript starts flowing once someone is
+  // listening. No connection is made just to render the transcript.
   useEffect(() => {
+    if (!wantLive) return;
     let cancelled = false;
     const connect = async () => {
       try {
@@ -196,11 +203,12 @@ export function ListenViewer({ language }: { language: string }) {
     return () => {
       cancelled = true;
     };
-  }, [docId, translateTarget, isOriginal, attempt]);
+  }, [docId, translateTarget, isOriginal, attempt, wantLive]);
 
-  // The control bar reflects the connection: error (with retry), the live audio
-  // controls once connected, or a connecting hint. The transcript is always shown
-  // below it, since it reads Yjs and needs no LiveKit connection.
+  // The control bar reflects state: before opt-in, a "Listen Live" button that
+  // joins on demand; then error (with retry), the live audio controls once
+  // connected, or a connecting hint. The transcript is always shown below it,
+  // since it reads Yjs and needs no LiveKit connection.
   let controls: React.ReactElement;
   if (error) {
     controls = (
@@ -220,6 +228,23 @@ export function ListenViewer({ language }: { language: string }) {
         </button>
       </div>
     );
+  } else if (!wantLive) {
+    // Pre-connection: transcript is rendered below; this opts into live audio,
+    // which is what actually joins the room and spins up the translator bot.
+    controls = (
+      <div className="flex items-center">
+        <button
+          type="button"
+          className="px-3 py-1 rounded-full text-white shadow bg-blue-500 hover:bg-blue-600 text-sm"
+          onClick={() => {
+            setWantLive(true);
+            setAudioOn(true);
+          }}
+        >
+          {`🔊 ${s.listenLive}`}
+        </button>
+      </div>
+    );
   } else if (conn) {
     controls = (
       <LiveKitRoom
@@ -229,6 +254,7 @@ export function ListenViewer({ language }: { language: string }) {
         serverUrl={conn.serverUrl}
         connectOptions={{ autoSubscribe: false }}
         onError={(e) => setError(e.message)}
+        className="w-full shrink-0 h-auto"
       >
         <ListenAudio
           docId={docId}
@@ -247,9 +273,11 @@ export function ListenViewer({ language }: { language: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 flex-1 min-h-0">
-      {controls}
-      <LiveTranscript langCode={langCode} />
+    <div className="flex flex-col gap-2 flex-1 min-h-0 h-full">
+      <div className="shrink-0">{controls}</div>
+      <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+        <LiveTranscript langCode={langCode} />
+      </div>
     </div>
   );
 }

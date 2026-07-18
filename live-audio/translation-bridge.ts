@@ -8,13 +8,23 @@
  * 3. Pipes PCM audio frames to Gemini Live API via WebSocket
  * 4. Receives translated audio back and publishes it as a new track
  *
- * The Gemini session is periodically terminated by the server (duration/context
- * limits, routine resets). To keep the audio from cutting out, the bridge listens
- * for the `goAway` warning and reconnects make-before-break — it opens a
- * replacement socket while the old one is still serving audio, then swaps once the
- * new one is ready. Unexpected closures fall back to a backoff reconnect. The
- * whole lifecycle is reported via the injected `recordEvent` telemetry sink so we
+ * Both sides of the bridge drop connections, and each is defended differently:
+ *
+ * - **Gemini** periodically terminates the session (duration/context limits, routine
+ *   resets). The bridge listens for the `goAway` warning and reconnects
+ *   make-before-break — it opens a replacement socket while the old one is still
+ *   serving audio, then swaps once the new one is ready. Unexpected closures fall back
+ *   to a backoff reconnect.
+ * - **LiveKit** does full reconnects that silently rebuild remote track state, which
+ *   twice left the bridge `active` but receiving no audio at all. The organizer
+ *   subscription is therefore rebuildable (`Reconnected` re-drives it) and watched (a
+ *   stall watchdog recovers a silent input whatever the cause).
+ *
+ * The whole lifecycle is reported via the injected `recordEvent` telemetry sink so we
  * can see how often sessions drop and how long any gap lasts.
+ *
+ * "Active but deaf" is the failure mode this file is shaped around; the incident
+ * history and the reasoning behind each layer are in docs/live-audio-resilience.md.
  */
 
 import {
@@ -23,6 +33,7 @@ import {
   LocalAudioTrack,
   AudioSource,
   AudioFrame,
+  DisconnectReason,
   TrackPublishOptions,
   TrackSource,
   RemoteTrackPublication,
@@ -30,7 +41,11 @@ import {
   RemoteAudioTrack,
   TrackKind,
   AudioStream,
+  SimulateScenarioKind,
 } from "@livekit/rtc-node";
+// RemoteTrack is a type-only export (a union alias), so it must not be imported as a value —
+// tsc accepts it either way, but ESM fails at runtime with "does not provide an export named".
+import type { RemoteTrack } from "@livekit/rtc-node";
 import WebSocket from "ws";
 import type { TranscriptWriter } from "./transcript-writer.ts";
 
@@ -44,6 +59,11 @@ export type RecordEvent = (
 
 /** What prompted a reconnect, for telemetry. */
 export type ReconnectTrigger = "goaway" | "close";
+
+// Organizer audio arrives in 100ms frames, so a gap this long means the input is dead,
+// not merely quiet. Recovery is attempted no more than once per stall window.
+const INPUT_STALL_MS = 15_000;
+const STALL_CHECK_INTERVAL_MS = 5_000;
 
 // Exponential-backoff bounds for failed Gemini reconnect attempts (mirrors the
 // Proclaim service's convention; see PROCLAIM_INTEGRATION.md).
@@ -82,6 +102,93 @@ export function nextBackoffMs(
 ): number {
   const cap = Math.min(opts.maxMs, opts.initialMs * 2 ** Math.max(0, attempt));
   return Math.round(cap / 2 + Math.random() * (cap / 2));
+}
+
+/**
+ * Minimal structural views of the LiveKit room objects the subscription decision
+ * touches, so the decision can be unit-tested with tiny fakes (no live `Room`).
+ */
+export interface AudioPublicationLike {
+  /** TrackKind in production; a predicate (`isAudio`) decides what counts as audio. */
+  kind: unknown;
+  /** Manually subscribe/unsubscribe (autoSubscribe is off on the bridge's room). */
+  setSubscribed(subscribed: boolean): void;
+}
+export interface AudioParticipantLike {
+  identity: string;
+  trackPublications: Iterable<[string, AudioPublicationLike]>;
+}
+
+/**
+ * Subscribe to every organizer audio publication in the room *right now*. Returns how
+ * many publications it acted on, which is the bridge's "am I actually wired up?" signal.
+ *
+ * This is a **reconcile**, not an event handler: it takes the room's current state and
+ * drives it toward the desired state, and it is idempotent (`setSubscribed(true)` on an
+ * already-subscribed publication is a no-op). Callers re-run it whenever the participant
+ * list could have changed and never have to reason about *which* change happened.
+ *
+ * That shape is the fix for two production outages, both of which left the bridge
+ * `active` but receiving no audio at all — "active but deaf", which nothing throws on
+ * and nothing notices. Both were the same mistake: subscription was decided *once*, from
+ * an event, and the decision then drifted from reality.
+ *
+ *   - Outage 1 (publish race): the organizer was in the room but published their mic a
+ *     beat later, and the code that handled "organizer is here" took an early return
+ *     before registering a listener for "organizer published something".
+ *   - Outage 2 (full reconnect): LiveKit rebuilt the session, re-creating remote
+ *     participants and their tracks as *new objects*. Per LiveKit's documented sequence a
+ *     full reconnect emits `ParticipantConnected` for everyone already in the room — but
+ *     **no `TrackPublished`** for their existing publications. So neither the startup
+ *     enumeration nor the publish listener ever fired again, and the bridge streamed
+ *     silence to Gemini for six minutes.
+ *
+ * Reconciling is convergent rather than event-exhaustive: being wrong about any single
+ * event costs nothing so long as some later trigger re-runs this. Enumerating events
+ * correctly is a game we have now lost twice; this stops playing it. (The frontend's
+ * ListenViewer already worked this way — re-running subscription on participant changes —
+ * which is exactly why attendees kept hearing the speaker while the bridges went deaf.)
+ *
+ * Kept pure (no `Room`, no LiveKit enums) so the timing cases are unit-testable.
+ */
+export function reconcileOrganizerAudio(params: {
+  organizerIdentity: string;
+  participants: Iterable<AudioParticipantLike>;
+  isAudio: (pub: AudioPublicationLike) => boolean;
+}): number {
+  let subscribed = 0;
+  for (const participant of params.participants) {
+    if (participant.identity !== params.organizerIdentity) continue;
+    for (const [, pub] of participant.trackPublications) {
+      if (!params.isAudio(pub)) continue;
+      pub.setSubscribed(true);
+      subscribed++;
+    }
+  }
+  return subscribed;
+}
+
+/**
+ * Should the bridge try to recover a silent audio input?
+ *
+ * Organizer audio arrives on a fixed 100ms cadence, so its absence is unambiguous: if
+ * we've received audio before but none for `stallMs`, the input is dead — whatever the
+ * cause. The cooldown means a genuinely muted speaker yields one telemetry event rather
+ * than a retry storm.
+ *
+ * `lastFrameAt === 0` (never received any audio) is *not* a stall: that's the startup
+ * case, which the subscription wiring already covers, and firing here would fight it.
+ */
+export function shouldRecoverStalledInput(params: {
+  now: number;
+  lastFrameAt: number;
+  lastRecoveryAt: number;
+  stallMs: number;
+}): boolean {
+  const { now, lastFrameAt, lastRecoveryAt, stallMs } = params;
+  if (lastFrameAt === 0) return false;
+  if (now - lastFrameAt < stallMs) return false;
+  return now - lastRecoveryAt >= stallMs;
 }
 
 export class TranslationBridge {
@@ -127,6 +234,17 @@ export class TranslationBridge {
   private sessionConnectedAt: number = 0;
   private framesDroppedWhileDown: number = 0;
 
+  // Organizer-audio liveness. The bridge's defining failure mode is going deaf while
+  // staying `active` (see docs/live-audio-resilience.md), so the input side is
+  // continuously reconciled and watched. `pipedTracks` dedupes piping (TrackSubscribed
+  // can be delivered redundantly) and is cleared when a track's stream ends, so a
+  // re-subscribed track pipes again. `lastOrganizerFrameAt` is the liveness signal
+  // (0 = no organizer audio has ever arrived).
+  private pipedTracks: Set<RemoteAudioTrack> = new Set();
+  private lastOrganizerFrameAt: number = 0;
+  private lastStallRecoveryAt: number = 0;
+  private stallWatchdog: ReturnType<typeof setInterval> | null = null;
+
   // Persists finalized transcript segments into the shared Yjs doc.
   private readonly writer: TranscriptWriter | null;
   // Whether this bridge also writes the source-language (English) transcript,
@@ -168,7 +286,9 @@ export class TranslationBridge {
 
   /** Emit a telemetry event tagged with this bridge's language and identity. */
   private record(event: string, properties: Record<string, unknown> = {}): void {
-    this.recordEvent?.(event, {
+    if (!this.recordEvent) return;
+    console.log(`[TranslationBridge:${this.targetLanguage}] telemetry: ${event}`, properties);
+    this.recordEvent(event, {
       targetLanguage: this.targetLanguage,
       identity: this.identity,
       ...properties,
@@ -177,7 +297,7 @@ export class TranslationBridge {
 
   async start(): Promise<void> {
     console.log(
-      `[TranslationBridge:${this.targetLanguage}] Starting bridge for session ${this.sessionId}`
+      `[TranslationBridge:${this.targetLanguage}] Starting bridge for session ${this.sessionId} (telemetry: ${this.recordEvent ? 'enabled' : 'DISABLED'})`
     );
 
     try {
@@ -204,11 +324,40 @@ export class TranslationBridge {
     }
   }
 
+  /**
+   * Force a LiveKit reconnection scenario on this bridge's room. **Testing only.**
+   *
+   * A full reconnect is what caused the 2026-07-12 outage, and it is not something you can
+   * wait for: it's the SDK's escalation when a resume fails, triggered by server-side
+   * events, not by elapsed time. Without this, verifying the fix means running a service and
+   * hoping. With it, the check takes seconds and can be repeated.
+   *
+   * This is also the only way to test the fix against the *real* SDK rather than against our
+   * model of it — the e2e fakes encode our reading of LiveKit's documented reconnect
+   * sequence, and this is what confirms that reading is right.
+   */
+  async simulateScenario(kind: SimulateScenarioKind): Promise<void> {
+    if (!this.room) throw new Error("Bridge is not connected to a room");
+    console.warn(
+      `[TranslationBridge:${this.targetLanguage}] Simulating LiveKit scenario ${SimulateScenarioKind[kind] ?? kind}`
+    );
+    this.record("livekit_scenario_simulated", {
+      scenario: SimulateScenarioKind[kind] ?? String(kind),
+    });
+    await this.room.simulateScenario(kind);
+  }
+
   async stop(): Promise<void> {
     console.log(
       `[TranslationBridge:${this.targetLanguage}] Stopping bridge`
     );
     this.status = "closed";
+
+    if (this.stallWatchdog) {
+      clearInterval(this.stallWatchdog);
+      this.stallWatchdog = null;
+    }
+    this.pipedTracks.clear();
 
     // Stop any in-flight reconnect so it doesn't resurrect the socket after teardown.
     this.reconnecting = false;
@@ -257,11 +406,60 @@ export class TranslationBridge {
     // Create and connect to the room
     this.room = new Room();
 
-    this.room.on(RoomEvent.Disconnected, () => {
+    this.room.on(RoomEvent.Disconnected, (reason: DisconnectReason) => {
       console.log(
-        `[TranslationBridge:${this.targetLanguage}] Disconnected from room`
+        `[TranslationBridge:${this.targetLanguage}] Disconnected from room (reason: ${DisconnectReason[reason] ?? reason})`
       );
+      this.record("livekit_disconnected", { reason: DisconnectReason[reason] ?? String(reason) });
       this.status = "closed";
+    });
+
+    this.room.on(RoomEvent.Reconnecting, () => {
+      console.log(`[TranslationBridge:${this.targetLanguage}] LiveKit reconnecting`);
+      this.record("livekit_reconnecting");
+    });
+
+    // A *full* reconnect (the 2026-07-12 outage) rebuilds session state: remote
+    // participants and their tracks come back as new objects and the old AudioStream
+    // ends. Recovery is not handled here — it falls out of the reconcile triggers wired
+    // in subscribeToOrganizer, which is the point of that shape.
+    this.room.on(RoomEvent.Reconnected, () => {
+      console.log(`[TranslationBridge:${this.targetLanguage}] LiveKit reconnected`);
+      this.record("livekit_reconnected");
+    });
+
+    // Not load-bearing, but this is the vocabulary the next incident will be read in:
+    // the last one had to be reconstructed from frame-count arithmetic because the
+    // bridge subscribed to three room events and depended on nine.
+    this.room.on(
+      RoomEvent.TrackUnsubscribed,
+      (_track: RemoteTrack, _pub: RemoteTrackPublication, participant: RemoteParticipant) => {
+        if (participant.identity !== this.organizerIdentity) return;
+        console.log(
+          `[TranslationBridge:${this.targetLanguage}] Organizer audio track unsubscribed`
+        );
+        this.record("livekit_organizer_track_unsubscribed");
+      }
+    );
+
+    this.room.on(
+      RoomEvent.TrackSubscriptionFailed,
+      (trackSid: string, participant: RemoteParticipant, reason?: string) => {
+        console.error(
+          `[TranslationBridge:${this.targetLanguage}] Track subscription failed (sid: ${trackSid}, participant: ${participant.identity}): ${reason ?? "unknown"}`
+        );
+        this.record("livekit_track_subscription_failed", {
+          trackSid,
+          participantIdentity: participant.identity,
+          reason: reason ?? "unknown",
+        });
+      }
+    );
+
+    this.room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+      if (participant.identity !== this.organizerIdentity) return;
+      console.log(`[TranslationBridge:${this.targetLanguage}] Organizer left the room`);
+      this.record("livekit_organizer_disconnected");
     });
 
     await this.room.connect(this.livekitUrl, token, {
@@ -676,91 +874,89 @@ export class TranslationBridge {
 
   private async subscribeToOrganizer(): Promise<void> {
     if (!this.room) return;
+    const room = this.room;
 
-    // Find the organizer participant and subscribe to their audio
-    const participants = this.room.remoteParticipants;
+    // autoSubscribe is off, so we drive subscription ourselves — but we do it by
+    // *reconciling* against the room's current state, never by trusting a single event.
+    // Every trigger below runs the same idempotent reconcile; none of them is individually
+    // load-bearing. That's deliberate: the two outages this bridge has had were both a
+    // missing event (a late publish, then a full reconnect that re-creates participants
+    // without re-emitting TrackPublished), and enumerating events correctly is a game we
+    // kept losing. Missing one trigger here costs nothing as long as another still fires.
+    room.on(RoomEvent.ParticipantConnected, () => this.reconcile("participant_connected"));
+    room.on(RoomEvent.TrackPublished, () => this.reconcile("track_published"));
+    room.on(RoomEvent.Reconnected, () => this.reconcile("reconnected"));
 
-    for (const [, participant] of participants) {
-      if (participant.identity === this.organizerIdentity) {
-        this.subscribeToParticipantAudio(participant);
-        return;
-      }
-    }
-
-    // If organizer hasn't joined yet, wait for them
-    console.log(
-      `[TranslationBridge:${this.targetLanguage}] Waiting for organizer ${this.organizerIdentity}...`
-    );
-
-    // Listen for the organizer to publish their track
-    this.room.on(
-      RoomEvent.TrackPublished,
-      (
-        publication: RemoteTrackPublication,
-        participant: RemoteParticipant
-      ) => {
-        if (
-          participant.identity === this.organizerIdentity &&
-          publication.kind === TrackKind.KIND_AUDIO
-        ) {
-          publication.setSubscribed(true);
-        }
-      }
-    );
-
-    // Once subscribed, pipe to Gemini
-    this.room.on(
+    // Piping is separate from subscribing: a track can be delivered to us more than once,
+    // and must reach Gemini exactly once. The dedupe is cleared when a stream ends, so a
+    // track that comes back after a reconnect pipes again.
+    room.on(
       RoomEvent.TrackSubscribed,
-      (
-        track: RemoteAudioTrack,
-        publication: RemoteTrackPublication,
-        participant: RemoteParticipant
-      ) => {
-        if (
-          participant.identity === this.organizerIdentity &&
-          publication.kind === TrackKind.KIND_AUDIO
-        ) {
-          this.pipeTrackToGemini(track);
-        }
+      (track: RemoteAudioTrack, pub: RemoteTrackPublication, participant: RemoteParticipant) => {
+        if (participant.identity !== this.organizerIdentity) return;
+        if (pub.kind !== TrackKind.KIND_AUDIO) return;
+        if (this.pipedTracks.has(track)) return;
+        this.pipedTracks.add(track);
+        this.pipeTrackToGemini(track);
       }
     );
+
+    this.reconcile("start");
+    this.startStallWatchdog();
   }
 
   /**
-   * Manually subscribe to a participant's audio track (needed when autoSubscribe is off).
+   * Drive the room's subscriptions toward "we are subscribed to the organizer's audio".
+   * Safe to call at any time, from any trigger, as often as we like.
    */
-  private subscribeToParticipantAudio(
-    participant: RemoteParticipant
-  ): void {
-    for (const [, publication] of participant.trackPublications) {
-      if (publication.kind === TrackKind.KIND_AUDIO) {
-        // Manually subscribe — this triggers TrackSubscribed event
-        publication.setSubscribed(true);
-      }
-    }
+  private reconcile(trigger: string): void {
+    if (!this.room || this.status === "closed") return;
+    const subscribed = reconcileOrganizerAudio({
+      organizerIdentity: this.organizerIdentity,
+      participants: this.room.remoteParticipants.values(),
+      isAudio: (pub) => pub.kind === TrackKind.KIND_AUDIO,
+    });
+    this.record("organizer_audio_reconciled", { trigger, publications: subscribed });
+  }
 
-    // Also listen for TrackSubscribed to pipe to Gemini
-    this.room!.on(
-      RoomEvent.TrackSubscribed,
-      (
-        track: RemoteAudioTrack,
-        pub: RemoteTrackPublication,
-        p: RemoteParticipant
-      ) => {
-        if (
-          p.identity === this.organizerIdentity &&
-          pub.kind === TrackKind.KIND_AUDIO
-        ) {
-          this.pipeTrackToGemini(track);
-        }
+  /**
+   * Watch for a silent input. This is the layer that doesn't need to know *why* the
+   * audio stopped — the previous outage's trigger was one nobody had enumerated, and
+   * the next one's won't be either. Fires only once per stall window, so a genuinely
+   * muted speaker produces one event rather than a retry storm.
+   */
+  private startStallWatchdog(): void {
+    if (this.stallWatchdog) return;
+    this.stallWatchdog = setInterval(() => {
+      if (this.status !== "active") return;
+      const now = Date.now();
+      if (
+        !shouldRecoverStalledInput({
+          now,
+          lastFrameAt: this.lastOrganizerFrameAt,
+          lastRecoveryAt: this.lastStallRecoveryAt,
+          stallMs: INPUT_STALL_MS,
+        })
+      ) {
+        return;
       }
-    );
+      this.lastStallRecoveryAt = now;
+      const stalledMs = now - this.lastOrganizerFrameAt;
+      console.warn(
+        `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription`
+      );
+      this.record("organizer_audio_stalled", { stalledMs });
+      this.reconcile("stall");
+    }, STALL_CHECK_INTERVAL_MS);
+    // Don't hold the process open on this timer alone.
+    this.stallWatchdog.unref?.();
   }
 
   private pipeTrackToGemini(track: RemoteAudioTrack): void {
     console.log(
       `[TranslationBridge:${this.targetLanguage}] Subscribed to organizer audio track, piping to Gemini`
     );
+    this.record("organizer_audio_piped");
 
     const audioStream = new AudioStream(track, {
       sampleRate: this.inputSampleRate,
@@ -773,20 +969,44 @@ export class TranslationBridge {
     const readLoop = async () => {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) return;
         this.sendAudioToGemini(value);
       }
     };
 
-    readLoop().catch((err: Error) => {
-      console.error(
-        `[TranslationBridge:${this.targetLanguage}] Audio stream error:`,
-        err
-      );
-    });
+    // The stream *ending* is an event, not an exit. A bare `break` here is what made the
+    // 2026-07-12 outage silent: LiveKit's full reconnect ended this stream, the loop fell
+    // out, and nothing logged it. Forget the track so that if it comes back we pipe it
+    // again, then reconcile in case the replacement is already sitting in the room.
+    const streamClosed = (why: string) => {
+      this.pipedTracks.delete(track);
+      this.reconcile(why);
+    };
+
+    readLoop()
+      .then(() => {
+        console.warn(
+          `[TranslationBridge:${this.targetLanguage}] Organizer audio stream ended`
+        );
+        this.record("organizer_audio_stream_ended");
+        streamClosed("stream_ended");
+      })
+      .catch((err: Error) => {
+        console.error(
+          `[TranslationBridge:${this.targetLanguage}] Audio stream error:`,
+          err
+        );
+        this.record("organizer_audio_stream_error", { message: err.message });
+        streamClosed("stream_error");
+      });
   }
 
   private sendAudioToGemini(frame: AudioFrame): void {
+    // Liveness is stamped where organizer audio *enters* the bridge, before the Gemini
+    // check below: a stalled Gemini socket is a different failure with its own recovery,
+    // and conflating them would have the watchdog papering over the wrong pipe.
+    this.lastOrganizerFrameAt = Date.now();
+
     if (
       !this.geminiWs ||
       this.geminiWs.readyState !== WebSocket.OPEN ||

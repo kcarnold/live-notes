@@ -72,9 +72,17 @@ export async function translateItem(params: {
       slide.trim() === '' ? undefined : lookup(language, slide),
     );
     reviewedByLang[language] = reviewed;
-    const isTranslationNeeded = slides.map(
-      (slide, i) => slide.trim() !== '' && !reviewed[i],
-    );
+    // Duplicate slides (e.g. a chorus repeated via CustomOrderSequence) share a
+    // normalized text and the same read-back key, so we only ask the model to
+    // translate the first occurrence — later copies resolve from that one result.
+    const seen = new Set<string>();
+    const isTranslationNeeded = slides.map((slide, i) => {
+      if (slide.trim() === '' || reviewed[i]) return false;
+      const key = normalizeSlideText(slide);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     // Reviewed slides are already in-language, so they feed the model as context.
     const context = slides
       .map((_, i) => reviewed[i]?.text)

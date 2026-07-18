@@ -14,4 +14,4 @@ global.Audio = vi.fn().mockImplementation(() => ({
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),
   load: vi.fn(),
-})) as unknown as typeof Audio;
+}));

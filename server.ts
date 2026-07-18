@@ -11,15 +11,25 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog, setupExpressErrorHandler } from 'posthog-node';
 
-import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider } from './nlp.ts';
-import type { TranslationTodo } from './nlp.ts';
+import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider, emptyUsage, mergeUsage } from './nlp.ts';
+import type { TranslationTodo, TokenUsage, AgentObservability } from './nlp.ts';
 import { BIBLE_TRANSLATIONS, type BibleToolCall } from './bible.ts';
 import { SlideLibrary } from './slideLibrary.ts';
 import { translateItem } from './src/slideItemTranslation.ts';
-import { SlideConversationStore, slidesHash } from './slideConversationStore.ts';
+import {
+  SlideConversationStore,
+  slidesHash,
+  readConversation,
+  writeConversation,
+  appendMessageTo,
+  setStatusIn,
+} from './slideConversationStore.ts';
 import type { Content } from '@google/genai';
+import * as Y from 'yjs';
+import { buildSessionExport, renderSessionHtml, sessionExportFilename } from './sessionExport.ts';
 
 import { AccessToken } from 'livekit-server-sdk';
+import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
 
 // Get API keys from environment variables, crash if not set
@@ -89,13 +99,60 @@ const slideLibrary = new SlideLibrary(SLIDE_LIBRARY_PATH);
 await slideLibrary.load();
 console.log(`Slide translation library: ${SLIDE_LIBRARY_PATH} (${slideLibrary.list().length} entries)`);
 
-// Per-item agent conversations (in-memory, ephemeral). The agent runs here, so the
-// conversation lives here; the review screen pulls it down and posts follow-ups.
-const slideConversations = new SlideConversationStore();
+// Per-item agent conversations. The agent runs here, but the conversation is stored in the
+// per-day Y-Sweet doc (so it survives restarts and streams live to the review screen); this
+// store manages the server's write connection to that doc.
+const slideConversations = new SlideConversationStore(documentManager);
 
 /** Stable conversation key: the Proclaim itemId when present, else a content hash. */
 function conversationKey(itemId: string | undefined, slides: string[]): string {
   return itemId && itemId.trim() ? itemId.trim() : `hash:${slidesHash(slides)}`;
+}
+
+/**
+ * PostHog LLM-observability tags for a slide-translation conversation. The conversation id
+ * is the trace id, so every generation (initial draft + follow-ups) groups into one trace;
+ * the day's docId is the distinct id, so a day's review work groups under one "user".
+ */
+function slideObservability(
+  conversationId: string,
+  docId: string,
+  extra?: Record<string, unknown>,
+): AgentObservability {
+  return {
+    distinctId: docId,
+    traceId: conversationId,
+    properties: { conversationId, docId, ...extra },
+  };
+}
+
+/**
+ * Report a Bible lookup to PostHog, keyed to the same conversation as the LLM trace so it
+ * lines up with the agent's generations (`$ai_trace_id`) instead of the old hardcoded
+ * 'slide-review' distinct id that lumped every lookup together.
+ */
+function recordBibleLookup(call: BibleToolCall, conversationId: string, docId: string): void {
+  phClient.capture({
+    distinctId: docId,
+    event: 'bible_lookup',
+    properties: {
+      $ai_trace_id: conversationId,
+      conversationId,
+      reference: call.reference,
+      ok: call.ok,
+      foundLanguages: call.foundLanguages,
+      missingLanguages: call.missingLanguages,
+    },
+  });
+}
+
+// !!! TEMPORARY BACK-COMPAT SHIM — DELETE ME (see /api/translateItem) !!!
+// Mirrors the frontend's getDocId() default (`doc-YYYY-MM-DD`, local date) so a
+// Proclaim client too old to send `docId` still targets the right per-day doc.
+function currentDayDocId(): string {
+  const d = new Date();
+  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `doc-${ymd}`;
 }
 
 const app = express();
@@ -251,6 +308,63 @@ app.post('/api/livekit/translate/unsubscribe', async (req, res) => {
 });
 
 
+// Force a LiveKit reconnection scenario on a session's translator bridges.
+//
+// A full reconnect is what silently deafened both bridges on 2026-07-12, and it cannot be
+// waited for — it's the SDK's escalation when a resume fails, driven by server-side events
+// rather than by elapsed time. Without this route, verifying that the bridge survives one
+// means running a whole service and hoping. With it, the check takes seconds:
+//
+//   curl -X POST localhost:8000/api/livekit/translate/simulate \
+//     -H 'content-type: application/json' \
+//     -d '{"sessionId":"doc-2026-07-13","scenario":"fullReconnect"}'
+//
+// …then confirm translation audio keeps flowing and `organizer_audio_reconciled` fires with
+// trigger "reconnected". See docs/live-audio-resilience.md.
+//
+// Chaos endpoint: refuses to run in production, since it deliberately breaks a live room.
+const SIMULATE_SCENARIOS: Record<string, SimulateScenarioKind> = {
+  fullReconnect: SimulateScenarioKind.SIMULATE_FULL_RECONNECT,
+  signalReconnect: SimulateScenarioKind.SIMULATE_SIGNAL_RECONNECT,
+  nodeFailure: SimulateScenarioKind.SIMULATE_NODE_FAILURE,
+  migration: SimulateScenarioKind.SIMULATE_MIGRATION,
+  serverLeave: SimulateScenarioKind.SIMULATE_SERVER_LEAVE,
+};
+
+app.post('/api/livekit/translate/simulate', async (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_CHAOS_ENDPOINT !== '1') {
+      return res.status(403).json({ error: 'Chaos endpoint disabled in production' });
+    }
+    if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
+
+    const sessionId = req.body?.sessionId as string | undefined;
+    const scenario = (req.body?.scenario as string | undefined) ?? 'fullReconnect';
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+
+    const kind = SIMULATE_SCENARIOS[scenario];
+    if (kind === undefined) {
+      return res.status(400).json({
+        error: `Unknown scenario '${scenario}'`,
+        available: Object.keys(SIMULATE_SCENARIOS),
+      });
+    }
+
+    const manager = TranslationSessionManager.getInstance();
+    const languages = await manager.simulateScenario(sessionId, kind);
+    if (languages.length === 0) {
+      return res.status(404).json({ error: `No active translator bridges for ${sessionId}` });
+    }
+    console.warn(`[chaos] Simulated ${scenario} on ${sessionId} for: ${languages.join(', ')}`);
+    return res.json({ success: true, scenario, languages });
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('LiveKit simulate error:', error);
+    return res.status(500).json({ error: 'Failed to simulate scenario' });
+  }
+});
+
+
 app.post('/api/requestTranslatedBlocks', async (req, res) => {
   console.log('Request translated blocks:', req.body);
   const translationTodos = (req.body?.translationTodos as [TranslationTodo]) ?? [];
@@ -313,15 +427,45 @@ app.post('/api/translateItem', async (req, res) => {
   // Conversation key: the Proclaim itemId when this came from a service item (so the review
   // screen can find it by itemId), else a content hash for ad-hoc pastes.
   const itemId = (req.body?.itemId as string | undefined)?.trim();
+  // The per-day doc the conversation belongs to (where the browser reads it live).
+  let docId = (req.body?.docId as string | undefined)?.trim();
   if (!Array.isArray(slides) || requestedLanguages.length === 0) {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
   }
+  // ===========================================================================
+  // !!!  TEMPORARY BACK-COMPAT SHIM — DELETE ME  !!!
+  // ---------------------------------------------------------------------------
+  // A Proclaim client pinned to pre-#64 code (Jul 2026) doesn't send `docId`.
+  // Rather than 400 that client's slide-translation calls, default to the
+  // current-day doc so it keeps seeding translations. The translations flow
+  // back in the HTTP response regardless; only the server-written conversation
+  // map lands in this defaulted doc, which nobody watches for that old client.
+  //
+  // This exists ONLY to bridge one un-updatable client. Once every Proclaim
+  // client is on code that sends `docId`, RESTORE the hard 400 below and remove
+  // this block + `currentDayDocId()`:
+  //     if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
+  // ===========================================================================
+  if (!docId) {
+    docId = currentDayDocId();
+    console.warn(`[translateItem] TEMPORARY SHIM: missing docId, defaulting to ${docId}. DELETE ME once all Proclaim clients send docId.`);
+  }
+
+  // Stable conversation id up front so it can tag the LLM trace (and any bible_lookup events)
+  // as the agent runs — this is what makes a conversation's generations group in PostHog.
+  const conversationId = conversationKey(itemId, slides);
+  const observability = slideObservability(conversationId, docId, {
+    itemTitle: itemTitle || undefined,
+    source: 'translateItem',
+  });
 
   const lookup = slideLibrary.toLookup();
   // Bible lookups the model made while drafting — reported to PostHog and the review UI.
   const bibleLookups: BibleToolCall[] = [];
   // The raw agent history, captured so we can persist it for review + follow-ups.
   let conversationMessages: Content[] = [];
+  // Token usage across the draft's model calls (surfaced so cache hits/cost are visible).
+  let usage: TokenUsage = emptyUsage();
   const translations = await translateItem({
     slides,
     languages: requestedLanguages,
@@ -335,21 +479,16 @@ app.post('/api/translateItem', async (req, res) => {
         generalContext: SLIDE_TRANSLATION_CONTEXT,
         itemTitle: itemTitle || undefined,
         model: STRONG_MODEL,
+        observability,
         onToolCall: (call) => {
           bibleLookups.push(call);
-          phClient.capture({
-            distinctId: 'slide-review',
-            event: 'bible_lookup',
-            properties: {
-              reference: call.reference,
-              ok: call.ok,
-              foundLanguages: call.foundLanguages,
-              missingLanguages: call.missingLanguages,
-            },
-          });
+          recordBibleLookup(call, conversationId, docId);
         },
         onConversation: (messages) => {
           conversationMessages = messages;
+        },
+        onUsage: (runUsage) => {
+          usage = mergeUsage(usage, runUsage);
         },
       }),
   });
@@ -359,7 +498,6 @@ app.post('/api/translateItem', async (req, res) => {
   // seed a context-only conversation — slides + current translations + general context — so a
   // later follow-up resumes with real context instead of replying blind, without spending a
   // model call now.
-  const conversationId = conversationKey(itemId, slides);
   const seededMessages: Content[] = conversationMessages.length > 0
     ? conversationMessages
     : [{
@@ -372,7 +510,8 @@ app.post('/api/translateItem', async (req, res) => {
           }),
         }],
       }];
-  slideConversations.upsert({
+  const conversationsMap = await slideConversations.getConversationsMap(docId);
+  writeConversation(conversationsMap, {
     itemId: conversationId,
     itemTitle: itemTitle || '',
     slides,
@@ -380,45 +519,61 @@ app.post('/api/translateItem', async (req, res) => {
     languages: requestedLanguages,
     messages: seededMessages,
     status: 'idle',
+    usage,
   });
 
   return res.json({ ok: true, translations, bibleLookups, conversationId });
 });
 
-// Fetch the stored agent conversation for an item (review screen). 404 when unknown.
-app.get('/api/slideConversation', (req, res) => {
-  const itemId = (req.query?.itemId as string | undefined)?.trim();
-  if (!itemId) return res.status(400).json({ ok: false, error: 'Missing itemId' });
-  const conversation = slideConversations.get(itemId);
-  if (!conversation) return res.status(404).json({ ok: false, error: 'No conversation' });
-  return res.json({ ok: true, conversation });
-});
+// The review screen reads the conversation live from the `slideConversations` Y.Map in its
+// own doc, so there's no GET endpoint — the writes below stream straight to watchers.
 
 // Send a follow-up message to an item's agent and resume the loop. The model may answer in
 // text and/or revise translations via set_translations; revised entries are returned for the
-// browser to write into the slideTranslations Y.Map (the server stays a non-Yjs-writer).
+// browser to write into the slideTranslations Y.Map. Conversation progress (status, agent
+// reasoning, tool calls) streams live via the slideConversations Y.Map.
 app.post('/api/slideConversation/message', async (req, res) => {
   const itemId = (req.body?.itemId as string | undefined)?.trim();
   const text = (req.body?.text as string | undefined)?.trim();
+  const docId = (req.body?.docId as string | undefined)?.trim();
   if (!itemId || !text) {
     return res.status(400).json({ ok: false, error: 'Missing itemId or text' });
   }
-  const conversation = slideConversations.get(itemId);
-  if (!conversation) return res.status(404).json({ ok: false, error: 'No conversation' });
+  if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
 
+  const conversationsMap = await slideConversations.getConversationsMap(docId);
+  const stored = readConversation(conversationsMap, itemId);
+  if (!stored) return res.status(404).json({ ok: false, error: 'No conversation' });
+
+  // Work on a copy; the agent appends to `messages` in place, and Yjs values must not be
+  // mutated outside a set(). We re-snapshot the whole conversation as it progresses.
+  const conversation = structuredClone(stored);
   conversation.messages.push({ role: 'user', parts: [{ text }] });
-  slideConversations.setStatus(itemId, 'running');
+  conversation.status = 'running';
+  writeConversation(conversationsMap, conversation);
+
   const bibleLanguages = conversation.languages.filter((language) => BIBLE_TRANSLATIONS[language]);
   const bibleLookups: BibleToolCall[] = [];
+  // Same trace id as the initial draft so this follow-up's generations group with it.
+  const observability = slideObservability(itemId, docId, { source: 'followUp' });
   try {
     const result = await runSlideTranslationAgent(geminiProvider, {
       sourceSlides: conversation.slides,
       messages: conversation.messages, // mutated in place
       model: STRONG_MODEL,
       bibleLanguages,
-      onToolCall: (call) => bibleLookups.push(call),
+      observability,
+      onToolCall: (call) => {
+        bibleLookups.push(call);
+        recordBibleLookup(call, itemId, docId);
+        // Stream the agent's progress (new tool-call/response messages) to watchers.
+        writeConversation(conversationsMap, conversation);
+      },
     });
-    slideConversations.setStatus(itemId, 'idle');
+    conversation.status = 'idle';
+    // Fold this run's tokens into the conversation's running total (initial draft + follow-ups).
+    conversation.usage = mergeUsage(conversation.usage ?? emptyUsage(), result.usage);
+    writeConversation(conversationsMap, conversation);
 
     // Flatten revised translations for the browser to apply (auto / llm-agent provenance).
     const updatedTranslations: Array<{ language: string; sourceText: string; text: string }> = [];
@@ -429,7 +584,7 @@ app.post('/api/slideConversation/message', async (req, res) => {
     }
     return res.json({ ok: true, conversation, updatedTranslations, bibleLookups });
   } catch (err) {
-    slideConversations.setStatus(itemId, 'error');
+    setStatusIn(conversationsMap, itemId, 'error');
     console.error('slideConversation/message failed:', err);
     if (err instanceof Error) phClient.captureException(err);
     return res.status(500).json({ ok: false, error: 'Agent run failed' });
@@ -438,18 +593,52 @@ app.post('/api/slideConversation/message', async (req, res) => {
 
 // Record a reviewer's manual edit as a note in the conversation, so the next follow-up has
 // that context. No agent run — the edit itself is written to Yjs/library by the browser.
-app.post('/api/slideConversation/note', (req, res) => {
+app.post('/api/slideConversation/note', async (req, res) => {
   const itemId = (req.body?.itemId as string | undefined)?.trim();
   const text = (req.body?.text as string | undefined)?.trim();
+  const docId = (req.body?.docId as string | undefined)?.trim();
   if (!itemId || !text) {
     return res.status(400).json({ ok: false, error: 'Missing itemId or text' });
   }
-  const updated = slideConversations.appendMessage(itemId, {
+  if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
+  const conversationsMap = await slideConversations.getConversationsMap(docId);
+  const updated = appendMessageTo(conversationsMap, itemId, {
     role: 'user',
     parts: [{ text }],
   });
   if (!updated) return res.status(404).json({ ok: false, error: 'No conversation' });
   return res.json({ ok: true, conversation: updated });
+});
+
+// One-click session export: fetch a session's Y-Sweet doc as an update (no live
+// websocket needed) and render everything in it — notes + translations, slides +
+// their translations, and the live transcript — into a single, self-contained,
+// human-readable HTML page that downloads as an attachment.
+app.get('/api/session/export', async (req, res) => {
+  const docId = (req.query?.doc as string | undefined)?.trim();
+  if (!docId) {
+    return res.status(400).json({ error: 'Missing doc query parameter' });
+  }
+  try {
+    const update = await documentManager.getDocAsUpdate(docId);
+    const ydoc = new Y.Doc();
+    Y.applyUpdate(ydoc, update);
+
+    const data = buildSessionExport(ydoc, docId);
+    const html = renderSessionHtml(data);
+    ydoc.destroy();
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${sessionExportFilename(docId)}"`,
+    );
+    return res.send(html);
+  } catch (error) {
+    phClient.captureException(error);
+    console.error('Session export error:', error);
+    return res.status(500).json({ error: 'Failed to export session' });
+  }
 });
 
 // TTS request deduplication: Map of cache key -> Promise
@@ -578,4 +767,15 @@ app.listen(app.get("port"), () => {
   console.log(`Server running on http://localhost:${PORT}`);
 }).on('error', (error) => {
   console.error('Server error:', error);
+});
+
+// Flush PostHog before the process exits so events queued in the 10s batch window
+// aren't lost when Docker sends SIGTERM.
+process.on('SIGTERM', async () => {
+  await phClient.shutdown();
+  process.exit(0);
+});
+process.on('SIGINT', async () => {
+  await phClient.shutdown();
+  process.exit(0);
 });

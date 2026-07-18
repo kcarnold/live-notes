@@ -12,7 +12,6 @@ import {
   lookupLibrary,
   upsertLibraryEntry,
   translateItem,
-  fetchConversation,
   sendConversationMessage,
   postConversationNote,
   type BibleToolCall,
@@ -49,6 +48,8 @@ export function SlideReviewContainer() {
   const presentationsMap = useMap('proclaimPresentations');
   const translationsMap = useMap('slideTranslations');
   const serviceOrderMap = useMap('proclaimServiceOrder');
+  // The agent conversation lives in the per-day doc (server-written), so we read it live.
+  const conversationsMap = useMap('slideConversations');
 
   const [slidesText, setSlidesText] = useState('');
   // Title of the loaded on-air item (e.g. a Bible citation like "Psalm 23"). Passed to the
@@ -65,7 +66,10 @@ export function SlideReviewContainer() {
   // server is using for this item, and the agent conversation we've pulled down.
   const [selectedItemId, setSelectedItemId] = useState<string>('');
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [conversation, setConversation] = useState<SlideConversation | null>(null);
+  // Derived live from Yjs: the server writes the conversation into `slideConversations`, and
+  // useMap re-renders on change, so status/messages/tool-calls stream in as the agent runs.
+  const conversation =
+    (conversationId ? (conversationsMap.get(conversationId) as SlideConversation | undefined) : undefined) ?? null;
 
   // The full service order (for the item picker) and a staleness flag for the selected item.
   const serviceOrder = (serviceOrderMap.get('order') as string[] | undefined) ?? [];
@@ -138,13 +142,11 @@ export function SlideReviewContainer() {
         return;
       }
       setSelectedItemId(itemId);
+      // The conversation (if any) is read live from `slideConversations` keyed by itemId.
       setConversationId(itemId);
       setItemTitle(presentation?.title ?? '');
       setSlidesText(itemSlides.join(SLIDE_DELIMITER));
       void commitSlides(itemSlides);
-      void fetchConversation(itemId)
-        .then(setConversation)
-        .catch(() => setConversation(null));
     },
     [presentationsMap, commitSlides, s.waitingForProclaim],
   );
@@ -187,10 +189,8 @@ export function SlideReviewContainer() {
       }
       setDrafts(nextDrafts);
       setSavedTexts(nextSaved);
-      // Pull down the agent conversation the server just stored under this key.
+      // The server stored the agent conversation under this key; we read it live from Yjs.
       setConversationId(newId);
-      const conv = await fetchConversation(newId);
-      setConversation(conv);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -233,8 +233,8 @@ export function SlideReviewContainer() {
       setBusy(true);
       setError(null);
       try {
+        // The updated conversation streams in live via Yjs; we only need the side outputs.
         const result = await sendConversationMessage(conversationId, text);
-        setConversation(result.conversation);
         if (result.bibleLookups.length > 0) setBibleLookups(result.bibleLookups);
         applyUpdates(result.updatedTranslations);
       } catch (err) {

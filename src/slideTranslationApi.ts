@@ -10,6 +10,7 @@ import type {
 import type { PerSlideTranslation } from './slideItemTranslation.ts';
 import type { BibleToolCall } from '../bible.ts';
 import type { Content } from '@google/genai';
+import { getDocId } from './getDocId.ts';
 
 export type { BibleToolCall };
 export type { Content };
@@ -24,6 +25,20 @@ export interface TranslateItemResult {
 
 export type SlideConversationStatus = 'running' | 'idle' | 'error';
 
+/**
+ * Token usage summed across an item's agent runs. Mirrors the server's `TokenUsage`
+ * (nlp.ts). `cachedContentTokenCount` is the tell for whether Gemini's context cache is
+ * serving the re-sent prompt — near-0 against a large `promptTokenCount` means it isn't.
+ */
+export interface TokenUsage {
+  promptTokenCount: number;
+  cachedContentTokenCount: number;
+  candidatesTokenCount: number;
+  thoughtsTokenCount: number;
+  totalTokenCount: number;
+  callCount: number;
+}
+
 /** The server-side agent conversation for one item (raw Gemini history + snapshot). */
 export interface SlideConversation {
   itemId: string;
@@ -33,6 +48,8 @@ export interface SlideConversation {
   languages: string[];
   messages: Content[];
   status: SlideConversationStatus;
+  /** Running token total for this conversation; absent on pre-existing conversations. */
+  usage?: TokenUsage;
   updatedAt: number;
 }
 
@@ -139,7 +156,7 @@ export async function translateItem(
     translations: Record<string, PerSlideTranslation[]>;
     bibleLookups?: BibleToolCall[];
     conversationId: string;
-  }>('/api/translateItem', { slides, languages, itemTitle, itemId });
+  }>('/api/translateItem', { slides, languages, itemTitle, itemId, docId: getDocId() });
   return {
     translations: data.translations,
     bibleLookups: data.bibleLookups ?? [],
@@ -147,14 +164,8 @@ export async function translateItem(
   };
 }
 
-/** Fetch the stored agent conversation for an item, or null if there isn't one. */
-export async function fetchConversation(itemId: string): Promise<SlideConversation | null> {
-  const response = await fetch(`/api/slideConversation?itemId=${encodeURIComponent(itemId)}`);
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`/api/slideConversation failed: ${response.status}`);
-  const data = (await response.json()) as { conversation: SlideConversation };
-  return data.conversation;
-}
+// The conversation itself is read live from the `slideConversations` Y.Map, so there's no
+// fetch here — only the writes below, which resume the agent or append a note.
 
 /** Send a follow-up message; resumes the agent and returns any revised translations. */
 export async function sendConversationMessage(
@@ -165,7 +176,7 @@ export async function sendConversationMessage(
     conversation: SlideConversation;
     updatedTranslations?: ConversationTranslationUpdate[];
     bibleLookups?: BibleToolCall[];
-  }>('/api/slideConversation/message', { itemId, text });
+  }>('/api/slideConversation/message', { itemId, text, docId: getDocId() });
   return {
     conversation: data.conversation,
     updatedTranslations: data.updatedTranslations ?? [],
@@ -175,5 +186,5 @@ export async function sendConversationMessage(
 
 /** Append a reviewer note (e.g. a manual edit) to the conversation; no agent run. */
 export async function postConversationNote(itemId: string, text: string): Promise<void> {
-  await postJson('/api/slideConversation/note', { itemId, text });
+  await postJson('/api/slideConversation/note', { itemId, text, docId: getDocId() });
 }
