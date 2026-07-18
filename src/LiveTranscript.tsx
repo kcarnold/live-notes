@@ -8,9 +8,10 @@
 // for any viewer — a listener (whether or not they've started audio) or the
 // broadcaster — because reading it needs only the Yjs connection, not the audio
 // room.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useStrings } from "./useLocale";
 import { useAsPlainText } from "./yjsUtils";
+import { useStickToBottom } from "./reactUtils";
 
 // One finalized transcript paragraph. Mounting fresh (only appended segments do)
 // plays a one-shot highlight animation, so new text is gently emphasized without
@@ -23,7 +24,7 @@ export function LiveTranscript({ langCode }: { langCode: string }) {
   const s = useStrings();
   const [finalized] = useAsPlainText(`liveTranscript-${langCode}`);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const atBottomRef = useRef(true);
+  const contentEndRef = useRef<HTMLDivElement | null>(null);
 
   const segments = useMemo(
     () => finalized.split("\n\n").map((t) => t.trim()).filter(Boolean),
@@ -34,39 +35,43 @@ export function LiveTranscript({ langCode }: { langCode: string }) {
   // Captured once via a lazy initializer (reading a ref during render is unsafe).
   const [baselineCount] = useState(() => segments.length);
 
-  // Auto-scroll only when the reader is already near the bottom, so reading older
-  // text isn't yanked away when new text arrives. Runs after every render (cheap);
-  // it only moves the scroll position when already pinned to the bottom.
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
-  });
+  // Key on the raw text, not segments.length: deltas stream into the *current*
+  // paragraph without adding a segment, so keying on the count would only
+  // re-stick at sentence boundaries and let mid-sentence text scroll off-screen.
+  const { pinned, scrollToEnd } = useStickToBottom(scrollRef, contentEndRef, [finalized]);
 
   const hasContent = segments.length > 0;
 
   return (
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      className="flex-1 overflow-auto text-gray-800 dark:text-gray-100"
-    >
-      {hasContent ? (
-        <div className="mx-auto max-w-[60ch] text-lg leading-relaxed">
-          {segments.map((seg, i) => (
-            <TranscriptSegment
-              key={`${i}-${seg.slice(0, 16)}`}
-              text={seg}
-              isNew={i >= baselineCount}
-            />
-          ))}
-        </div>
-      ) : (
-        <span className="italic text-gray-400">{s.waitingForSpeech}</span>
+    <div className="relative flex-1 flex flex-col min-h-0">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-auto text-gray-800 dark:text-gray-100"
+      >
+        {hasContent ? (
+          <div className="mx-auto max-w-[60ch] text-lg leading-relaxed">
+            {segments.map((seg, i) => (
+              <TranscriptSegment
+                key={`${i}-${seg.slice(0, 16)}`}
+                text={seg}
+                isNew={i >= baselineCount}
+              />
+            ))}
+            <div ref={contentEndRef} />
+          </div>
+        ) : (
+          <span className="italic text-gray-400">{s.waitingForSpeech}</span>
+        )}
+      </div>
+
+      {hasContent && !pinned && (
+        <button
+          type='button'
+          onClick={() => scrollToEnd()}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-sm font-medium shadow-lg bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-500"
+        >
+          {s.jumpToLatest}
+        </button>
       )}
     </div>
   );

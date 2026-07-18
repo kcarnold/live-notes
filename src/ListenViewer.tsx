@@ -254,6 +254,7 @@ export function ListenViewer({ language }: { language: string }) {
         serverUrl={conn.serverUrl}
         connectOptions={{ autoSubscribe: false }}
         onError={(e) => setError(e.message)}
+        className="w-full shrink-0 h-auto"
       >
         <ListenAudio
           docId={docId}
@@ -272,9 +273,11 @@ export function ListenViewer({ language }: { language: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 flex-1 min-h-0">
-      {controls}
-      <LiveTranscript langCode={langCode} />
+    <div className="flex flex-col gap-2 flex-1 min-h-0 h-full">
+      <div className="shrink-0">{controls}</div>
+      <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+        <LiveTranscript langCode={langCode} />
+      </div>
     </div>
   );
 }

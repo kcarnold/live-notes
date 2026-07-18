@@ -14,6 +14,11 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
   declare which sections they touch.
 - [OBSERVABILITY.md](OBSERVABILITY.md) — what to observe about the live-audio backend
   (status/liveness) and where to pull it from: PostHog events, in-process state, LiveKit, Yjs.
+- [live-audio-resilience.md](live-audio-resilience.md) — how the translation bridge survives
+  LiveKit and Gemini dropping connections under it. Incident history (two "active but deaf"
+  outages), the invariant, and the three defense layers. **Read before changing the bridge's
+  subscription or reconnect paths** — the failure mode is silent, and the sample code this
+  subsystem came from does not defend against it. Written to be upstreamable.
 
 ## Design docs
 
