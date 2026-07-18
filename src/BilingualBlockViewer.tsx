@@ -232,7 +232,7 @@ export function BilingualBlockViewer({
         <button
           type='button'
           onClick={() => scrollToEnd()}
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-sm font-medium shadow-lg bg-blue-500 text-white hover:bg-blue-600"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-sm font-medium shadow-lg bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-500"
         >
           {s.jumpToLatest}
         </button>
