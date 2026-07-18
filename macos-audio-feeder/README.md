@@ -99,7 +99,7 @@ swift run AudioFeederApp # runs from the SwiftPM build for development
 - [x] LiveKit publisher (`Publisher`: token fetch, manual rendering + mixer.capture,
       retry/backoff, identity release on stop)
 - [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device)
-- [x] MenuBarExtra UI + settings + login-item toggle
+- [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
 - [ ] Package as a signed/notarized `.app` bundle (Info.plist/entitlements provided)
 - [ ] (Optional) WKWebView transcript/translations pane
 - [ ] Verify on a Mac: spike first, then end-to-end with a real board

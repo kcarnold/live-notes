@@ -4,7 +4,7 @@ import AudioFeederCore
 /// The menu-bar popover: status, level meter, manual controls, and a way into settings.
 struct MenuContentView: View {
     @ObservedObject var controller: AppController
-    @State private var showingConfig = false
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -52,15 +52,17 @@ struct MenuContentView: View {
             Divider()
 
             HStack {
-                Button("Settings…") { showingConfig = true }
+                // Open the standard Settings scene (a real window) and pull it to the front —
+                // an .accessory app won't raise its own windows automatically.
+                Button("Settings…") {
+                    openSettings()
+                    NSApp.activate(ignoringOtherApps: true)
+                }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }
         }
         .padding(14)
-        .sheet(isPresented: $showingConfig) {
-            ConfigView(controller: controller)
-        }
     }
 
     private var deviceSummary: some View {
