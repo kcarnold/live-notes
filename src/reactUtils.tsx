@@ -7,6 +7,11 @@ const NEAR_BOTTOM_PX = 80;
 // "actively scrolling" and hold off auto-scrolling, so our own scroll
 // doesn't fight their gesture mid-motion.
 const USER_SCROLL_HOLDOFF_MS = 150;
+// Auto-scroll fires at most once per this window. This is a throttle, not a
+// reset-on-every-change debounce: a fast delta stream (deps changing faster
+// than we scroll) must not perpetually push the timer out and starve the
+// scroll — it should keep the bottom in view instead.
+const AUTO_SCROLL_THROTTLE_MS = 100;
 
 /**
  * Keeps a scroll container stuck to a bottom sentinel element as content is
@@ -25,12 +30,20 @@ export function useStickToBottom(
   const holdoffTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const scrollTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  const updatePinned = React.useCallback(() => {
+  // Ground truth for "is the reader at the bottom", read live from the DOM.
+  // `pinned` is just this measurement surfaced as state (for the pill); the
+  // scheduled auto-scroll re-reads this at fire time rather than trusting a
+  // value captured when it was queued, so a reader who has since scrolled away
+  // (by any means — wheel, touch, keyboard, scrollbar) isn't yanked back down.
+  const isNearBottom = React.useCallback(() => {
     const el = scrollParentRef.current;
-    if (!el) return;
-    setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX);
+    return !!el && el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const updatePinned = React.useCallback(() => {
+    setPinned(isNearBottom());
+  }, [isNearBottom]);
 
   const markUserScrolling = React.useCallback(() => {
     userScrollingRef.current = true;
@@ -72,18 +85,25 @@ export function useStickToBottom(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // When tracked content grows, re-stick to the bottom. Throttled (schedule
+  // only when nothing is already queued) so a burst of dependency changes
+  // coalesces into a single scroll instead of resetting the timer forever.
   React.useEffect(() => {
-    if (!pinned || userScrollingRef.current) return;
-    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    if (scrollTimeoutRef.current || userScrollingRef.current || !isNearBottom()) return;
     scrollTimeoutRef.current = setTimeout(() => {
       scrollTimeoutRef.current = null;
-      if (pinned && !userScrollingRef.current) scrollToEnd('smooth');
-    }, 100);
-    return () => {
-      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-    };
+      if (!userScrollingRef.current && isNearBottom()) scrollToEnd('smooth');
+    }, AUTO_SCROLL_THROTTLE_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
+
+  React.useEffect(
+    () => () => {
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      if (holdoffTimeoutRef.current) clearTimeout(holdoffTimeoutRef.current);
+    },
+    []
+  );
 
   return { pinned, scrollToEnd };
 }

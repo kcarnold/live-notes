@@ -170,6 +170,31 @@ describe('useStickToBottom', () => {
     expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
+  // Regression: a continuous stream whose deps change faster than the throttle
+  // window must still scroll. A reset-on-every-change debounce would push the
+  // timer out forever and never fire while the stream is live.
+  it('keeps scrolling during a fast delta stream (does not starve)', () => {
+    const { el, scrollTo } = makeParent();
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget() };
+
+    const { rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    // Deltas arrive every 40ms (< the 100ms window) for ~400ms.
+    for (let i = 1; i <= 10; i++) {
+      rerender({ deps: [i] });
+      act(() => {
+        vi.advanceTimersByTime(40);
+      });
+    }
+
+    // A throttle fires roughly once per window; a reset-debounce would be 0.
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it('does nothing (and does not throw) when refs are missing', () => {
     const parentRef = { current: null as HTMLElement | null };
     const targetRef = { current: null as HTMLElement | null };
