@@ -42,6 +42,9 @@ export interface AppStrings {
   noContent: string;
   notTranslated: string;
 
+  // Stick-to-bottom scrolling (BilingualBlockViewer, LiveTranscript)
+  jumpToLatest: string;
+
   // Slide viewer
   noSlides: string;
   waitingForProclaim: string;
@@ -141,6 +144,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Error: ',
     noContent: 'No content yet',
     notTranslated: '(not translated)',
+    jumpToLatest: '↓ New',
     listenLive: 'Listen live',
     stopAudio: 'Stop audio',
     englishTranscript: 'English transcript',
@@ -227,6 +231,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Erreur\u00a0: ',
     noContent: 'Aucun contenu pour l\u2019instant',
     notTranslated: '(non traduit)',
+    jumpToLatest: '\u2193 Nouveau',
     listenLive: 'Écouter en direct',
     stopAudio: 'Couper le son',
     englishTranscript: 'Transcription anglaise',
@@ -313,6 +318,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Error: ',
     noContent: 'Sin contenido a\u00fan',
     notTranslated: '(no traducido)',
+    jumpToLatest: '\u2193 Nuevo',
     listenLive: 'Escuchar en vivo',
     stopAudio: 'Detener audio',
     englishTranscript: 'Transcripción en inglés',
@@ -399,6 +405,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Er\u00e8\u00a0: ',
     noContent: 'Pa gen kontni pou kounye a',
     notTranslated: '(pa tradui)',
+    jumpToLatest: '↓ Nouvo',
     listenLive: 'Koute an dirèk',
     stopAudio: 'Sispann odyo',
     englishTranscript: 'Transkripsyon anglè',

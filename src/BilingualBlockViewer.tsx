@@ -2,7 +2,7 @@ import type React from 'react';
 import { useRef, useState, useCallback, useEffect, useEffectEvent, useMemo } from 'react';
 import snarkdown from 'snarkdown';
 import type { Block } from './blockTypes';
-import { useScrollToBottom } from './reactUtils';
+import { useStickToBottom } from './reactUtils';
 import { useTTS } from './useTTS';
 import { useStrings } from './useLocale';
 
@@ -57,7 +57,11 @@ export function BilingualBlockViewer({
     }).filter(line => line.trim() !== '');
   }, [nonEmptyBlocks, translations, language]);
 
-  useScrollToBottom(scrollContainerRef, contentEndRef, [nonEmptyBlocks.length, translations.size], true);
+  const { pinned, scrollToEnd } = useStickToBottom(
+    scrollContainerRef,
+    contentEndRef,
+    [nonEmptyBlocks.length, translations.size]
+  );
 
   const isTTSEnabled = language === 'French' || language === 'Spanish';
 
@@ -223,6 +227,16 @@ export function BilingualBlockViewer({
           <div ref={contentEndRef} />
         </div>
       </div>
+
+      {!pinned && (
+        <button
+          type='button'
+          onClick={() => scrollToEnd()}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-sm font-medium shadow-lg bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-500"
+        >
+          {s.jumpToLatest}
+        </button>
+      )}
     </div>
   );
 }
