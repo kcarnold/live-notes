@@ -240,4 +240,30 @@ describe('useStickToBottom', () => {
     // Auto-scroll must resume, not stay wedged.
     expect(scrollTo).toHaveBeenCalledTimes(1);
   });
+
+  // Coverage for the real DOM path: the other tests hand the hook a fake `el`
+  // with a mock scrollTo, so they can't catch that jsdom lacks Element.scrollTo.
+  // This drives the hook against an actual node, so the genuine scroll path
+  // (getBoundingClientRect, scrollHeight, scrollTo) runs on every test run —
+  // it fails outright if the test-setup scrollTo stub ever goes missing.
+  it('scrolls a real DOM element (covers the real scrollTo path)', () => {
+    const parent = document.createElement('div');
+    const target = document.createElement('div');
+    parent.appendChild(target);
+    document.body.appendChild(parent);
+    const scrollTo = vi.spyOn(parent, 'scrollTo');
+
+    renderHook(
+      ({ deps }) =>
+        useStickToBottom({ current: parent }, { current: target }, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    document.body.removeChild(parent);
+  });
 });
