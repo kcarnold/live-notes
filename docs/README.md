@@ -22,6 +22,9 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 
 ## Design docs
 
+- [live-audio-state-architecture.md](live-audio-state-architecture.md) — state audit of the
+  live-translation subsystem (client + server state machines, edge-case catalog), a proposed
+  supervisor/reconciler architecture, and the hot-fix ladder to apply before it.
 - [slide-translations-plan.md](slide-translations-plan.md) — slide translation agent design.
 - Replay harness design: [#70](https://github.com/kcarnold/live-notes/issues/70) —
   record-at-the-boundary replay of full services for testing and accountability.
