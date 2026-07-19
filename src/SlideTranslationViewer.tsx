@@ -76,7 +76,7 @@ export function SlideTranslationViewer({
                 )}
                 <div className="text-center space-y-2">
                   {resolved ? (
-                    resolved.entry.text.split('\n').map((line, lineIdx) => (
+                    resolved.entry.text.replace(/\\n/g, '\n').split('\n').map((line, lineIdx) => (
                       <div
                         key={lineIdx}
                         className={`leading-normal ${isActive ? 'text-2xl' : 'text-xl font-light'}`}
