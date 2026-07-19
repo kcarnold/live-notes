@@ -10,7 +10,7 @@
 // healthy. The tradeoff (accepted deliberately) is that the transcript stays dark
 // until the first listener in a session opts in — no viewer holds a LiveKit
 // connection just to read. In other words: read for free, opt in to hear.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -25,6 +25,10 @@ import { LiveTranscript } from "./LiveTranscript";
 import { getDocId } from "./getDocId";
 
 const ORGANIZER_PREFIX = "organizer-";
+
+// How often to re-request a missing translator bot (and the grace we give a
+// just-requested one to appear before the first re-request).
+const ENSURE_TRANSLATOR_INTERVAL_MS = 10_000;
 
 interface ConnectInfo {
   token: string;
@@ -71,6 +75,43 @@ function ListenAudio({
   const speakerPresent = remoteParticipants.some((p) =>
     p.identity.startsWith(ORGANIZER_PREFIX)
   );
+  // The bot we depend on (for translated audio, or just the transcript when
+  // listening to the original). Identities are deterministic: translator-<code>.
+  const translatorPresent = remoteParticipants.some(
+    (p) => p.identity === `translator-${releaseTarget}`
+  );
+
+  // Self-heal: the server can lose our translator (restart, presence reap, its room
+  // connection dropping) and nothing server-side recreates it — so while the speaker
+  // is broadcasting without our bot, periodically re-request it. Gated on speaker
+  // presence so a pre-broadcast wait doesn't churn against the server's presence
+  // reaper (docs/live-audio-state-architecture.md, "the waiting-room reap"): the
+  // re-request then fires exactly when the session becomes healthy, so it sticks.
+  const needsTranslator = speakerPresent && !translatorPresent;
+  const lastEnsureRef = useRef(0);
+  // Stamp mount time (not in render — Date.now is impure there) so the bot the parent
+  // just requested gets one full interval to appear before the first re-request.
+  useEffect(() => {
+    lastEnsureRef.current = Date.now();
+  }, []);
+  useEffect(() => {
+    if (!needsTranslator) return;
+    const ensure = () => {
+      const now = Date.now();
+      if (now - lastEnsureRef.current < ENSURE_TRANSLATOR_INTERVAL_MS) return;
+      lastEnsureRef.current = now;
+      void fetch("/api/livekit/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: docId, targetLanguage: releaseTarget }),
+      }).catch(() => {
+        // Transient; the next tick retries.
+      });
+    };
+    ensure();
+    const id = setInterval(ensure, ENSURE_TRANSLATOR_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [needsTranslator, docId, releaseTarget]);
 
   // Subscribe to the audio we want only while audio is enabled: the translator
   // bot for a translation, or the speaker's raw mic for "Original / English".
@@ -109,18 +150,28 @@ function ListenAudio({
     };
   }, [docId, releaseTarget]);
 
+  // Three-light status: gray = no speaker, amber = speaker is live but our
+  // translator is missing (being re-requested above), green = fully wired. For
+  // original audio the translator only carries the transcript, so its absence
+  // doesn't demote the light — the audio the listener chose is unaffected.
+  const degraded = needsTranslator && !isOriginal;
+  const dotClass = !speakerPresent
+    ? "bg-gray-400"
+    : degraded
+      ? "bg-amber-500 animate-pulse"
+      : "bg-green-500 animate-pulse";
+  const statusText = !speakerPresent
+    ? s.waitingForSpeaker
+    : degraded
+      ? s.restartingTranslation
+      : s.liveListening;
+
   return (
     <>
       <RoomAudioRenderer />
       <div className="flex items-center gap-2 text-xs">
-        <span
-          className={`inline-block w-2 h-2 rounded-full ${
-            speakerPresent ? "bg-green-500 animate-pulse" : "bg-gray-400"
-          }`}
-        />
-        <span className="text-gray-600 dark:text-gray-300">
-          {speakerPresent ? s.liveListening : s.waitingForSpeaker}
-        </span>
+        <span className={`inline-block w-2 h-2 rounded-full ${dotClass}`} />
+        <span className="text-gray-600 dark:text-gray-300">{statusText}</span>
         <div className="flex-1" />
         <button
           type="button"

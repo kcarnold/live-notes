@@ -73,6 +73,13 @@ export type ReconnectTrigger = "goaway" | "close" | "resume";
 // not merely quiet. Recovery is attempted no more than once per stall window.
 const INPUT_STALL_MS = 15_000;
 const STALL_CHECK_INTERVAL_MS = 5_000;
+// Reconcile is the watchdog's level-1 recovery; this is level 2. If this many
+// consecutive stall windows pass with an apparently-live (unmuted, published) organizer
+// mic and still no frames, reconcile isn't fixing it — tear the bridge down so demand
+// (a listener re-requesting the language) recreates it from scratch, which is what the
+// manual redeploy did in the 2026-07-12 outage. A muted or unpublished mic never
+// escalates: that silence is expected, and recreating wouldn't (and shouldn't) end it.
+const STALL_ESCALATE_AFTER = 3;
 
 // Exponential-backoff bounds for failed Gemini reconnect attempts (mirrors the
 // Proclaim service's convention; see PROCLAIM_INTEGRATION.md).
@@ -340,6 +347,9 @@ export class TranslationBridge {
   private lastOrganizerFrameAt: number = 0;
   private lastStallRecoveryAt: number = 0;
   private stallWatchdog: ReturnType<typeof setInterval> | null = null;
+  // Stall windows in a row where reconcile didn't bring frames back (see
+  // STALL_ESCALATE_AFTER). Reset whenever frames arrive or the mic reads muted.
+  private consecutiveStallRecoveries: number = 0;
 
   // Persists finalized transcript segments into the shared Yjs doc.
   private readonly writer: TranscriptWriter | null;
@@ -473,7 +483,26 @@ export class TranslationBridge {
     }
     this.pipedTracks.clear();
 
-    // Stop any in-flight reconnect so it doesn't resurrect the socket after teardown.
+    this.teardownGeminiSide();
+
+    if (this.room) {
+      await this.room.disconnect();
+      this.room = null;
+    }
+
+    this.audioSource = null;
+    this.localTrack = null;
+    this.suspended = false;
+  }
+
+  /**
+   * Close the Gemini side completely: the active socket, any pending replacement, any
+   * scheduled retry, and the gap buffer. Used by stop() and by failure paths (room
+   * disconnect, watchdog escalation) where the bridge is done but must not leave a
+   * paid-for socket behind. The sockets' close handlers see a non-active status (or
+   * suspended) and won't reconnect.
+   */
+  private teardownGeminiSide(): void {
     this.reconnecting = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -483,21 +512,11 @@ export class TranslationBridge {
       this.pendingWs.close();
       this.pendingWs = null;
     }
-
     if (this.geminiWs) {
       this.geminiWs.close();
       this.geminiWs = null;
     }
-
-    if (this.room) {
-      await this.room.disconnect();
-      this.room = null;
-    }
-
-    this.audioSource = null;
-    this.localTrack = null;
     this.geminiSetupComplete = false;
-    this.suspended = false;
     this.pendingFrames = [];
     this.bufferedSilenceRun = 0;
   }
@@ -528,7 +547,15 @@ export class TranslationBridge {
         `[TranslationBridge:${this.targetLanguage}] Disconnected from room (reason: ${DisconnectReason[reason] ?? reason})`
       );
       this.record("livekit_disconnected", { reason: DisconnectReason[reason] ?? String(reason) });
-      this.status = "closed";
+      // stop() disconnects the room deliberately, with status already "closed" — done.
+      if (this.status === "closed") return;
+      // Any other disconnect (duplicate identity, LiveKit server restart, connectivity
+      // loss past the SDK's resume) is a failure. "error" marks the bridge recreatable —
+      // ensureBridge treats it as stale, and listeners re-request the language when they
+      // see the translator gone. Drop the Gemini side too, so the bridge can't linger as
+      // a zombie holding a paid-for session that no audio will ever reach.
+      this.status = "error";
+      this.teardownGeminiSide();
     });
 
     this.room.on(RoomEvent.Reconnecting, () => {
@@ -1123,7 +1150,7 @@ export class TranslationBridge {
    * Safe to call at any time, from any trigger, as often as we like.
    */
   private reconcile(trigger: string): void {
-    if (!this.room || this.status === "closed") return;
+    if (!this.room || this.status === "closed" || this.status === "error") return;
     const subscribed = reconcileOrganizerAudio({
       organizerIdentity: this.organizerIdentity,
       participants: this.room.remoteParticipants.values(),
@@ -1143,6 +1170,10 @@ export class TranslationBridge {
     this.stallWatchdog = setInterval(() => {
       if (this.status !== "active") return;
       const now = Date.now();
+      // Frames since the last recovery mean it worked — the escalation clock resets.
+      if (this.lastOrganizerFrameAt > this.lastStallRecoveryAt) {
+        this.consecutiveStallRecoveries = 0;
+      }
       if (
         !shouldRecoverStalledInput({
           now,
@@ -1155,6 +1186,29 @@ export class TranslationBridge {
       }
       this.lastStallRecoveryAt = now;
       const stalledMs = now - this.lastOrganizerFrameAt;
+
+      // Level 2: reconcile has had its chances and frames never came back. Only when
+      // the organizer's mic *looks* live — a muted/unpublished mic is expected silence,
+      // and recreating the bridge wouldn't end it (just churn a Gemini session).
+      if (this.organizerHasUnmutedAudio()) {
+        this.consecutiveStallRecoveries++;
+        if (this.consecutiveStallRecoveries >= STALL_ESCALATE_AFTER) {
+          console.error(
+            `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms after ${this.consecutiveStallRecoveries} reconcile attempts — tearing down for recreation`
+          );
+          this.record("organizer_audio_unrecoverable", {
+            stalledMs,
+            recoveries: this.consecutiveStallRecoveries,
+          });
+          // stop() leaves the room, so listeners see the translator vanish and
+          // re-request the language, which recreates the bridge from scratch.
+          void this.stop();
+          return;
+        }
+      } else {
+        this.consecutiveStallRecoveries = 0;
+      }
+
       console.warn(
         `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription`
       );
@@ -1163,6 +1217,24 @@ export class TranslationBridge {
     }, STALL_CHECK_INTERVAL_MS);
     // Don't hold the process open on this timer alone.
     this.stallWatchdog.unref?.();
+  }
+
+  /**
+   * Does the organizer currently have an audio publication that isn't muted? Frames
+   * should be flowing from such a mic, so their sustained absence marks the input
+   * pipe as broken rather than merely quiet. `muted` can be undefined on some SDK
+   * paths; treat unknown as live so a broken pipe is never mistaken for a muted mic.
+   */
+  private organizerHasUnmutedAudio(): boolean {
+    if (!this.room) return false;
+    for (const participant of this.room.remoteParticipants.values()) {
+      if (participant.identity !== this.organizerIdentity) continue;
+      for (const [, pub] of participant.trackPublications) {
+        if (pub.kind !== TrackKind.KIND_AUDIO) continue;
+        if (pub.muted !== true) return true;
+      }
+    }
+    return false;
   }
 
   private pipeTrackToGemini(track: RemoteAudioTrack): void {

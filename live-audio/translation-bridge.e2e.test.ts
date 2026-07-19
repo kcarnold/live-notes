@@ -96,6 +96,9 @@ class FakeAudioStream {
 
 class FakePublication {
   subscribed = false;
+  // undefined by default, like the SDK's `muted?: boolean` — the bridge must treat
+  // unknown as live, so only an explicit `true` reads as a muted mic.
+  muted: boolean | undefined = undefined;
   constructor(
     readonly track: FakeRemoteTrack,
     readonly participant: FakeParticipant,
@@ -140,7 +143,11 @@ class FakeRoom extends EventEmitter {
   }
 
   async connect(): Promise<void> {}
-  async disconnect(): Promise<void> {}
+  // The real SDK emits Disconnected (CLIENT_INITIATED) on a manual disconnect, so every
+  // test that calls bridge.stop() also exercises the "deliberate disconnect" guard.
+  async disconnect(): Promise<void> {
+    this.emit(RoomEvent.Disconnected, 0);
+  }
 
   /** Put a participant in the room with a live mic, as if they were already publishing. */
   seatOrganizer(identity: string): FakeRemoteTrack {
@@ -461,6 +468,80 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await speak(newMic, 3);
 
     expect(framesToGemini()).toBe(4);
+    await bridge.stop();
+  });
+
+  it("is recreatable, not a zombie, after an unexpected room disconnect", async () => {
+    // A room Disconnected the bridge didn't ask for (duplicate identity, LiveKit server
+    // restart, lost connectivity). Before the fix this set status="closed" and nothing
+    // else: the bridge stayed in the manager's map looking deliberately stopped, held
+    // its Gemini socket open, and the language was dead until a brand-new listener
+    // happened to request it. Now it must read as failed ("error", which ensureBridge
+    // treats as stale) with the Gemini side torn down.
+    const events: string[] = [];
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 2);
+    expect(framesToGemini()).toBe(2);
+
+    room.emit(RoomEvent.Disconnected, 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(bridge.status).toBe("error");
+    expect(events).toContain("livekit_disconnected");
+    // No paid-for zombie: every Gemini socket is closed.
+    for (const socket of FakeGeminiSocket.instances) {
+      expect(socket.readyState).not.toBe(FakeGeminiSocket.OPEN);
+    }
+
+    // A deliberate stop stays "closed" — the disconnect its room.disconnect() emits
+    // must not be mistaken for a failure.
+    await bridge.stop();
+    expect(bridge.status).toBe("closed");
+  });
+
+  it("escalates to teardown when reconcile cannot bring a dead input back", async () => {
+    // The watchdog's level-1 recovery (reconcile) assumes re-subscribing fixes the pipe.
+    // Here it doesn't: the publication still exists and claims to be subscribed, but its
+    // stream is dead and no replacement ever appears. Before the fix the bridge
+    // reconciled forever, deaf but "active". Now, after repeated fruitless recoveries,
+    // it must tear itself down — leaving the room so listeners see the translator gone
+    // and re-request the language, which recreates the bridge from scratch.
+    const events: string[] = [];
+    const { bridge, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 2);
+    expect(framesToGemini()).toBe(2);
+
+    // The stream dies; the publication stays, already-subscribed, so reconcile is a no-op.
+    mic.end();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(events).toContain("organizer_audio_stalled"); // level 1 was tried...
+    expect(events).toContain("organizer_audio_unrecoverable"); // ...and gave way to level 2
+    expect(bridge.status).toBe("closed"); // stop(): out of the room, recreatable on demand
+  });
+
+  it("never escalates against a muted mic — that silence is expected", async () => {
+    // Same dead-frames signal, opposite meaning: the organizer muted their mic. Frames
+    // stopping is correct behavior, and recreating the bridge wouldn't (and shouldn't)
+    // end it — escalation here would churn a Gemini session every ~45s for the whole
+    // mute. The mute state on the publication is what tells the two apart.
+    const events: string[] = [];
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 2);
+
+    mic.end();
+    const organizer = room.remoteParticipants.get(ORGANIZER) as FakeParticipant;
+    for (const [, pub] of organizer.trackPublications) pub.muted = true;
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    expect(events).not.toContain("organizer_audio_unrecoverable");
+    expect(bridge.status).toBe("active");
     await bridge.stop();
   });
 
