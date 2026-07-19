@@ -222,6 +222,58 @@ stateDiagram-v2
 
 Severity: 🔴 user-facing outage, 🟠 degraded/confusing, 🟡 waste/latent.
 
+### Case study (observed 2026-07-19): the waiting-room reap
+
+A French listener opts in *before* the broadcast starts. The translator bot joins, then
+leaves ~60–90s later; when the broadcast begins, the listener sits with a green "live"
+dot, hearing and seeing nothing, indefinitely.
+
+```mermaid
+sequenceDiagram
+    participant L as Listener (fr)
+    participant S as Server (manager + reaper)
+    participant R as LiveKit room
+    participant O as Broadcaster
+
+    L->>S: POST /translate (fr) — before the talk
+    S->>R: translator-fr joins, awaits organizer audio
+    L->>R: joins as attendee
+    Note over S: lastHealthyAt = now
+    loop reaper, every 30s
+        S->>R: listParticipants → translator-fr, attendee (no organizer)
+        Note over S: unhealthy — isSessionHealthy requires a broadcaster
+    end
+    Note over S: 60s grace expires
+    S->>R: teardownSession — translator-fr LEAVES
+    O->>R: broadcast starts (organizer joins, publishes mic)
+    Note over S: ensureBroadcast: no-op (cost gating off) —<br/>nothing recreates the fr bridge
+    Note over L: green "live" dot (it only checks speaker presence),<br/>subscribed to a translator that no longer exists —<br/>silence + empty transcript, forever
+```
+
+Two rules compose into the outage, and each is individually defensible:
+
+1. `isSessionHealthy` ([translation-session-manager.ts:65](../live-audio/translation-session-manager.ts#L65))
+   requires a broadcaster **unconditionally** — so "listener waiting for the talk to
+   start" is classified as an unhealthy session and the reap is *guaranteed*, not a race.
+   (Rationale was cost: don't hold a Gemini session with no source audio. Reasonable in
+   isolation.)
+2. Recreation doesn't exist (catalog #1–#3's shared root cause). `ensureBroadcast` at
+   organizer-token time is a no-op with `LIVE_AUDIO_SILENCE_GATING` off
+   ([server.ts:259](../../server.ts#L259)) — and even with gating on it only revives the
+   **default** language, so a Spanish listener in the same scenario is stuck regardless.
+   The client never re-asks.
+
+This is the clearest illustration of the thesis: the reaper *does* reconcile against
+ground truth (LiveKit presence) — but it is a reconciler that can only tear down. A
+one-directional reconciler converts every transient false-negative in its health rule
+into a permanent outage, because nothing reconciles in the build-up direction.
+
+It also sharpens hot fix 1: the client ensure-loop must be **gated on organizer
+presence**, otherwise it would churn (recreate → reaped → recreate, every ~90s) through
+the whole pre-broadcast wait. Gated, the behavior is exactly right: quiet while waiting,
+and the bridge is re-requested the moment the organizer appears — which is also the
+moment the session becomes healthy, so the recreation sticks.
+
 | # | Trigger | What happens today | Sev |
 | --- | --- | --- | --- |
 | 1 | Server restarts / redeploys mid-talk | All manager state and bridges vanish. Listeners stay joined to LiveKit, hear silence forever; transcripts stop. No client re-requests `/translate`. | 🔴 |
@@ -236,6 +288,7 @@ Severity: 🔴 user-facing outage, 🟠 degraded/confusing, 🟡 waste/latent.
 | 10 | Long session, `TranscriptWriter.appendDelta` | `ytext.toString()` per delta ([transcript-writer.ts:61](../live-audio/transcript-writer.ts#L61)) is O(doc) — quadratic over a day-scoped doc that every language appends to ~1/s. | 🟡 |
 | 11 | 4h token TTL | A talk (or a broadcaster tab left open) past 4h cannot complete a LiveKit *full* reconnect — token invalid, and per #5 nobody is told. | 🟡 |
 | 12 | Yjs/Y-Sweet websocket drop in `TranscriptWriter` | Provider reconnect is assumed, never observed; writer has no health signal or telemetry at all. | 🟡 |
+| 13 | Listener opts in **before** the broadcast starts (case study above, observed 2026-07-19) | Health rule requires a broadcaster → guaranteed reap after 60s; translator joins then leaves; when the broadcast starts nothing recreates the bridge; listener shows a green dot over permanent silence. | 🔴 |
 
 Items 1–4 are all the same missing mechanism: **nothing whose job is to make the running
 set of bridges match the desired set.** The reaper is half of it (teardown only); the
@@ -291,6 +344,12 @@ Properties this buys, for free, forever:
   supervisor* starts and stops bridges — HTTP handlers just nudge it. Single-writer
   discipline replaces the current "any request handler mutates the maps mid-await".
 - The reaper *is* this loop's teardown branch; delete it as a separate mechanism.
+- **The waiting room works by construction** (#13): with desired =
+  `broadcaster present ? (listener languages + default) : ∅`, a pre-broadcast listener
+  costs nothing — no bridge runs — and the bridge starts the instant the organizer
+  joins, because that join is just another tick input. The current bug required a
+  teardown-only reconciler paired with an event-driven creator; a bidirectional
+  reconciler cannot express it.
 
 ### 3. The bridge becomes two explicit machines with an epoch
 
@@ -342,13 +401,16 @@ five-line test.
 Ordered by (user-visible payoff ÷ diff size). Items 1–3 together close every 🔴 above.
 
 1. **Client ensure-loop in `ListenViewer`** (~20 lines, no server change). While
-   `wantLive`: on an interval and on participant changes, if `translatorIdentity` (or the
-   organizer, for original) is not among `remoteParticipants`, re-POST `/translate` (with
-   a short backoff) and surface a "restarting translation…" hint. Because
-   `translator-<lang>` identities are deterministic and `getOrCreate` reuses live
-   bridges, this is idempotent and safe today — and it single-handedly converts server
-   restarts (#1), zombie bridges (#2), and premature teardowns (#3) from permanent
-   outages into ~10-second blips. If you apply only one fix, apply this one.
+   `wantLive`: on an interval and on participant changes, if the translator identity is
+   not among `remoteParticipants` **and the organizer is present**, re-POST `/translate`
+   (with a short backoff) and surface a "restarting translation…" hint. The organizer
+   condition matters (see the case study): without it the loop churns against the reaper
+   through any pre-broadcast wait; with it, the re-request fires exactly when the session
+   becomes healthy, so it sticks. Because `translator-<lang>` identities are
+   deterministic and `getOrCreate` reuses live bridges, this is idempotent and safe
+   today — and it single-handedly converts server restarts (#1), zombie bridges (#2),
+   premature teardowns (#3), and the waiting-room reap (#13) from permanent outages into
+   ~10-second blips. If you apply only one fix, apply this one.
 2. **Recreate instead of zombify on room `Disconnected`**
    ([translation-bridge.ts:526](../live-audio/translation-bridge.ts#L526)): set
    `status = "error"` (not `"closed"`) so `ensureBridge`'s existing cleanup path treats
