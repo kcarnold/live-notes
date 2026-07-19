@@ -298,11 +298,46 @@ async function speak(track: FakeRemoteTrack, count = 3): Promise<void> {
 }
 
 /**
+ * A 100ms frame loud enough to read as *voice* (~-18 dBFS, well above the -30 voice bar),
+ * as opposed to the all-zero `FakeAudioFrame()` an open mic streams during a pause. The
+ * silence-gating path only cares about this distinction: voice resets the suspend clock,
+ * true silence does not.
+ */
+function voiceFrame(): FakeAudioFrame {
+  return new FakeAudioFrame(new Int16Array(1600).fill(4000));
+}
+
+/** Speak `count` frames of real voice into a mic track. */
+async function speakVoice(track: FakeRemoteTrack, count = 3): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    track.push(voiceFrame());
+    await vi.advanceTimersByTimeAsync(10);
+  }
+}
+
+/**
+ * Hold the mic open but silent for `ms`, delivering one room-tone frame every 100ms just
+ * like a real open mic. The frames matter: each one stamps the bridge's liveness signal, so
+ * this is a *live input that happens to be quiet* — not a dead one. That difference is the
+ * whole point of the two paths meeting.
+ */
+async function holdSilence(track: FakeRemoteTrack, ms: number): Promise<void> {
+  const steps = Math.round(ms / 100);
+  for (let i = 0; i < steps; i++) {
+    track.push(new FakeAudioFrame());
+    await vi.advanceTimersByTimeAsync(100);
+  }
+}
+
+/**
  * Start a bridge. `seat` runs once the bridge has a Room but before its Gemini handshake
  * completes, which is where the room's starting state gets decided (and where outage 1's
  * race lives). Whatever `seat` returns is handed back to the test.
  */
-async function boot<T>(seat: (room: FakeRoom) => T): Promise<{
+async function boot<T>(
+  seat: (room: FakeRoom) => T,
+  configOverrides: Partial<ConstructorParameters<typeof TranslationBridge>[3]> = {}
+): Promise<{
   bridge: InstanceType<typeof TranslationBridge>;
   room: FakeRoom;
   seated: T;
@@ -312,6 +347,7 @@ async function boot<T>(seat: (room: FakeRoom) => T): Promise<{
     livekitUrl: "wss://fake.livekit",
     livekitApiKey: "fake",
     livekitApiSecret: "fake",
+    ...configOverrides,
   });
   const started = bridge.start();
   await vi.advanceTimersByTimeAsync(10); // the bridge has constructed its Room
@@ -425,6 +461,91 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await speak(newMic, 3);
 
     expect(framesToGemini()).toBe(4);
+    await bridge.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // Silence gating × stall watchdog — the seam the merge created.
+  //
+  // These two subsystems arrived on different branches and now coexist in
+  // sendAudioToGemini: the watchdog treats "no organizer frames" as a dead input to
+  // rebuild, while silence gating treats "no *voice*" as a cue to suspend Gemini to save
+  // cost. They read the same frames and must not fight. The load-bearing decision in the
+  // merge is that liveness is stamped on *every* organizer frame, silence included —
+  // BEFORE the suspend early-return — so a quiet speaker is never mistaken for a dead mic.
+  //
+  // The timing is what makes this sharp: the stall threshold (15s) is crossed well before
+  // the silence-suspend window (30s). A merge that stamped liveness only on voice, or only
+  // after the suspend check, would have the watchdog tear down a perfectly healthy input
+  // 15s into every long pause.
+  // -------------------------------------------------------------------------
+
+  it("a long pause suspends Gemini WITHOUT the watchdog tearing down the live input", async () => {
+    const events: string[] = [];
+    const { bridge, seated: mic } = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      silenceGatingEnabled: true,
+      recordEvent: (event: string) => events.push(event),
+    });
+
+    await speakVoice(mic, 3);
+    expect(framesToGemini()).toBeGreaterThanOrEqual(3);
+
+    // 29s of open-mic room tone: past the 15s stall threshold, short of the 30s suspend.
+    await holdSilence(mic, 29_000);
+    // The merge's core assertion: silence frames keep the liveness signal fresh, so the
+    // watchdog must NOT confuse a pause with a dead input.
+    expect(events).not.toContain("organizer_audio_stalled");
+    expect(events).not.toContain("gemini_suspended_silence");
+    expect(bridge.status).toBe("active");
+
+    // Keep quiet past the 30s window: now the *cost* path acts and suspends Gemini —
+    // and still without the watchdog firing, because frames are still arriving.
+    await holdSilence(mic, 10_000);
+    expect(events).toContain("gemini_suspended_silence");
+    expect(events).not.toContain("organizer_audio_stalled");
+
+    // Speech returns → Gemini resumes and audio reaches it again (buffered pre-roll +
+    // fresh frames flushed into the new session).
+    const before = framesToGemini();
+    await speakVoice(mic, 4);
+    await vi.advanceTimersByTimeAsync(300); // let the replacement socket set up and flush
+    expect(events).toContain("gemini_resumed_voice");
+    expect(framesToGemini()).toBeGreaterThan(before);
+    await bridge.stop();
+  });
+
+  it("with silence gating ON, a truly dead input still trips the watchdog", async () => {
+    // The other direction of the seam: enabling the cost path must not smother the
+    // resilience path. Here the input genuinely dies — no frames of any kind, not even
+    // silence — so the liveness signal goes stale and the watchdog is the only thing that
+    // can notice. (Same failure as the "unknown-unknown" test, now with gating enabled.)
+    const events: string[] = [];
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      silenceGatingEnabled: true,
+      recordEvent: (event: string) => events.push(event),
+    });
+
+    await speakVoice(mic, 2);
+    expect(framesToGemini()).toBeGreaterThanOrEqual(2);
+
+    // Swap the publication behind the bridge's back and kill the old stream — no frames
+    // arrive on the new one until we resubscribe.
+    mic.end();
+    const organizer = room.remoteParticipants.get(ORGANIZER) as FakeParticipant;
+    organizer.trackPublications.clear();
+    const newMic = new FakeRemoteTrack();
+    organizer.publish(new FakePublication(newMic, organizer, room));
+
+    // 20s: past the 15s stall threshold, still short of the 30s suspend window (so this is
+    // unambiguously the watchdog's recovery, not a silence suspend).
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(events).toContain("organizer_audio_stalled");
+    expect(events).not.toContain("gemini_suspended_silence");
+
+    // Audio flows again through the resubscribed track.
+    const before = framesToGemini();
+    await speakVoice(newMic, 3);
+    expect(framesToGemini()).toBeGreaterThan(before);
     await bridge.stop();
   });
 });
