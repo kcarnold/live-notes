@@ -85,6 +85,18 @@ export function useStickToBottom(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // On first mount, jump straight to the bottom so a late joiner who already
+  // has a full transcript starts at the latest content. Without this, the
+  // growth effect below never fires for them: it bails while `isNearBottom()`
+  // is false, and an already-scrolled-to-top container reads as "not near
+  // bottom" from the very first render, so nothing scrolls until the reader
+  // manually scrolls down. Instant ('auto') so there's no long smooth glide
+  // from the top; no-op when there's no content yet (targetRef is unmounted).
+  React.useLayoutEffect(() => {
+    scrollToEnd('auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // When tracked content grows, re-stick to the bottom. Throttled (schedule
   // only when nothing is already queued) so a burst of dependency changes
   // coalesces into a single scroll instead of resetting the timer forever.

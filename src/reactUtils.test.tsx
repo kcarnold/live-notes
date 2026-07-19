@@ -61,6 +61,7 @@ describe('useStickToBottom', () => {
     renderHook(({ deps }) => useStickToBottom(parentRef, targetRef, deps), {
       initialProps: { deps: [0] as unknown[] },
     });
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     // Debounced: nothing fires immediately.
     expect(scrollTo).not.toHaveBeenCalled();
@@ -71,6 +72,31 @@ describe('useStickToBottom', () => {
 
     // scrollTop (50) + (targetBottom 200 - parentBottom 100) = 150
     expect(scrollTo).toHaveBeenCalledWith({ top: 150, behavior: 'smooth' });
+  });
+
+  // Regression: a late joiner mounts with a full transcript already present, so
+  // the container starts scrolled to the top (far from the bottom). The initial
+  // mount must jump to the latest content immediately — instantly ('auto', not a
+  // long smooth glide) and without waiting for any dependency change — otherwise
+  // the growth effect never fires for them (it bails while not near bottom).
+  it('jumps to the bottom on mount for a late joiner starting at the top', () => {
+    const { el, scrollTo } = makeParent({
+      bottom: 100,
+      scrollTop: 0,
+      scrollHeight: 1000,
+      clientHeight: 900,
+    });
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget(200) };
+
+    const { result } = renderHook(() =>
+      useStickToBottom(parentRef, targetRef, [0]),
+    );
+
+    // Fires synchronously on mount (layout effect), before any timer advance,
+    // with instant behavior. scrollTop (0) + (targetBottom 200 - parentBottom 100) = 100.
+    expect(scrollTo).toHaveBeenCalledWith({ top: 100, behavior: 'auto' });
+    expect(result.current.pinned).toBe(true);
   });
 
   it('does not auto-scroll once the reader has scrolled away from the bottom', () => {
@@ -86,6 +112,7 @@ describe('useStickToBottom', () => {
       ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     // Reader scrolls up: 1000 - 0 - 900 = 100px from bottom (past the 80px threshold).
     act(() => fire('scroll'));
@@ -108,6 +135,7 @@ describe('useStickToBottom', () => {
       ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     act(() => fire('wheel'));
     rerender({ deps: [1] });
@@ -138,6 +166,7 @@ describe('useStickToBottom', () => {
     const targetRef = { current: makeTarget() };
 
     const { result } = renderHook(() => useStickToBottom(parentRef, targetRef, [0]));
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     act(() => fire('scroll'));
     expect(result.current.pinned).toBe(false);
@@ -157,6 +186,7 @@ describe('useStickToBottom', () => {
       ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     // Several dependency changes land inside the 100ms debounce window.
     rerender({ deps: [1] });
@@ -182,6 +212,7 @@ describe('useStickToBottom', () => {
       ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     // Deltas arrive every 40ms (< the 100ms window) for ~400ms.
     for (let i = 1; i <= 10; i++) {
@@ -222,6 +253,7 @@ describe('useStickToBottom', () => {
       ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     // Target detaches right before the scheduled timeout fires.
     targetRef.current = null;
@@ -258,6 +290,7 @@ describe('useStickToBottom', () => {
         useStickToBottom({ current: parent }, { current: target }, deps),
       { initialProps: { deps: [0] as unknown[] } },
     );
+    scrollTo.mockClear(); // discard the one-time initial mount scroll
 
     act(() => {
       vi.advanceTimersByTime(100);
