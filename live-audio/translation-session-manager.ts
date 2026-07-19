@@ -49,18 +49,32 @@ interface LiveKitConfig {
 }
 
 /**
- * A translation session is "healthy" only while it has at least one human listener
- * AND a broadcaster present. With no listeners the bots are pointless; with no
- * broadcaster there's no source audio to translate. Either way the session is dead
- * weight (and still burning a Gemini session) and should be reaped. Bot identities
- * (organizer-*, translator-*) are excluded from the listener count.
+ * Whether a translation session should stay alive (else the reaper tears it down).
+ *
+ * With the cost path enabled (`requireListener` false), a session is healthy while a
+ * broadcaster (organizer) is present, so the default translator keeps running even
+ * with zero listeners and a live talk always has at least an English transcript —
+ * cheap because the bridge suspends its Gemini socket when the mic goes quiet.
+ *
+ * With the cost path off (`requireListener` true, the current default), we fall back
+ * to the original rule: healthy only while a human listener AND a broadcaster are
+ * both present, since without silence-suspend an idle bot would burn a Gemini session.
+ *
+ * Either way, no broadcaster means no source audio, so the session is always reaped.
  */
-export function isSessionHealthy(participantIdentities: string[]): boolean {
-  const hasListener = participantIdentities.some(
+export function isSessionHealthy(
+  participantIdentities: string[],
+  opts: { requireListener?: boolean } = {}
+): boolean {
+  // Default to the conservative (cost-path-off) rule so a caller that forgets the
+  // option doesn't accidentally keep listener-less sessions alive.
+  const requireListener = opts.requireListener ?? true;
+  const hasOrganizer = participantIdentities.some((id) => id.startsWith("organizer-"));
+  if (!hasOrganizer) return false;
+  if (!requireListener) return true;
+  return participantIdentities.some(
     (id) => !id.startsWith("organizer-") && !id.startsWith("translator-")
   );
-  const hasOrganizer = participantIdentities.some((id) => id.startsWith("organizer-"));
-  return hasListener && hasOrganizer;
 }
 
 class TranslationSessionManager {
@@ -90,6 +104,12 @@ class TranslationSessionManager {
   private telemetry: TelemetryClient | null = null;
   private reaperTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Cost optimization master switch (default off). When off, bridges never suspend
+  // for silence and the session lifecycle keeps its original "listener + broadcaster"
+  // rule. When on, silence is free so the default translator stays up for any present
+  // broadcaster. See TranslationBridge.silenceGatingEnabled.
+  private silenceGatingEnabled: boolean = false;
+
   private constructor() {}
 
   static getInstance(): TranslationSessionManager {
@@ -107,11 +127,18 @@ class TranslationSessionManager {
     documentManager: DocumentManager;
     livekit: LiveKitConfig;
     telemetry?: TelemetryClient;
+    silenceGatingEnabled?: boolean;
   }): void {
     this.documentManager = opts.documentManager;
     this.livekitConfig = opts.livekit;
     this.telemetry = opts.telemetry ?? null;
+    this.silenceGatingEnabled = opts.silenceGatingEnabled ?? false;
     this.startReaper();
+  }
+
+  /** Whether the silence/cost path is enabled (drives lifecycle + bridge suspend). */
+  isSilenceGatingEnabled(): boolean {
+    return this.silenceGatingEnabled;
   }
 
   // Session management
@@ -167,6 +194,29 @@ class TranslationSessionManager {
       countSubscriber: true,
       writesSourceTranscript: false,
     });
+  }
+
+  /**
+   * Ensure the default translator runs for a broadcasting session, independent of
+   * any listener. Called when the organizer starts broadcasting so there's always an
+   * English transcript. Doesn't count a subscriber — the reaper (broadcaster
+   * presence), not a listener count, keeps this bridge alive.
+   *
+   * No-op unless the cost path is enabled: without silence-suspend an always-on
+   * listener-less bridge would burn a Gemini session, so we keep the original
+   * demand-driven behavior until that's validated.
+   */
+  async ensureBroadcast(sessionId: string, organizerIdentity: string): Promise<void> {
+    if (!this.silenceGatingEnabled) return;
+    this.lastHealthyAt.set(sessionId, Date.now());
+    const writer = this.getOrCreateWriter(sessionId);
+    await this.ensureBridge(
+      sessionId,
+      TranslationSessionManager.DEFAULT_LANGUAGE,
+      organizerIdentity,
+      writer,
+      { countSubscriber: false, writesSourceTranscript: true }
+    );
   }
 
   private getOrCreateWriter(sessionId: string): TranscriptWriter | null {
@@ -227,6 +277,7 @@ class TranslationSessionManager {
       writer,
       writesSourceTranscript: opts.writesSourceTranscript,
       recordEvent,
+      silenceGatingEnabled: this.silenceGatingEnabled,
     };
 
     console.log(`[SessionManager] Creating new bridge for ${targetLanguage} in session ${sessionId}`);
@@ -312,6 +363,14 @@ class TranslationSessionManager {
       `[SessionManager] Unsubscribed from ${targetLanguage} in session ${sessionId} (${bridge.subscriberCount} remaining)`
     );
 
+    // With the cost path on, the default bridge is the always-on English-transcript
+    // source: keep it running while the broadcaster is present (the reaper tears it
+    // down once they leave). With the cost path off, fall through so it's torn down at
+    // zero subscribers like any other language (the original behavior).
+    if (this.silenceGatingEnabled && targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE) {
+      return;
+    }
+
     if (bridge.subscriberCount === 0) {
       console.log(`[SessionManager] No more subscribers for ${targetLanguage}, tearing down bridge`);
       await bridge.stop();
@@ -369,11 +428,13 @@ class TranslationSessionManager {
   }
 
   // ---------------------------------------------------------------------------
-  // Presence reaper: the authoritative teardown. A bot that nobody is listening
-  // to — or whose broadcaster has left (no source audio) — is dead weight and is
-  // still burning a Gemini session, so we tear the whole session down once it has
-  // been unhealthy past a grace window. This does not depend on the client's
-  // best-effort unsubscribe beacon firing.
+  // Presence reaper: the authoritative teardown. A session whose broadcaster has
+  // left has no source audio to translate, so it's dead weight (still holding a
+  // Gemini session) and the whole session is torn down once it has been unhealthy
+  // past a grace window. With the cost path on, listener count no longer gates this —
+  // the default bridge stays up for the transcript while the broadcaster is present,
+  // and silence suspension keeps an idle broadcaster from costing anything. With it
+  // off, a session also needs a listener to stay healthy (the original rule).
   // ---------------------------------------------------------------------------
   private startReaper(): void {
     if (this.reaperTimer) return;
@@ -399,7 +460,9 @@ class TranslationSessionManager {
       let healthy = false;
       try {
         const participants = await client.listParticipants(sessionId);
-        healthy = isSessionHealthy(participants.map((p) => p.identity));
+        healthy = isSessionHealthy(participants.map((p) => p.identity), {
+          requireListener: !this.silenceGatingEnabled,
+        });
       } catch {
         // Room gone / not found → unhealthy.
         healthy = false;
@@ -413,7 +476,7 @@ class TranslationSessionManager {
       const last = this.lastHealthyAt.get(sessionId) ?? now;
       if (now - last > TranslationSessionManager.REAP_GRACE_MS) {
         console.log(
-          `[SessionManager] Reaping session ${sessionId} — no listeners or no broadcaster for ${Math.round(
+          `[SessionManager] Reaping session ${sessionId} — no broadcaster for ${Math.round(
             (now - last) / 1000
           )}s`
         );

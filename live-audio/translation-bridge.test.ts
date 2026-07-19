@@ -1,13 +1,90 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  frameRmsDbfs,
+  isSilentFrame,
   nextBackoffMs,
   parseGoAwayTimeLeftMs,
+  SILENCE_FLOOR_DBFS,
+  SILENCE_THRESHOLD_DBFS,
   reconcileOrganizerAudio,
   shouldRecoverStalledInput,
   type AudioParticipantLike,
   type AudioPublicationLike,
 } from "./translation-bridge.ts";
+
+// Build a PCM16 frame of a constant-amplitude tone (square wave), so its RMS equals
+// the amplitude and the expected dBFS is 20*log10(amp/32768) exactly.
+function toneFrame(amplitude: number, length = 1600): Int16Array {
+  const data = new Int16Array(length);
+  for (let i = 0; i < length; i++) data[i] = i % 2 === 0 ? amplitude : -amplitude;
+  return data;
+}
+
+// Silence gating: we stop paying Gemini to translate a silent mic. These pure
+// helpers decide whether an input frame is speech or room tone; the suspend/resume
+// socket plumbing built on top of them is not unit-tested (same as reconnect).
+describe("frameRmsDbfs", () => {
+  it("is -Infinity for digital silence (all zeros or empty)", () => {
+    expect(frameRmsDbfs(new Int16Array(0))).toBe(-Infinity);
+    expect(frameRmsDbfs(new Int16Array(1600))).toBe(-Infinity);
+  });
+
+  it("is ~0 dBFS for a full-scale tone", () => {
+    expect(frameRmsDbfs(toneFrame(32768))).toBeCloseTo(0, 1);
+  });
+
+  it("drops ~6 dB per halving of amplitude", () => {
+    expect(frameRmsDbfs(toneFrame(16384))).toBeCloseTo(-6.02, 1);
+    expect(frameRmsDbfs(toneFrame(8192))).toBeCloseTo(-12.04, 1);
+  });
+});
+
+describe("isSilentFrame", () => {
+  it("treats quiet room tone (below the threshold) as silence", () => {
+    // ~-42 dBFS — clearly below the -30 dBFS bar.
+    const quiet = toneFrame(256);
+    expect(frameRmsDbfs(quiet)).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+    expect(isSilentFrame(quiet)).toBe(true);
+  });
+
+  it("treats audible speech-level input (above the threshold) as non-silence", () => {
+    // ~-24 dBFS — above the bar, so it must never be mistaken for silence.
+    const speech = toneFrame(2048);
+    expect(frameRmsDbfs(speech)).toBeGreaterThan(SILENCE_THRESHOLD_DBFS);
+    expect(isSilentFrame(speech)).toBe(false);
+  });
+
+  it("honors an explicit threshold", () => {
+    const frame = toneFrame(2048); // ~-24 dBFS
+    expect(isSilentFrame(frame, -20)).toBe(true);
+    expect(isSilentFrame(frame, -30)).toBe(false);
+  });
+});
+
+// Two thresholds keep a faint consonant from being clipped. The voice bar
+// (SILENCE_THRESHOLD_DBFS) is strict — it drives suspend/resume — so a quiet
+// unvoiced consonant reads "silent" for that purpose. But the gap-collapse only
+// drops frames below the much lower dead-air floor (SILENCE_FLOOR_DBFS), and a
+// consonant sits above the floor, so it is always kept.
+describe("silence thresholds", () => {
+  it("keeps the dead-air floor safely below the voice bar", () => {
+    expect(SILENCE_FLOOR_DBFS).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+  });
+
+  it("puts a faint consonant-level frame below the voice bar but above the floor", () => {
+    // ~-42 dBFS: quiet enough to read as non-voice, but well above the dead-air
+    // floor, so the gap-collapse must never drop it.
+    const faint = frameRmsDbfs(toneFrame(256));
+    expect(faint).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+    expect(faint).toBeGreaterThan(SILENCE_FLOOR_DBFS);
+  });
+
+  it("puts genuine dead air below the floor", () => {
+    // ~-54 dBFS: near-digital-silence room tone, the only thing collapse may drop.
+    expect(frameRmsDbfs(toneFrame(64))).toBeLessThan(SILENCE_FLOOR_DBFS);
+  });
+});
 
 // The Gemini Live session is periodically terminated; the bridge reconnects with
 // backoff and reads the goAway `timeLeft` to reconnect proactively. These pure

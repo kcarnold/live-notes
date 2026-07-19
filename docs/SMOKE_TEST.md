@@ -60,6 +60,14 @@ an incident happens that this list would not have caught, add a line.
       fails, so it can't be provoked by running longer. `scenario` also accepts
       `signalReconnect`, `nodeFailure`, `migration`, `serverLeave`.
 
+Cost path (only when `LIVE_AUDIO_SILENCE_GATING` is enabled — off by default):
+
+- [ ] With **no listener yet**, the English transcript still flows — the default translator
+      runs whenever the broadcaster is present.
+- [ ] **Silence suspend/resume**: stay silent >30 s (server logs "Suspending Gemini after…");
+      then speak — the first words resume translation ("resuming Gemini after…") without the
+      listener resubscribing.
+
 ## 5. TTS (text-to-speech on translated notes)
 
 - [ ] Tap a translated line: audio plays. Tap again: cancels.
@@ -67,5 +75,7 @@ an incident happens that this list would not have caught, add a line.
 
 ## 6. Teardown sanity
 
-- [ ] Close all listener tabs; confirm translator bots get reaped (server logs) — no
-      orphaned Gemini sessions burning quota.
+- [ ] Close all listener tabs; confirm translator bots get reaped (server logs) — no orphaned
+      Gemini sessions burning quota. (With the cost path enabled, closing listeners is not
+      enough: the default translator stays up for the transcript until the broadcaster also
+      leaves.)

@@ -205,12 +205,24 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
   return { url, apiKey, apiSecret };
 }
 
+// Cost optimization (silence suspend/resume + always-on default translator) is off
+// unless LIVE_AUDIO_SILENCE_GATING is truthy, so the goaway/reliability fixes can
+// ship while the cost path is still being validated. The goaway/reconnect buffering
+// is independent and always on.
+const SILENCE_GATING_ENABLED = /^(1|true|yes|on)$/i.test(process.env.LIVE_AUDIO_SILENCE_GATING ?? '');
+
 // Give the translation manager what it needs to persist transcripts into Yjs and
 // reap idle translator bots. No-op for transcript/reaper if LiveKit is unconfigured.
 {
   const lk = getLiveKitConfig();
   if (lk) {
-    TranslationSessionManager.getInstance().init({ documentManager, livekit: lk, telemetry: phClient });
+    TranslationSessionManager.getInstance().init({
+      documentManager,
+      livekit: lk,
+      telemetry: phClient,
+      silenceGatingEnabled: SILENCE_GATING_ENABLED,
+    });
+    console.log(`[server] Live-audio silence gating (cost path): ${SILENCE_GATING_ENABLED ? 'ENABLED' : 'disabled'}`);
   }
 }
 
@@ -238,6 +250,21 @@ app.post('/api/livekit/token', async (req, res) => {
       canPublishData: isOrganizer,
     });
     const token = await at.toJwt();
+
+    // A broadcaster requesting a publish token IS the signal that a talk is live, so
+    // ensure the default translator runs even before any listener joins — a live talk
+    // always has at least an English transcript. Fire-and-forget: don't block or fail
+    // token issuance on bridge startup; the bridge waits for the organizer's audio,
+    // and the reaper cleans up if they never actually connect.
+    if (isOrganizer) {
+      void TranslationSessionManager.getInstance()
+        .ensureBroadcast(room, ORGANIZER_IDENTITY)
+        .catch((e) => {
+          phClient.captureException(e);
+          console.error('ensureBroadcast failed:', e);
+        });
+    }
+
     return res.json({ token, serverUrl: lk.url });
   } catch (error) {
     phClient.captureException(error);
