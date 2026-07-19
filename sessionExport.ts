@@ -25,6 +25,11 @@ import {
   type SlideTranslationEntry,
   type ResolvedSlideTranslation,
 } from './src/slideTranslation.ts';
+import {
+  LIVE_TRANSCRIPT_PREFIX,
+  LIVE_TRANSCRIPT_SOURCE_CODE,
+  liveTranscriptLabel,
+} from './src/transcriptKeys.ts';
 
 // --- Structured, render-agnostic representation -------------------------------
 
@@ -78,11 +83,6 @@ export interface SessionExport {
   /** Legacy Web Speech API transcript (`transcriptDoc`); empty in current sessions. */
   transcript: string;
 }
-
-/** Prefix the live-audio pipeline uses for per-language transcript Y.Text keys. */
-const LIVE_TRANSCRIPT_PREFIX = 'liveTranscript-';
-/** Code of the English source transcript (matches TranslationBridge.SOURCE_CODE). */
-const LIVE_TRANSCRIPT_SOURCE_CODE = 'en';
 
 // --- Y.Doc extraction ---------------------------------------------------------
 
@@ -223,7 +223,6 @@ function extractTranscript(ydoc: Y.Doc): string {
  * English source is listed first; the rest are sorted by localized label.
  */
 function extractLiveTranscripts(ydoc: Y.Doc): ExportedLiveTranscript[] {
-  const displayNames = new Intl.DisplayNames(['en'], { type: 'language' });
   const transcripts: ExportedLiveTranscript[] = [];
 
   for (const key of ydoc.share.keys()) {
@@ -232,13 +231,7 @@ function extractLiveTranscripts(ydoc: Y.Doc): ExportedLiveTranscript[] {
     if (text === '') continue;
     const code = key.slice(LIVE_TRANSCRIPT_PREFIX.length);
     const isSource = code === LIVE_TRANSCRIPT_SOURCE_CODE;
-    let label: string;
-    try {
-      label = displayNames.of(code) ?? code;
-    } catch {
-      label = code;
-    }
-    transcripts.push({ code, label, isSource, text });
+    transcripts.push({ code, label: liveTranscriptLabel(code), isSource, text });
   }
 
   return transcripts.sort((a, b) => {

@@ -1,6 +1,8 @@
+import type { ReactNode } from 'react';
 import { useMap, useYDoc } from '@y-sweet/react';
 import { useStrings } from './useLocale';
 import { getDocId } from './getDocId';
+import { TranscriptHealth } from './TranscriptHealth';
 
 /**
  * Session status / admin page.
@@ -30,9 +32,14 @@ export interface StatusViewProps {
    * components start heartbeating; the skeleton only reports the count for now.
    */
   statusEntries: Record<string, unknown>;
+  /**
+   * Live-transcript liveness tiles, injected by the container (they need per-Y.Text
+   * observers). Kept as a slot so the pure component stays testable without Yjs.
+   */
+  liveTranscripts?: ReactNode;
 }
 
-export function StatusView({ docId, statusEntries }: StatusViewProps) {
+export function StatusView({ docId, statusEntries, liveTranscripts }: StatusViewProps) {
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
   const reportingCount = Object.keys(statusEntries).length;
@@ -73,6 +80,14 @@ export function StatusView({ docId, statusEntries }: StatusViewProps) {
           </p>
         </section>
 
+        {/* Live transcripts — real end-to-end liveness, read from the transcript Y.Texts. */}
+        <section className={sectionClass}>
+          <h2 className={sectionTitleClass}>{s.statusTranscriptsTitle}</h2>
+          {liveTranscripts ?? (
+            <p className={placeholderClass}>{s.statusTranscriptsEmpty}</p>
+          )}
+        </section>
+
         {/* Preflight canary — placeholder until #72. */}
         <section className={sectionClass}>
           <h2 className={sectionTitleClass}>{s.statusCanaryTitle}</h2>
@@ -111,7 +126,13 @@ export function StatusViewContainer() {
   statusMap.forEach((value, key) => {
     statusEntries[key] = value;
   });
-  return <StatusView docId={getDocId()} statusEntries={statusEntries} />;
+  return (
+    <StatusView
+      docId={getDocId()}
+      statusEntries={statusEntries}
+      liveTranscripts={<TranscriptHealth />}
+    />
+  );
 }
 
 export default StatusView;
