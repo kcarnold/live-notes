@@ -55,14 +55,14 @@ interface TokenResp {
 // rendered by the parent, outside the room.
 function ListenAudio({
   docId,
-  releaseTarget,
+  translateTarget,
   translatorIdentity,
   isOriginal,
   audioOn,
   onToggleAudio,
 }: {
   docId: string;
-  releaseTarget: string;
+  translateTarget: string;
   translatorIdentity: string | null;
   isOriginal: boolean;
   audioOn: boolean;
@@ -78,15 +78,15 @@ function ListenAudio({
   // The bot we depend on (for translated audio, or just the transcript when
   // listening to the original). Identities are deterministic: translator-<code>.
   const translatorPresent = remoteParticipants.some(
-    (p) => p.identity === `translator-${releaseTarget}`
+    (p) => p.identity === `translator-${translateTarget}`
   );
 
-  // Self-heal: the server can lose our translator (restart, presence reap, its room
-  // connection dropping) and nothing server-side recreates it — so while the speaker
-  // is broadcasting without our bot, periodically re-request it. Gated on speaker
-  // presence so a pre-broadcast wait doesn't churn against the server's presence
-  // reaper (docs/live-audio-state-architecture.md, "the waiting-room reap"): the
-  // re-request then fires exactly when the session becomes healthy, so it sticks.
+  // Self-heal backstop: the server's presence supervisor recreates lost bridges from
+  // our `listen` attribute, but if that path is ever wrong or slow, re-requesting
+  // here converges too — same reconcile principle, run from both ends. Gated on
+  // speaker presence so a pre-broadcast wait doesn't churn against the supervisor's
+  // wind-down (docs/live-audio-state-architecture.md, "the waiting-room reap"): the
+  // re-request then fires exactly when demand becomes satisfiable, so it sticks.
   const needsTranslator = speakerPresent && !translatorPresent;
   const lastEnsureRef = useRef(0);
   // Stamp mount time (not in render — Date.now is impure there) so the bot the parent
@@ -103,7 +103,7 @@ function ListenAudio({
       void fetch("/api/livekit/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: docId, targetLanguage: releaseTarget }),
+        body: JSON.stringify({ sessionId: docId, targetLanguage: translateTarget }),
       }).catch(() => {
         // Transient; the next tick retries.
       });
@@ -111,7 +111,7 @@ function ListenAudio({
     ensure();
     const id = setInterval(ensure, ENSURE_TRANSLATOR_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [needsTranslator, docId, releaseTarget]);
+  }, [needsTranslator, docId, translateTarget]);
 
   // Subscribe to the audio we want only while audio is enabled: the translator
   // bot for a translation, or the speaker's raw mic for "Original / English".
@@ -132,23 +132,9 @@ function ListenAudio({
     }
   }, [room, translatorIdentity, isOriginal, remoteParticipants, audioOn]);
 
-  // Decrement the listener count when this pane goes away (unmount or tab close)
-  // so idle translator bots tear down. (Best-effort; the server's presence reaper
-  // is the authoritative teardown.)
-  useEffect(() => {
-    const release = () => {
-      const body = JSON.stringify({ sessionId: docId, targetLanguage: releaseTarget });
-      navigator.sendBeacon(
-        "/api/livekit/translate/unsubscribe",
-        new Blob([body], { type: "application/json" })
-      );
-    };
-    window.addEventListener("beforeunload", release);
-    return () => {
-      window.removeEventListener("beforeunload", release);
-      release();
-    };
-  }, [docId, releaseTarget]);
+  // No unload beacon: leaving the LiveKit room IS the unsubscribe signal now — the
+  // server's supervisor reads demand from room presence and winds the bridge down
+  // after a grace window.
 
   // Three-light status: gray = no speaker, amber = speaker is live but our
   // translator is missing (being re-requested above), green = fully wired. For
@@ -227,10 +213,19 @@ export function ListenViewer({ language }: { language: string }) {
         if (tr.error) throw new Error(tr.error);
 
         const identity = `attendee-${Math.random().toString(36).slice(2, 8)}`;
+        // listenLanguage rides into the LiveKit token as a participant attribute:
+        // it's how the server's translation supervisor reads demand from room
+        // presence, so our bridge survives as long as we're in the room — no
+        // refcounts, no unload beacon.
         const tk = (await fetch("/api/livekit/token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ room: docId, identity, role: "attendee" }),
+          body: JSON.stringify({
+            room: docId,
+            identity,
+            role: "attendee",
+            listenLanguage: translateTarget,
+          }),
         }).then((r) => r.json())) as TokenResp;
         if (tk.error) throw new Error(tk.error);
         if (!tk.token || !tk.serverUrl) {
@@ -309,7 +304,7 @@ export function ListenViewer({ language }: { language: string }) {
       >
         <ListenAudio
           docId={docId}
-          releaseTarget={translateTarget}
+          translateTarget={translateTarget}
           translatorIdentity={conn.translatorIdentity}
           isOriginal={isOriginal}
           audioOn={audioOn}

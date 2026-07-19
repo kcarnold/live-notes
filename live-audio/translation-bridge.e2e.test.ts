@@ -524,6 +524,32 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     expect(bridge.status).toBe("closed"); // stop(): out of the room, recreatable on demand
   });
 
+  it("drops a setupComplete that lost a race with stop() — no socket resurrection", async () => {
+    // The epoch guard. A goAway starts a make-before-break replacement; the bridge is
+    // stopped before that socket finishes setup, but its setupComplete is already in
+    // flight. Pre-fix, onSocketReady swapped the dead-on-arrival socket in anyway —
+    // an open, paid-for Gemini session strapped to a closed bridge, invisible to
+    // every monitor. The guard must drop it instead.
+    const events: string[] = [];
+    const { bridge, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 1);
+
+    // Gemini warns it will terminate → the bridge opens a pending replacement...
+    FakeGeminiSocket.instances[0].emit(
+      "message",
+      Buffer.from(JSON.stringify({ goAway: { timeLeft: "5s" } }))
+    );
+    // ...and the bridge is stopped before that replacement completes setup.
+    await bridge.stop();
+    await vi.advanceTimersByTimeAsync(100); // the replacement's setupComplete lands now
+
+    expect(events.filter((e) => e === "gemini_session_setup_complete")).toHaveLength(1); // initial only
+    expect(events).toContain("gemini_stale_socket_dropped");
+    expect(bridge.status).toBe("closed");
+  });
+
   it("never escalates against a muted mic — that silence is expected", async () => {
     // Same dead-frames signal, opposite meaning: the organizer muted their mic. Frames
     // stopping is correct behavior, and recreating the bridge wouldn't (and shouldn't)

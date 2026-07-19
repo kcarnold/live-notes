@@ -1,7 +1,15 @@
 /**
- * TranslationSessionManager: Singleton that enforces "max 1 Gemini Live API
- * session per language per room" constraint, owns the per-session Yjs transcript
- * writer, and reaps idle translator bots.
+ * TranslationSessionManager: supervises translator bridges by reconciling the set of
+ * running bridges against LiveKit room presence — the single source of truth for demand.
+ *
+ * There is no listener refcount and no client beacon. Who is in the room, and what they
+ * asked to hear (the `listen` participant attribute their token carries), IS the demand
+ * signal; the supervisor loop diffs that against the bridges actually running and
+ * starts, stops, or recreates bridges to close the gap. The loop runs on an interval
+ * and on pokes (a token issued, a listener's /translate request), so every failure mode
+ * that loses a bridge — server restart, room disconnect, a crashed start — heals on the
+ * next tick as long as demand persists. Design rationale and the incident history are
+ * in docs/live-audio-state-architecture.md.
  *
  * Usage:
  *   const manager = TranslationSessionManager.getInstance();
@@ -15,7 +23,7 @@ import { RoomServiceClient } from "livekit-server-sdk";
 
 import { TranscriptWriter } from "./transcript-writer.ts";
 import { TranslationBridge } from "./translation-bridge.ts";
-import type { BridgeStatus } from "./translation-bridge.ts";
+import type { BridgeHealth, BridgeStatus } from "./translation-bridge.ts";
 
 /**
  * Minimal telemetry client (structurally satisfied by the PostHog node client).
@@ -34,12 +42,7 @@ export interface TranslationInfo {
   translatorIdentity: string;
   status: BridgeStatus;
   subscriberCount: number;
-}
-
-export interface SessionInfo {
-  sessionId: string;
-  organizerIdentity: string;
-  createdAt: Date;
+  health: BridgeHealth;
 }
 
 interface LiveKitConfig {
@@ -48,69 +51,156 @@ interface LiveKitConfig {
   apiSecret: string;
 }
 
-/**
- * Whether a translation session should stay alive (else the reaper tears it down).
- *
- * With the cost path enabled (`requireListener` false), a session is healthy while a
- * broadcaster (organizer) is present, so the default translator keeps running even
- * with zero listeners and a live talk always has at least an English transcript —
- * cheap because the bridge suspends its Gemini socket when the mic goes quiet.
- *
- * With the cost path off (`requireListener` true, the current default), we fall back
- * to the original rule: healthy only while a human listener AND a broadcaster are
- * both present, since without silence-suspend an idle bot would burn a Gemini session.
- *
- * Either way, no broadcaster means no source audio, so the session is always reaped.
- */
-export function isSessionHealthy(
-  participantIdentities: string[],
-  opts: { requireListener?: boolean } = {}
-): boolean {
-  // Default to the conservative (cost-path-off) rule so a caller that forgets the
-  // option doesn't accidentally keep listener-less sessions alive.
-  const requireListener = opts.requireListener ?? true;
-  const hasOrganizer = participantIdentities.some((id) => id.startsWith("organizer-"));
-  if (!hasOrganizer) return false;
-  if (!requireListener) return true;
-  return participantIdentities.some(
-    (id) => !id.startsWith("organizer-") && !id.startsWith("translator-")
-  );
+/** A room participant as the supervisor sees it: identity + token attributes. */
+export interface PresentParticipant {
+  identity: string;
+  attributes?: Record<string, string>;
 }
 
-class TranslationSessionManager {
+/**
+ * The supervisor's view of LiveKit — which rooms have participants, and who they are.
+ * Implemented over RoomServiceClient in production; injectable so the reconcile loop
+ * is testable without a LiveKit server.
+ */
+export interface RoomDirectory {
+  listRooms(): Promise<string[]>;
+  listParticipants(room: string): Promise<PresentParticipant[]>;
+}
+
+/** Participant attribute carrying a listener's requested translation language. */
+export const LISTEN_ATTRIBUTE = "listen";
+
+const ORGANIZER_PREFIX = "organizer-";
+const TRANSLATOR_PREFIX = "translator-";
+
+// The supervisor cadence, and the two dampers that keep it from thrashing:
+// a language keeps its bridge for STOP_GRACE_MS after demand last existed (so a page
+// refresh or a transient LiveKit read failure doesn't churn a Gemini session), and a
+// language whose bridge fails to start isn't retried for START_RETRY_MS (ensureBridge
+// already retries 3× internally per attempt).
+const RECONCILE_INTERVAL_MS = 10_000;
+const STOP_GRACE_MS = 60_000;
+const START_RETRY_MS = 30_000;
+
+/**
+ * Which translation languages should be running for a room, given who is present
+ * right now. The whole demand model in one pure function:
+ *
+ *   - No broadcaster → nothing runs. A listener waiting for the talk to start costs
+ *     nothing, and the bridge starts on the tick where the organizer appears — the
+ *     "waiting-room reap" outage (2026-07-19) is inexpressible in this shape.
+ *   - Broadcaster present → every language some listener's `listen` attribute names,
+ *     plus the default language (the source-transcript writer) while anyone is
+ *     listening — or unconditionally when the silence-gating cost path makes an idle
+ *     bridge ~free.
+ *
+ * Listeners without a `listen` attribute (older clients) still count as listeners, so
+ * the default bridge runs for them; their specific language arrives via the
+ * `/translate` nudge, which stamps demand directly.
+ */
+export function computeDesiredLanguages(
+  participants: PresentParticipant[],
+  opts: { defaultLanguage: string; silenceGatingEnabled: boolean }
+): Set<string> {
+  const desired = new Set<string>();
+  const hasBroadcaster = participants.some((p) => p.identity.startsWith(ORGANIZER_PREFIX));
+  if (!hasBroadcaster) return desired;
+
+  const listeners = participants.filter(
+    (p) => !p.identity.startsWith(ORGANIZER_PREFIX) && !p.identity.startsWith(TRANSLATOR_PREFIX)
+  );
+  for (const listener of listeners) {
+    const lang = listener.attributes?.[LISTEN_ATTRIBUTE];
+    if (lang) desired.add(lang);
+  }
+  if (opts.silenceGatingEnabled || listeners.length > 0) {
+    desired.add(opts.defaultLanguage);
+  }
+  return desired;
+}
+
+export interface RunningBridgeView {
+  language: string;
+  status: BridgeStatus;
+}
+
+/**
+ * Diff desired languages against running bridges into actions. Pure so the whole
+ * supervisor decision is unit-testable:
+ *
+ *   - start: desired but missing, or present in a dead state ("error"/"closed" —
+ *     ensureBridge cleans those up and recreates, so start doubles as recreate).
+ *   - stop: running but undesired for longer than the grace window.
+ */
+export function planRoomActions(params: {
+  desired: ReadonlySet<string>;
+  running: RunningBridgeView[];
+  lastDesiredAt: ReadonlyMap<string, number>;
+  now: number;
+  stopGraceMs: number;
+}): { start: string[]; stop: string[] } {
+  const start: string[] = [];
+  const stop: string[] = [];
+  const runningByLang = new Map(params.running.map((b) => [b.language, b]));
+
+  for (const lang of params.desired) {
+    const bridge = runningByLang.get(lang);
+    if (!bridge || bridge.status === "error" || bridge.status === "closed") start.push(lang);
+  }
+  for (const bridge of params.running) {
+    if (params.desired.has(bridge.language)) continue;
+    const last = params.lastDesiredAt.get(bridge.language) ?? 0;
+    if (params.now - last > params.stopGraceMs) stop.push(bridge.language);
+  }
+  return { start, stop };
+}
+
+/** Production RoomDirectory over the LiveKit server API. */
+function roomServiceDirectory(lk: LiveKitConfig): RoomDirectory {
+  const client = new RoomServiceClient(lk.url.replace(/^ws/, "http"), lk.apiKey, lk.apiSecret);
+  return {
+    listRooms: async () => (await client.listRooms()).map((r) => r.name),
+    listParticipants: async (room: string) =>
+      (await client.listParticipants(room)).map((p) => ({
+        identity: p.identity,
+        attributes: p.attributes,
+      })),
+  };
+}
+
+export class TranslationSessionManager {
   private static instance: TranslationSessionManager;
 
   // The primary/default translation language. It runs whenever anyone is
   // listening and is the sole writer of the source (English) transcript.
   static readonly DEFAULT_LANGUAGE = "fr";
 
-  private static readonly REAP_INTERVAL_MS = 30_000;
-  private static readonly REAP_GRACE_MS = 60_000;
-
   // Map<sessionId, Map<languageCode, TranslationBridge>>
   private translations: Map<string, Map<string, TranslationBridge>> = new Map();
-
-  // Map<sessionId, SessionInfo>
-  private sessions: Map<string, SessionInfo> = new Map();
 
   // Map<sessionId, TranscriptWriter> — one Yjs writer per session, shared by bridges.
   private writers: Map<string, TranscriptWriter> = new Map();
 
-  // Map<sessionId, epoch-ms> — last time the session had a listener AND a broadcaster.
-  private lastHealthyAt: Map<string, number> = new Map();
+  // Map<sessionId, Map<language, epoch-ms>> — when demand for a language last existed
+  // (a matching listener present, or a /translate nudge). Drives the stop grace.
+  private lastDesiredAt: Map<string, Map<string, number>> = new Map();
+
+  // Map<`${sessionId}:${language}`, epoch-ms> — last supervisor-initiated start
+  // attempt, so a language whose bridge won't start isn't retried every tick.
+  private lastStartAttemptAt: Map<string, number> = new Map();
 
   private documentManager: DocumentManager | null = null;
   private livekitConfig: LiveKitConfig | null = null;
   private telemetry: TelemetryClient | null = null;
-  private reaperTimer: ReturnType<typeof setInterval> | null = null;
+  private directory: RoomDirectory | null = null;
+  private bridgeFactory: typeof defaultBridgeFactory = defaultBridgeFactory;
+  private supervisorTimer: ReturnType<typeof setInterval> | null = null;
+  private reconciling = false;
 
   // Cost optimization master switch (default off). When off, bridges never suspend
-  // for silence and the session lifecycle keeps its original "listener + broadcaster"
-  // rule. When on, silence is free so the default translator stays up for any present
-  // broadcaster. See TranslationBridge.silenceGatingEnabled.
+  // for silence and the default bridge runs only while someone is listening. When on,
+  // silence is free so the default translator runs for any present broadcaster.
   private silenceGatingEnabled: boolean = false;
-
-  private constructor() {}
 
   static getInstance(): TranslationSessionManager {
     if (!TranslationSessionManager.instance) {
@@ -120,60 +210,55 @@ class TranslationSessionManager {
   }
 
   /**
-   * Provide the dependencies the manager needs to persist transcripts and reap
-   * idle bots. Called once from the server at boot.
+   * Provide the dependencies the manager needs to persist transcripts and supervise
+   * bridges. Called once from the server at boot; tests construct their own instance
+   * and inject a fake directory/bridge factory.
    */
   init(opts: {
     documentManager: DocumentManager;
     livekit: LiveKitConfig;
     telemetry?: TelemetryClient;
     silenceGatingEnabled?: boolean;
+    directory?: RoomDirectory;
+    bridgeFactory?: typeof defaultBridgeFactory;
   }): void {
     this.documentManager = opts.documentManager;
     this.livekitConfig = opts.livekit;
     this.telemetry = opts.telemetry ?? null;
     this.silenceGatingEnabled = opts.silenceGatingEnabled ?? false;
-    this.startReaper();
-  }
-
-  /** Whether the silence/cost path is enabled (drives lifecycle + bridge suspend). */
-  isSilenceGatingEnabled(): boolean {
-    return this.silenceGatingEnabled;
-  }
-
-  // Session management
-  createSession(sessionId: string, organizerIdentity: string): SessionInfo {
-    const info: SessionInfo = {
-      sessionId,
-      organizerIdentity,
-      createdAt: new Date(),
-    };
-    this.sessions.set(sessionId, info);
-    console.log(`[SessionManager] Created session ${sessionId} for organizer ${organizerIdentity}`);
-    return info;
-  }
-
-  getSession(sessionId: string): SessionInfo | undefined {
-    return this.sessions.get(sessionId);
+    this.directory = opts.directory ?? roomServiceDirectory(opts.livekit);
+    if (opts.bridgeFactory) this.bridgeFactory = opts.bridgeFactory;
+    this.startSupervisor();
   }
 
   /**
-   * Ensure translation is running for a language and return its bridge.
-   *
-   * Always keeps the English transcript available cheaply by ensuring the
-   * default/primary bridge (DEFAULT_LANGUAGE) runs while anyone is listening —
-   * it is the sole writer of the source transcript. The transcript is never
-   * cleared here: it accumulates in the day-scoped doc for accountability, so a
-   * transient drop-to-zero-listeners and rejoin can't wipe a live talk.
+   * Ask the supervisor to reconcile a room soon (fire-and-forget). Used by the token
+   * route so a broadcaster going live gets their bridges within seconds rather than
+   * on the next tick. Purely a latency optimization: the interval loop converges to
+   * the same state without it.
+   */
+  poke(sessionId: string): void {
+    void this.reconcileRoom(sessionId).catch((e) => {
+      console.error(`[SessionManager] poke reconcile failed for ${sessionId}:`, e);
+    });
+  }
+
+  /**
+   * Ensure translation is running for a language and return its bridge — the fast
+   * path behind POST /translate, so the response can carry the translator identity.
+   * Also stamps demand for the language, covering listeners whose token predates the
+   * `listen` attribute. The supervisor remains the authority on teardown; nothing
+   * here counts subscribers.
    */
   async getOrCreate(
     sessionId: string,
     targetLanguage: string,
     organizerIdentity: string
   ): Promise<TranslationBridge> {
-    // Protect a just-started session from being reaped before its first listener
-    // has finished joining the LiveKit room.
-    this.lastHealthyAt.set(sessionId, Date.now());
+    const now = Date.now();
+    const stamps = this.getStamps(sessionId);
+    stamps.set(targetLanguage, now);
+    stamps.set(TranslationSessionManager.DEFAULT_LANGUAGE, now);
 
     const writer = this.getOrCreateWriter(sessionId);
 
@@ -182,41 +267,21 @@ class TranslationSessionManager {
       sessionId,
       TranslationSessionManager.DEFAULT_LANGUAGE,
       organizerIdentity,
-      writer,
-      { countSubscriber: targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE, writesSourceTranscript: true }
+      writer
     );
-
     if (targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE) {
       return defaultBridge;
     }
-
-    return this.ensureBridge(sessionId, targetLanguage, organizerIdentity, writer, {
-      countSubscriber: true,
-      writesSourceTranscript: false,
-    });
+    return this.ensureBridge(sessionId, targetLanguage, organizerIdentity, writer);
   }
 
-  /**
-   * Ensure the default translator runs for a broadcasting session, independent of
-   * any listener. Called when the organizer starts broadcasting so there's always an
-   * English transcript. Doesn't count a subscriber — the reaper (broadcaster
-   * presence), not a listener count, keeps this bridge alive.
-   *
-   * No-op unless the cost path is enabled: without silence-suspend an always-on
-   * listener-less bridge would burn a Gemini session, so we keep the original
-   * demand-driven behavior until that's validated.
-   */
-  async ensureBroadcast(sessionId: string, organizerIdentity: string): Promise<void> {
-    if (!this.silenceGatingEnabled) return;
-    this.lastHealthyAt.set(sessionId, Date.now());
-    const writer = this.getOrCreateWriter(sessionId);
-    await this.ensureBridge(
-      sessionId,
-      TranslationSessionManager.DEFAULT_LANGUAGE,
-      organizerIdentity,
-      writer,
-      { countSubscriber: false, writesSourceTranscript: true }
-    );
+  private getStamps(sessionId: string): Map<string, number> {
+    let stamps = this.lastDesiredAt.get(sessionId);
+    if (!stamps) {
+      stamps = new Map();
+      this.lastDesiredAt.set(sessionId, stamps);
+    }
+    return stamps;
   }
 
   private getOrCreateWriter(sessionId: string): TranscriptWriter | null {
@@ -231,14 +296,14 @@ class TranslationSessionManager {
 
   /**
    * Create-or-reuse a single language's bridge, with a short retry on transient
-   * startup failures (LiveKit region discovery / Gemini WS can blip).
+   * startup failures (LiveKit region discovery / Gemini WS can blip). Only the
+   * default-language bridge transcribes the source audio.
    */
   private async ensureBridge(
     sessionId: string,
     targetLanguage: string,
     organizerIdentity: string,
-    writer: TranscriptWriter | null,
-    opts: { countSubscriber: boolean; writesSourceTranscript: boolean }
+    writer: TranscriptWriter | null
   ): Promise<TranslationBridge> {
     let languageMap = this.translations.get(sessionId);
     if (languageMap) {
@@ -246,7 +311,6 @@ class TranslationSessionManager {
       // Reuse active OR still-starting bridges so concurrent requests (common for
       // the default bridge) don't spin up duplicate Gemini sessions.
       if (existing && (existing.status === "active" || existing.status === "starting")) {
-        if (opts.countSubscriber) existing.subscriberCount++;
         return existing;
       }
       if (existing && (existing.status === "error" || existing.status === "closed")) {
@@ -275,7 +339,7 @@ class TranslationSessionManager {
       livekitApiKey: this.livekitConfig?.apiKey ?? process.env.LIVEKIT_API_KEY!,
       livekitApiSecret: this.livekitConfig?.apiSecret ?? process.env.LIVEKIT_API_SECRET!,
       writer,
-      writesSourceTranscript: opts.writesSourceTranscript,
+      writesSourceTranscript: targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE,
       recordEvent,
       silenceGatingEnabled: this.silenceGatingEnabled,
     };
@@ -285,13 +349,12 @@ class TranslationSessionManager {
     const MAX_START_ATTEMPTS = 3;
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
-      const bridge = new TranslationBridge(sessionId, targetLanguage, organizerIdentity, config);
+      const bridge = this.bridgeFactory(sessionId, targetLanguage, organizerIdentity, config);
       // Store before starting so concurrent requests reuse this in-progress bridge.
       languageMap.set(targetLanguage, bridge);
 
       try {
         await bridge.start();
-        bridge.subscriberCount = opts.countSubscriber ? 1 : 0;
         return bridge;
       } catch (error) {
         lastError = error;
@@ -320,6 +383,7 @@ class TranslationSessionManager {
         translatorIdentity: bridge.identity,
         status: bridge.status,
         subscriberCount: bridge.subscriberCount,
+        health: bridge.health(),
       });
     }
     return result;
@@ -345,64 +409,6 @@ class TranslationSessionManager {
     return fired;
   }
 
-  /**
-   * Decrement subscriber count for a language (best-effort fast path). The
-   * presence reaper is the authoritative teardown, so this only needs to handle
-   * clean unsubscribes. The default bridge is intentionally left running here —
-   * it is torn down by the reaper when the session has no listeners at all.
-   */
-  async unsubscribe(sessionId: string, targetLanguage: string): Promise<void> {
-    const languageMap = this.translations.get(sessionId);
-    if (!languageMap) return;
-
-    const bridge = languageMap.get(targetLanguage);
-    if (!bridge) return;
-
-    bridge.subscriberCount = Math.max(0, bridge.subscriberCount - 1);
-    console.log(
-      `[SessionManager] Unsubscribed from ${targetLanguage} in session ${sessionId} (${bridge.subscriberCount} remaining)`
-    );
-
-    // With the cost path on, the default bridge is the always-on English-transcript
-    // source: keep it running while the broadcaster is present (the reaper tears it
-    // down once they leave). With the cost path off, fall through so it's torn down at
-    // zero subscribers like any other language (the original behavior).
-    if (this.silenceGatingEnabled && targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE) {
-      return;
-    }
-
-    if (bridge.subscriberCount === 0) {
-      console.log(`[SessionManager] No more subscribers for ${targetLanguage}, tearing down bridge`);
-      await bridge.stop();
-      languageMap.delete(targetLanguage);
-
-      if (languageMap.size === 0) {
-        await this.teardownSession(sessionId);
-      }
-    }
-  }
-
-  async removeTranslation(sessionId: string, targetLanguage: string): Promise<void> {
-    const languageMap = this.translations.get(sessionId);
-    if (!languageMap) return;
-
-    const bridge = languageMap.get(targetLanguage);
-    if (bridge) {
-      await bridge.stop();
-      languageMap.delete(targetLanguage);
-      console.log(`[SessionManager] Removed bridge for ${targetLanguage} in session ${sessionId}`);
-    }
-    if (languageMap.size === 0) {
-      await this.teardownSession(sessionId);
-    }
-  }
-
-  async removeAllTranslations(sessionId: string): Promise<void> {
-    await this.teardownSession(sessionId);
-    this.sessions.delete(sessionId);
-    console.log(`[SessionManager] Removed all bridges and session for ${sessionId}`);
-  }
-
   /** Stop every bridge for a session and close its transcript writer. */
   private async teardownSession(sessionId: string): Promise<void> {
     const languageMap = this.translations.get(sessionId);
@@ -420,70 +426,156 @@ class TranslationSessionManager {
       this.writers.delete(sessionId);
     }
 
-    this.lastHealthyAt.delete(sessionId);
-  }
-
-  getAllSessions(): SessionInfo[] {
-    return Array.from(this.sessions.values());
-  }
-
-  // ---------------------------------------------------------------------------
-  // Presence reaper: the authoritative teardown. A session whose broadcaster has
-  // left has no source audio to translate, so it's dead weight (still holding a
-  // Gemini session) and the whole session is torn down once it has been unhealthy
-  // past a grace window. With the cost path on, listener count no longer gates this —
-  // the default bridge stays up for the transcript while the broadcaster is present,
-  // and silence suspension keeps an idle broadcaster from costing anything. With it
-  // off, a session also needs a listener to stay healthy (the original rule).
-  // ---------------------------------------------------------------------------
-  private startReaper(): void {
-    if (this.reaperTimer) return;
-    this.reaperTimer = setInterval(() => {
-      void this.reapIdleSessions();
-    }, TranslationSessionManager.REAP_INTERVAL_MS);
-    // Don't keep the process alive solely for the reaper.
-    this.reaperTimer.unref?.();
-  }
-
-  async reapIdleSessions(): Promise<void> {
-    if (!this.livekitConfig || this.translations.size === 0) return;
-
-    const httpUrl = this.livekitConfig.url.replace(/^ws/, "http");
-    const client = new RoomServiceClient(
-      httpUrl,
-      this.livekitConfig.apiKey,
-      this.livekitConfig.apiSecret
-    );
-
-    const now = Date.now();
-    for (const sessionId of [...this.translations.keys()]) {
-      let healthy = false;
-      try {
-        const participants = await client.listParticipants(sessionId);
-        healthy = isSessionHealthy(participants.map((p) => p.identity), {
-          requireListener: !this.silenceGatingEnabled,
-        });
-      } catch {
-        // Room gone / not found → unhealthy.
-        healthy = false;
-      }
-
-      if (healthy) {
-        this.lastHealthyAt.set(sessionId, now);
-        continue;
-      }
-
-      const last = this.lastHealthyAt.get(sessionId) ?? now;
-      if (now - last > TranslationSessionManager.REAP_GRACE_MS) {
-        console.log(
-          `[SessionManager] Reaping session ${sessionId} — no broadcaster for ${Math.round(
-            (now - last) / 1000
-          )}s`
-        );
-        await this.teardownSession(sessionId);
-      }
+    this.lastDesiredAt.delete(sessionId);
+    for (const key of [...this.lastStartAttemptAt.keys()]) {
+      if (key.startsWith(`${sessionId}:`)) this.lastStartAttemptAt.delete(key);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // The supervisor: a bidirectional reconciler. Every tick it drives the running
+  // set of bridges toward what room presence says should exist — creating what's
+  // missing (including after a server restart, when the in-memory maps are empty
+  // but the rooms are not), recreating what failed, and tearing down what nobody
+  // wants anymore. No single trigger is load-bearing, which is the same property
+  // the bridge's own input-side reconcile is built on.
+  // ---------------------------------------------------------------------------
+  private startSupervisor(): void {
+    if (this.supervisorTimer) return;
+    this.supervisorTimer = setInterval(() => {
+      void this.reconcileAll();
+    }, RECONCILE_INTERVAL_MS);
+    // Don't keep the process alive solely for the supervisor.
+    this.supervisorTimer.unref?.();
+  }
+
+  async reconcileAll(): Promise<void> {
+    if (!this.directory || this.reconciling) return;
+    this.reconciling = true;
+    try {
+      let roomNames: string[];
+      try {
+        roomNames = await this.directory.listRooms();
+      } catch (e) {
+        // Can't see LiveKit at all — skip the whole tick rather than mistake a
+        // blind spot for empty rooms and mass-teardown live sessions.
+        console.warn("[SessionManager] listRooms failed; skipping reconcile tick:", e);
+        return;
+      }
+      // Union: rooms with participants (may need bridges — the restart-recovery
+      // case) and rooms we hold bridges for (may need teardown).
+      const rooms = new Set([...roomNames, ...this.translations.keys()]);
+      for (const sessionId of rooms) {
+        await this.reconcileRoom(sessionId);
+      }
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  async reconcileRoom(sessionId: string): Promise<void> {
+    if (!this.directory) return;
+    let participants: PresentParticipant[] = [];
+    try {
+      participants = await this.directory.listParticipants(sessionId);
+    } catch {
+      // Room gone or LiveKit briefly unreadable → no visible demand. The stop
+      // grace absorbs transient failures; a genuinely closed room winds down.
+    }
+
+    const desired = computeDesiredLanguages(participants, {
+      defaultLanguage: TranslationSessionManager.DEFAULT_LANGUAGE,
+      silenceGatingEnabled: this.silenceGatingEnabled,
+    });
+
+    const now = Date.now();
+    const stamps = this.getStamps(sessionId);
+    for (const lang of desired) stamps.set(lang, now);
+
+    const languageMap = this.translations.get(sessionId);
+    const running: RunningBridgeView[] = languageMap
+      ? [...languageMap.entries()].map(([language, b]) => ({ language, status: b.status }))
+      : [];
+
+    const plan = planRoomActions({
+      desired,
+      running,
+      lastDesiredAt: stamps,
+      now,
+      stopGraceMs: STOP_GRACE_MS,
+    });
+
+    for (const language of plan.stop) {
+      console.log(`[SessionManager] Supervisor stopping ${language} in ${sessionId} (no demand)`);
+      this.telemetry?.capture({
+        distinctId: sessionId,
+        event: "supervisor_bridge_stopped",
+        properties: { sessionId, language },
+      });
+      const bridge = languageMap?.get(language);
+      if (bridge) {
+        await bridge.stop().catch(() => {});
+        languageMap?.delete(language);
+      }
+    }
+    if (languageMap && languageMap.size === 0) this.translations.delete(sessionId);
+
+    // desired is non-empty only with a broadcaster present, so this is always set
+    // on the start path; the fallback only guards the type.
+    const organizerIdentity =
+      participants.find((p) => p.identity.startsWith(ORGANIZER_PREFIX))?.identity ??
+      "organizer-host";
+    const writer = plan.start.length > 0 ? this.getOrCreateWriter(sessionId) : null;
+    for (const language of plan.start) {
+      const key = `${sessionId}:${language}`;
+      if (now - (this.lastStartAttemptAt.get(key) ?? 0) < START_RETRY_MS) continue;
+      this.lastStartAttemptAt.set(key, now);
+      console.log(`[SessionManager] Supervisor starting ${language} in ${sessionId}`);
+      this.telemetry?.capture({
+        distinctId: sessionId,
+        event: "supervisor_bridge_started",
+        properties: { sessionId, language },
+      });
+      try {
+        await this.ensureBridge(sessionId, language, organizerIdentity, writer);
+      } catch (e) {
+        console.error(`[SessionManager] Supervisor start of ${language} in ${sessionId} failed:`, e);
+        this.telemetry?.capture({
+          distinctId: sessionId,
+          event: "supervisor_bridge_start_failed",
+          properties: { sessionId, language, message: (e as Error).message },
+        });
+      }
+    }
+
+    // Dashboard info: listeners per language, from the same presence snapshot.
+    // After the starts, so bridges created this tick get their count immediately.
+    for (const [language, bridge] of this.translations.get(sessionId) ?? []) {
+      bridge.subscriberCount = participants.filter(
+        (p) => p.attributes?.[LISTEN_ATTRIBUTE] === language
+      ).length;
+    }
+
+    // Session-level wind-down: nothing running, nothing wanted, nobody present.
+    if (
+      (this.translations.get(sessionId)?.size ?? 0) === 0 &&
+      desired.size === 0 &&
+      participants.length === 0 &&
+      (this.writers.has(sessionId) || this.lastDesiredAt.has(sessionId))
+    ) {
+      await this.teardownSession(sessionId);
+    }
+  }
+}
+
+/** Production bridge factory; tests inject a fake via init({ bridgeFactory }). */
+function defaultBridgeFactory(
+  sessionId: string,
+  targetLanguage: string,
+  organizerIdentity: string,
+  config: ConstructorParameters<typeof TranslationBridge>[3]
+): TranslationBridge {
+  return new TranslationBridge(sessionId, targetLanguage, organizerIdentity, config);
 }
 
 export default TranslationSessionManager;

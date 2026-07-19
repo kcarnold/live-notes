@@ -236,12 +236,26 @@ app.post('/api/livekit/token', async (req, res) => {
     const room = req.body?.room as string | undefined;
     const identity = req.body?.identity as string | undefined;
     const role = (req.body?.role as string | undefined) ?? 'attendee';
+    // The language this listener wants translated (BCP-47). Carried as a participant
+    // attribute so the translation supervisor can read demand straight from room
+    // presence — no refcount, no beacon. Optional: attribute-less listeners still get
+    // the default bridge, and their /translate request stamps their language.
+    const listenLanguage = req.body?.listenLanguage as string | undefined;
     if (!room || !identity) {
       return res.status(400).json({ error: 'Missing room or identity' });
     }
 
     const isOrganizer = role === 'organizer';
-    const at = new AccessToken(lk.apiKey, lk.apiSecret, { identity, name: identity, ttl: '4h' });
+    const at = new AccessToken(lk.apiKey, lk.apiSecret, {
+      identity,
+      name: identity,
+      ttl: '4h',
+      attributes: isOrganizer
+        ? { role: 'organizer' }
+        : listenLanguage
+          ? { listen: listenLanguage }
+          : undefined,
+    });
     at.addGrant({
       roomJoin: true,
       room,
@@ -251,19 +265,11 @@ app.post('/api/livekit/token', async (req, res) => {
     });
     const token = await at.toJwt();
 
-    // A broadcaster requesting a publish token IS the signal that a talk is live, so
-    // ensure the default translator runs even before any listener joins — a live talk
-    // always has at least an English transcript. Fire-and-forget: don't block or fail
-    // token issuance on bridge startup; the bridge waits for the organizer's audio,
-    // and the reaper cleans up if they never actually connect.
-    if (isOrganizer) {
-      void TranslationSessionManager.getInstance()
-        .ensureBroadcast(room, ORGANIZER_IDENTITY)
-        .catch((e) => {
-          phClient.captureException(e);
-          console.error('ensureBroadcast failed:', e);
-        });
-    }
+    // A token request means room presence is about to change — poke the translation
+    // supervisor so it reconciles this room within seconds instead of on its next
+    // tick. Delayed a beat so the requester has actually joined by the time the
+    // supervisor looks. Latency-only: the interval loop converges regardless.
+    setTimeout(() => TranslationSessionManager.getInstance().poke(room), 2_000).unref?.();
 
     return res.json({ token, serverUrl: lk.url });
   } catch (error) {
@@ -314,18 +320,15 @@ app.get('/api/livekit/translate/status', (req, res) => {
   }
 });
 
-// Decrement a language's listener count; the bot tears down at zero.
-// POST so navigator.sendBeacon can call it on page unload.
-app.post('/api/livekit/translate/unsubscribe', async (req, res) => {
+// Legacy endpoint, kept for clients cached from before the presence supervisor.
+// Leaving the LiveKit room is now the real "unsubscribe" signal; a beacon here just
+// nudges the supervisor to notice sooner.
+app.post('/api/livekit/translate/unsubscribe', (req, res) => {
   try {
     if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
     const sessionId = req.body?.sessionId as string | undefined;
-    const targetLanguage = req.body?.targetLanguage as string | undefined;
-    if (!sessionId || !targetLanguage) {
-      return res.status(400).json({ error: 'Missing sessionId or targetLanguage' });
-    }
-    const manager = TranslationSessionManager.getInstance();
-    await manager.unsubscribe(sessionId, targetLanguage);
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+    TranslationSessionManager.getInstance().poke(sessionId);
     return res.json({ success: true });
   } catch (error) {
     phClient.captureException(error);

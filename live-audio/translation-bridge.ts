@@ -55,6 +55,26 @@ import type { TranscriptWriter } from "./transcript-writer.ts";
 
 export type BridgeStatus = "starting" | "active" | "error" | "closed";
 
+/** The Gemini leg's state, derived for reporting (see health()). */
+export type GeminiLegState = "ready" | "connecting" | "backoff" | "suspended" | "down";
+
+/**
+ * Composite health snapshot. `status` alone is a single word that has twice read
+ * "active" through an outage; this is the honest version, surfaced by the status
+ * endpoint so dashboards and the supervisor can see which leg is actually unwell.
+ */
+export interface BridgeHealth {
+  status: BridgeStatus;
+  gemini: GeminiLegState;
+  /** Last time an organizer audio frame entered the bridge (0 = never). */
+  lastInputFrameAt: number;
+  /** Last time translated audio was published to LiveKit (0 = never). */
+  lastOutputFrameAt: number;
+  reconnects: number;
+  /** Gap-buffer depth right now — current added latency in frames. */
+  bufferedFrames: number;
+}
+
 /** Records a telemetry event. Implemented in the server over the PostHog client. */
 export type RecordEvent = (
   event: string,
@@ -327,6 +347,15 @@ export class TranslationBridge {
   // collapse dead air (see MAX_GAP_SILENCE_FRAMES).
   private bufferedSilenceRun: number = 0;
 
+  // Teardown epoch. Incremented whenever the Gemini side is torn down (stop, room
+  // failure, silence suspend), and captured by every socket's handlers when the
+  // socket is wired. A handler whose epoch is stale — its socket belongs to a life
+  // the bridge has already left — is dropped instead of acting, which closes the
+  // whole "async callback fires in a state it wasn't written for" class (e.g. a
+  // setupComplete racing a suspend and swapping a paid-for socket into a bridge
+  // that believes it has none).
+  private epoch: number = 0;
+
   // Reconnect state. `pendingWs` is a replacement socket being established (during
   // a make-before-break swap or a backoff retry); `reconnecting` guards against
   // launching two overlapping reconnects (e.g. goAway then the actual close).
@@ -396,6 +425,30 @@ export class TranslationBridge {
     this.writesSourceTranscript = config.writesSourceTranscript ?? false;
     this.recordEvent = config.recordEvent ?? null;
     this.silenceGatingEnabled = config.silenceGatingEnabled ?? false;
+  }
+
+  /**
+   * The Gemini leg's current state, derived from the connection fields rather than
+   * stored — so it can't drift from them. Reporting only; no behavior reads this.
+   */
+  private geminiLegState(): GeminiLegState {
+    if (this.suspended) return "suspended";
+    if (this.geminiWs && this.geminiSetupComplete) return "ready";
+    if (this.pendingWs) return "connecting";
+    if (this.reconnectTimer) return "backoff";
+    return "down";
+  }
+
+  /** Composite health snapshot for the status endpoint / supervisor / dashboards. */
+  health(): BridgeHealth {
+    return {
+      status: this.status,
+      gemini: this.geminiLegState(),
+      lastInputFrameAt: this.lastOrganizerFrameAt,
+      lastOutputFrameAt: this.lastAudioFrameTime,
+      reconnects: this.reconnectCount,
+      bufferedFrames: this.pendingFrames.length,
+    };
   }
 
   /** Emit a telemetry event tagged with this bridge's language and identity. */
@@ -503,6 +556,7 @@ export class TranslationBridge {
    * suspended) and won't reconnect.
    */
   private teardownGeminiSide(): void {
+    this.epoch++;
     this.reconnecting = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -690,6 +744,8 @@ export class TranslationBridge {
   ): void {
     let openedAt = 0;
     let ready = false;
+    // The life of the bridge this socket belongs to; see the epoch field.
+    const wiredEpoch = this.epoch;
 
     ws.on("open", () => {
       openedAt = Date.now();
@@ -719,6 +775,27 @@ export class TranslationBridge {
       }
 
       if (message.setupComplete) {
+        // The bridge may have moved on while this socket was setting up — suspended
+        // for silence, stopped, or failed with its room. Swapping in then would strand
+        // an open, paid-for socket in a bridge that believes it has none. (status
+        // "starting" is fine: that's the initial socket completing during start().)
+        if (
+          wiredEpoch !== this.epoch ||
+          this.suspended ||
+          this.status === "closed" ||
+          this.status === "error"
+        ) {
+          console.log(
+            `[TranslationBridge:${this.targetLanguage}] Dropping stale setupComplete (${opts.role})`
+          );
+          this.record("gemini_stale_socket_dropped", { role: opts.role, trigger: opts.trigger });
+          try {
+            ws.close();
+          } catch {
+            // already closing
+          }
+          return;
+        }
         ready = true;
         this.onSocketReady(ws, opts.role, openedAt ? Date.now() - openedAt : 0, opts.trigger);
         return;
@@ -846,7 +923,7 @@ export class TranslationBridge {
   /** Open a replacement socket; it swaps in once its setup completes. */
   private openReplacement(trigger: ReconnectTrigger, attempt: number): void {
     this.reconnectTimer = null;
-    if (this.status !== "active") {
+    if (this.status !== "active" || this.suspended) {
       this.reconnecting = false;
       return;
     }
@@ -890,26 +967,12 @@ export class TranslationBridge {
       `[TranslationBridge:${this.targetLanguage}] Suspending Gemini after ${silentMs}ms of silence`
     );
     // Set suspended before closing so the socket's close handler treats this as an
-    // intentional teardown rather than a session drop to reconnect from.
+    // intentional teardown rather than a session drop to reconnect from. The shared
+    // teardown also drops any stale gap buffer (from here we only keep a short
+    // silence pre-roll) and bumps the epoch, so an in-flight setupComplete from
+    // before the suspend can't swap a socket back in.
     this.suspended = true;
-    this.geminiSetupComplete = false;
-    // Drop any stale gap buffer; from here we only keep a short silence pre-roll.
-    this.pendingFrames = [];
-    this.bufferedSilenceRun = 0;
-
-    this.reconnecting = false;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.pendingWs) {
-      this.pendingWs.close();
-      this.pendingWs = null;
-    }
-    if (this.geminiWs) {
-      this.geminiWs.close();
-      this.geminiWs = null;
-    }
+    this.teardownGeminiSide();
 
     this.record("gemini_suspended_silence", {
       silentMs,
