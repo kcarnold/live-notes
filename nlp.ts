@@ -1,5 +1,5 @@
-import { GoogleGenAI } from '@posthog/ai';
-import { Type, FunctionCallingConfigMode, type Content, type Part, type FunctionDeclaration } from '@google/genai'; // for types
+import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration, type Part } from '@google/genai'; // for types
+import { Gemini as GoogleGenAI } from '@posthog/ai/gemini';
 import { PostHog } from 'posthog-node';
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
 
