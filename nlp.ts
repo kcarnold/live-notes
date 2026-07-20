@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@posthog/ai';
-import genAI, { FunctionCallingConfigMode, type Content, type Part, type FunctionDeclaration } from '@google/genai'; // for types
+import { Type, FunctionCallingConfigMode, type Content, type Part, type FunctionDeclaration } from '@google/genai'; // for types
 import { PostHog } from 'posthog-node';
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
 
@@ -112,20 +112,20 @@ export const translateBlock = async (provider: GeminiProvider, todo: Translation
     const config = {
       responseMimeType: 'application/json',
       responseSchema: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         required: ["segments"],
         properties: {
           segments: {
-            type: genAI.Type.ARRAY,
+            type: Type.ARRAY,
             items: {
-              type: genAI.Type.OBJECT,
+              type: Type.OBJECT,
               required: ["segmentId", "translation"],
               properties: {
                 segmentId: {
-                  type: genAI.Type.INTEGER,
+                  type: Type.INTEGER,
                 },
                 translation: {
-                  type: genAI.Type.STRING,
+                  type: Type.STRING,
                 },
               },
             },
@@ -224,20 +224,20 @@ const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
         'published text rather than translating from scratch. Returns the passage in each ' +
         'available target language.',
     parameters: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         properties: {
             book: {
-                type: genAI.Type.STRING,
+                type: Type.STRING,
                 description:
                     'USFM book code (uppercase 3 chars), e.g. GEN, PSA, ISA, MAT, JHN, ROM, 1CO, REV.',
             },
-            chapter: { type: genAI.Type.INTEGER, description: 'Chapter number.' },
+            chapter: { type: Type.INTEGER, description: 'Chapter number.' },
             startVerse: {
-                type: genAI.Type.INTEGER,
+                type: Type.INTEGER,
                 description: 'First verse of the range. Omit to fetch the whole chapter.',
             },
             endVerse: {
-                type: genAI.Type.INTEGER,
+                type: Type.INTEGER,
                 description: 'Last verse of the range. Omit for a single verse (defaults to startVerse).',
             },
         },
@@ -255,25 +255,25 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
         '"note" ONLY when there is a genuine caveat, ambiguity, or choice the reviewer should ' +
         'know about — otherwise omit it.',
     parameters: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         required: ['languages'],
         properties: {
             languages: {
-                type: genAI.Type.ARRAY,
+                type: Type.ARRAY,
                 items: {
-                    type: genAI.Type.OBJECT,
+                    type: Type.OBJECT,
                     required: ['language', 'segments'],
                     properties: {
-                        language: { type: genAI.Type.STRING },
+                        language: { type: Type.STRING },
                         segments: {
-                            type: genAI.Type.ARRAY,
+                            type: Type.ARRAY,
                             items: {
-                                type: genAI.Type.OBJECT,
+                                type: Type.OBJECT,
                                 required: ['segmentId', 'translation'],
                                 properties: {
-                                    segmentId: { type: genAI.Type.INTEGER },
-                                    translation: { type: genAI.Type.STRING },
-                                    note: { type: genAI.Type.STRING },
+                                    segmentId: { type: Type.INTEGER },
+                                    translation: { type: Type.STRING },
+                                    note: { type: Type.STRING },
                                 },
                             },
                         },
