@@ -1,5 +1,6 @@
 import { useMap } from '@y-sweet/react';
 import { useStrings } from './useLocale';
+import { SlideText } from './SlideText';
 import {
   resolveSlideTranslation,
   slideTranslationKey,
@@ -8,18 +9,17 @@ import {
 } from './slideTranslation';
 
 export interface SlideTranslationViewerProps {
-  /** Original-language source slides (for indexing/context). */
+  /** Original-language source slides (for indexing). */
   slides: string[];
   currentIndex: number;
   /** The requested target language. */
   language: string;
   /** Resolved translation per slide (undefined = not translated yet). */
   resolvedBySlide: (ResolvedSlideTranslation | undefined)[];
-  context?: number;
 }
 
 /**
- * Pure component showing the translation of the current slide.
+ * Pure component showing the translation of the current slide, auto-scaled to fit.
  *
  * - An `auto` (machine, unreviewed) translation gets a subtle "unreviewed" badge.
  * - When the displayed language differs from the requested one (e.g. reviewed French
@@ -29,7 +29,6 @@ export function SlideTranslationViewer({
   slides,
   currentIndex,
   resolvedBySlide,
-  context = 0,
 }: SlideTranslationViewerProps) {
   const s = useStrings();
 
@@ -41,65 +40,38 @@ export function SlideTranslationViewer({
     );
   }
 
-  const startIdx = Math.max(0, currentIndex - context);
-  const endIdx = Math.min(slides.length - 1, currentIndex + context);
+  // Clamp: Proclaim publishes status and presentation separately, so the index
+  // can transiently point past the slides.
+  const clampedIndex = Math.min(Math.max(currentIndex, 0), slides.length - 1);
+  const resolved = resolvedBySlide[clampedIndex];
+  const isUnreviewed = resolved?.entry.status === 'auto';
 
-  const visible: { index: number; isActive: boolean; resolved: ResolvedSlideTranslation | undefined }[] = [];
-  for (let i = startIdx; i <= endIdx; i++) {
-    visible.push({ index: i, isActive: i === currentIndex, resolved: resolvedBySlide[i] });
+  const header =
+    isUnreviewed || resolved?.isFallbackLanguage ? (
+      <div className="flex justify-center gap-2">
+        {resolved?.isFallbackLanguage && (
+          <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-200">
+            {resolved.displayLanguage}
+          </span>
+        )}
+        {isUnreviewed && (
+          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-700/80 text-amber-50 opacity-20">
+            {s.unreviewedBadge}
+          </span>
+        )}
+      </div>
+    ) : undefined;
+
+  if (!resolved) {
+    return (
+      <SlideText
+        header={header}
+        placeholder={<span className="text-gray-500 italic">{s.notTranslated}</span>}
+      />
+    );
   }
 
-  return (
-    <div className="flex flex-col bg-black dark:bg-gray-950 text-white overflow-hidden">
-      <div className="flex-1 overflow-y-auto px-1 py-1 space-y-3">
-        {visible.map(({ index, isActive, resolved }) => {
-          const isUnreviewed = resolved?.entry.status === 'auto';
-          return (
-            <div
-              key={index}
-              className={`transition-all duration-300 ${isActive ? 'opacity-100 scale-100' : 'opacity-40 scale-95'}`}
-            >
-              <div className="p-1">
-                {(isUnreviewed || resolved?.isFallbackLanguage) && (
-                  <div className="flex justify-center gap-2 mb-1">
-                    {resolved?.isFallbackLanguage && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-200">
-                        {resolved.displayLanguage}
-                      </span>
-                    )}
-                    {isUnreviewed && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-amber-700/80 text-amber-50 opacity-20">
-                        {s.unreviewedBadge}
-                      </span>
-                    )}
-                  </div>
-                )}
-                <div className="text-center space-y-2">
-                  {resolved ? (
-                    resolved.entry.text.split('\n').map((line, lineIdx) => (
-                      <div
-                        key={lineIdx}
-                        className={`leading-normal ${isActive ? 'text-2xl' : 'text-xl font-light'}`}
-                      >
-                        {line || ' '}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-xl font-light text-gray-500 italic">{s.notTranslated}</div>
-                  )}
-                </div>
-              </div>
-              {!isActive && (
-                <div className="text-xs text-gray-500 dark:text-gray-600 mt-1 text-center">
-                  {index < currentIndex ? s.previous : s.next}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+  return <SlideText lines={resolved.entry.text.split('\n')} header={header} />;
 }
 
 /** Yjs connector: reads the source slides + per-day slideTranslations and resolves. */
@@ -149,7 +121,6 @@ export function SlideTranslationViewerContainer({ language }: { language: string
       currentIndex={view.slideIndex}
       language={language}
       resolvedBySlide={view.resolvedBySlide}
-      context={0}
     />
   );
 }
