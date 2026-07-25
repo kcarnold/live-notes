@@ -10,6 +10,10 @@ The integration uses **Yjs** for real-time synchronization:
    - Polls Proclaim API for current presentation and slide status
    - Parses presentation content from the Proclaim database
    - Updates Yjs shared state via Y-Sweet WebSocket connection
+   - Internally decoupled into a **slide feed** (`proclaim_feed.py`, the source) and
+     **consumers** (`yjs_publisher.py` for clients, `slide_translator.py` for translation),
+     wired by `slide_sync_runtime.py`. `proclaim_service.py` is just the entrypoint. The feed
+     emits a serializable snapshot per poll — the seam a future replay harness records.
 
 2. **Yjs Shared State**
    - `proclaimPresentations` (Y.Map) - Maps itemId → presentation data
