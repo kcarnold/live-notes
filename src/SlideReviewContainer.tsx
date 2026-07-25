@@ -233,8 +233,10 @@ export function SlideReviewContainer() {
       setBusy(true);
       setError(null);
       try {
-        // The updated conversation streams in live via Yjs; we only need the side outputs.
-        const result = await sendConversationMessage(conversationId, text);
+        // Send the current drafts so the agent can make targeted edits against what the
+        // reviewer is actually looking at. The updated conversation streams in live via Yjs;
+        // we only need the side outputs.
+        const result = await sendConversationMessage(conversationId, text, drafts);
         if (result.bibleLookups.length > 0) setBibleLookups(result.bibleLookups);
         applyUpdates(result.updatedTranslations);
       } catch (err) {
@@ -243,7 +245,7 @@ export function SlideReviewContainer() {
         setBusy(false);
       }
     },
-    [conversationId, applyUpdates],
+    [conversationId, applyUpdates, drafts],
   );
 
   const handleSaveCell = useCallback(

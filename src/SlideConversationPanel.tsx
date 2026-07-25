@@ -23,6 +23,9 @@ function summarizeCall(call: NonNullable<Part['functionCall']>): string {
     startVerse?: number;
     endVerse?: number;
     languages?: Array<{ language?: string; segments?: unknown[] }>;
+    language?: string;
+    segmentId?: number;
+    find?: string;
   };
   if (call.name === 'lookup_bible_passage') {
     const book = args.book ?? '';
@@ -38,6 +41,12 @@ function summarizeCall(call: NonNullable<Part['functionCall']>): string {
       .map((l) => `${l.language ?? '?'} (${l.segments?.length ?? 0})`)
       .join(', ');
     return `✍️ set translations: ${summary}`;
+  }
+  if (call.name === 'revise_translation') {
+    // Show what was targeted, not the replacement — the new text lands in the grid anyway.
+    const find = (args.find ?? '').replace(/\s+/g, ' ').trim();
+    const excerpt = find.length > 40 ? `${find.slice(0, 40)}…` : find;
+    return `✏️ edit ${args.language ?? '?'} slide ${(args.segmentId ?? 0) + 1}: "${excerpt}"`;
   }
   return `🔧 ${call.name ?? 'tool'}`;
 }
@@ -55,7 +64,10 @@ function summarizeResponse(resp: NonNullable<Part['functionResponse']>): string 
     const langs = Object.keys(passages);
     return langs.length ? `✓ ${response.reference ?? ''} — ${langs.join(', ')}` : null;
   }
-  return null; // set_translations ack and unknowns add no useful detail
+  // A failed targeted edit is worth showing: it means the agent's "find" missed, and the
+  // retry that follows is otherwise unexplained.
+  if (resp.name === 'revise_translation' && response.error) return `⚠ ${response.error}`;
+  return null; // successful acks and unknowns add no useful detail
 }
 
 function MessageParts({ message, msgKey }: { message: Content; msgKey: string }) {

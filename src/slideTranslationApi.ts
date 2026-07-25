@@ -167,16 +167,28 @@ export async function translateItem(
 // The conversation itself is read live from the `slideConversations` Y.Map, so there's no
 // fetch here — only the writes below, which resume the agent or append a note.
 
-/** Send a follow-up message; resumes the agent and returns any revised translations. */
+/**
+ * Send a follow-up message; resumes the agent and returns any revised translations.
+ *
+ * `currentTranslations` is the reviewer's live per-language drafts (index-aligned with the
+ * conversation's slides). The agent edits against these, so targeted `revise_translation`
+ * fixes apply to what is actually on screen — including hand-edits made since the draft run.
+ */
 export async function sendConversationMessage(
   itemId: string,
   text: string,
+  currentTranslations?: Record<string, string[]>,
 ): Promise<ConversationMessageResult> {
   const data = await postJson<{
     conversation: SlideConversation;
     updatedTranslations?: ConversationTranslationUpdate[];
     bibleLookups?: BibleToolCall[];
-  }>('/api/slideConversation/message', { itemId, text, docId: getDocId() });
+  }>('/api/slideConversation/message', {
+    itemId,
+    text,
+    currentTranslations,
+    docId: getDocId(),
+  });
   return {
     conversation: data.conversation,
     updatedTranslations: data.updatedTranslations ?? [],

@@ -572,6 +572,12 @@ app.post('/api/slideConversation/message', async (req, res) => {
   const itemId = (req.body?.itemId as string | undefined)?.trim();
   const text = (req.body?.text as string | undefined)?.trim();
   const docId = (req.body?.docId as string | undefined)?.trim();
+  // The reviewer's current per-language drafts, index-aligned with the conversation's slides.
+  // The browser holds the live state (drafts may have been hand-edited since the draft run),
+  // so it sends it along; the agent needs it to make targeted `revise_translation` edits.
+  const currentTranslations = (req.body?.currentTranslations as
+    | Record<string, (string | null)[]>
+    | undefined) ?? undefined;
   if (!itemId || !text) {
     return res.status(400).json({ ok: false, error: 'Missing itemId or text' });
   }
@@ -598,6 +604,7 @@ app.post('/api/slideConversation/message', async (req, res) => {
       messages: conversation.messages, // mutated in place
       model: STRONG_MODEL,
       bibleLanguages,
+      currentTranslations,
       observability,
       onToolCall: (call) => {
         bibleLookups.push(call);

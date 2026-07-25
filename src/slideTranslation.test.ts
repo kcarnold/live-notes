@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeSlideText,
+  slideTextLines,
   slideTranslationKey,
   fallbackChain,
   resolveSlideTranslation,
@@ -21,6 +22,23 @@ describe('normalizeSlideText', () => {
     // "é" as e + combining accent should normalize to the single code point.
     const decomposed = 'Crédo';
     expect(normalizeSlideText(decomposed)).toBe('Crédo'.normalize('NFC'));
+  });
+});
+
+describe('slideTextLines', () => {
+  it('splits on real line breaks', () => {
+    expect(slideTextLines('Sainte nuit\nNuit paisible')).toEqual(['Sainte nuit', 'Nuit paisible']);
+  });
+
+  it('rescues entries stored with a literal backslash-n instead of a line break', () => {
+    expect(slideTextLines('Sainte nuit\\nNuit paisible')).toEqual([
+      'Sainte nuit',
+      'Nuit paisible',
+    ]);
+  });
+
+  it('leaves an escaped backslash as literal text rather than breaking the line', () => {
+    expect(slideTextLines('path C:\\\\next')).toEqual(['path C:\\next']);
   });
 });
 
