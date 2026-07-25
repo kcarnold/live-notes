@@ -82,8 +82,6 @@ def split_into_slides(text: str) -> List[str]:
     """Split the text into sections based on blank lines or --."""
     lines = text.strip().splitlines()
     explicitly_delimited = any(line.strip() == '--' for line in lines)
-    print(f"Split into slides: explicitly_delimited={explicitly_delimited}")
-    print(f"Lines: {lines!r}")
     sections = ['']
     for line in lines:
         line_stripped = line.strip()
