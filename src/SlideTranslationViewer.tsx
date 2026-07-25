@@ -3,6 +3,7 @@ import { useStrings } from './useLocale';
 import { SlideText } from './SlideText';
 import {
   resolveSlideTranslation,
+  slideTextLines,
   slideTranslationKey,
   type ResolvedSlideTranslation,
   type SlideTranslationEntry,
@@ -71,7 +72,7 @@ export function SlideTranslationViewer({
     );
   }
 
-  return <SlideText lines={resolved.entry.text.split('\n')} header={header} />;
+  return <SlideText lines={slideTextLines(resolved.entry.text)} header={header} />;
 }
 
 /** Yjs connector: reads the source slides + per-day slideTranslations and resolves. */

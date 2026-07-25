@@ -67,6 +67,31 @@ export function slideTranslationKey(language: string, slideText: string): string
   return `${language}:${normalizeSlideText(slideText)}`;
 }
 
+/**
+ * Undo JSON-style escape sequences that were written as *literal characters*.
+ *
+ * A translating model shown JSON-encoded text tends to mimic the encoding and emit a
+ * backslash followed by `n` where it means a line break. That survives JSON parsing intact,
+ * so it reaches storage — and the slide — as two visible characters. The prompts now hand
+ * the model plain text with real line breaks, which is the actual fix; this runs on both
+ * sides of that (on the model's output, and on read, so entries stored before the fix still
+ * render as intended).
+ *
+ * Only `\n`, `\r`, `\t` and `\\` are recognized, in one left-to-right pass so an escaped
+ * backslash (`\\n`) correctly yields the literal text `\n` rather than a line break. Any
+ * other backslash sequence is left alone.
+ */
+export function unescapeLiteralEscapes(text: string): string {
+  return text.replace(/\\([nrt\\])/g, (_match, code: string) =>
+    code === 'n' ? '\n' : code === 'r' ? '\r' : code === 't' ? '\t' : '\\',
+  );
+}
+
+/** Split a stored translation into display lines, tolerating literal escape sequences. */
+export function slideTextLines(text: string): string[] {
+  return unescapeLiteralEscapes(text).split('\n');
+}
+
 /** Looks up a stored entry for a concrete language + slide text, or undefined. */
 export type SlideTranslationLookup = (
   language: string,

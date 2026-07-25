@@ -312,6 +312,44 @@ translating from scratch.
   `/api/translateItem`; the **review screen** shows them as ✓/⚠ reference chips under the
   Suggest button (`SlideReviewContainer`).
 
+### Line breaks in slide text — DONE
+Line breaks inside a slide are content, and the agent was getting them wrong in two ways.
+
+- **Literal `\n` on the projector.** The prompts used to hand the model
+  `JSON.stringify(slides)`, so every newline reached it as a `\n` escape. The model copied
+  that encoding into its `set_translations` arguments — which are themselves JSON-parsed, so
+  a mimicked `\\n` survived as two visible characters and rendered as `\n` on the slide.
+  Prompts now render each slide as a plain-text `<slide id="N">…</slide>` block with real
+  newlines (`renderSlideBlocks`, `nlp.ts`), and the tool parameters say so explicitly.
+  `unescapeLiteralEscapes` (`src/slideTranslation.ts`) is the belt-and-braces pass, applied
+  both to model output and — via `slideTextLines` — at display, so entries stored before the
+  fix still render correctly.
+- **How faithfully to follow them.** This is a per-slide judgement the model is asked to
+  make: in songs, hymns, poetry, and responsive readings the line structure carries the form,
+  so it keeps one output line per source line; in prose (congregational readings, prayers,
+  announcements) the breaks are cosmetic slide-fitting, so it re-breaks where the target
+  language reads naturally while keeping a similar line count. Ties go to preserving the
+  source structure.
+
+### Targeted edits (`revise_translation`) — DONE
+`set_translations` records whole slides, which made every follow-up fix — one word, one line
+— cost a full re-emission of that slide's text, with the attendant risk of the model quietly
+rewriting parts the reviewer had approved. The agent now also has `revise_translation`: a
+`str_replace` over one slide's text in one language, strict in the usual way (a `find` that
+is missing or ambiguous changes nothing and reports why, so the model retries with more
+context rather than editing the wrong line).
+
+- **Working copy.** `runSlideTranslationAgent` keeps a per-language, per-slide working copy
+  across the run, seeded from a new `currentTranslations` parameter. The review screen sends
+  its live drafts with each follow-up, so edits apply to what the reviewer is actually
+  looking at, including hand-edits made since the draft run.
+- **Result shape.** A run now returns *every slide it changed* (accumulated across all
+  `set_translations` and `revise_translation` calls), not just the last `set_translations`
+  payload — so a draft plus a touch-up reports the final text once, and an edit-only run
+  reports only the slide it edited.
+- The reviewer sees these as `✏️ edit <language> slide N: "…"` chips in the conversation
+  panel; failed `find`s surface as ⚠ so an otherwise unexplained retry makes sense.
+
 ### Review the whole presentation, not just the active item
 The review screen currently works one item at a time (paste / "load on-air"). The
 intended workflow was **whole-service review**: 
