@@ -109,7 +109,7 @@ def split_into_song_sections(text: str) -> Dict[str, List[str]]:
     """
     sections: Dict[str, List[str]] = {}
     current_section_label = None
-    section_types = {'verse', 'chorus', 'pre-chorus', 'bridge', 'tag', 'title', 'interlude', 'ending'}
+    section_types = {'verse', 'chorus', 'pre-chorus', 'bridge', 'tag', 'title', 'interlude', 'vamp', 'ending'}
     lines = [line.strip() for line in text.splitlines()]
 
     for line_orig in lines:
