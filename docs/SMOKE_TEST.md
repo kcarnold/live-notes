@@ -39,9 +39,15 @@ an incident happens that this list would not have caught, add a line.
 - [ ] Start broadcasting (mic level meter moves).
 - [ ] On the viewer device, join Listen for one language **after** broadcast started:
       transcript deltas appear, translated audio plays after tapping play.
-- [ ] **The #69 race**: start the Listen client *first*, then start broadcasting — bridge
-      must still pick up the source audio (transcript flows).
+- [ ] **The #69 race / waiting room**: start the Listen client *first*, then start
+      broadcasting. Before the broadcast the supervisor runs no bridges (the listener just
+      waits); within ~10 s of the organizer joining, the translator appears and the
+      transcript flows. The listener's amber "Restarting translation…" state may flash
+      briefly — it must go green without a reload.
 - [ ] Stop and restart the broadcaster mid-session; transcript resumes without a reload.
+- [ ] **Server-restart recovery**: with a listener connected and the speaker talking,
+      restart the Node server. Within ~15 s the supervisor rebuilds the bridges from room
+      presence and the transcript resumes — no reload, no re-tap on any client.
 - [ ] **The LiveKit full reconnect** (the 2026-07-12 outage — see
       [live-audio-resilience.md](live-audio-resilience.md)). With a bridge running and the
       speaker talking, force the reconnect that once deafened every translator for six
@@ -60,13 +66,17 @@ an incident happens that this list would not have caught, add a line.
       fails, so it can't be provoked by running longer. `scenario` also accepts
       `signalReconnect`, `nodeFailure`, `migration`, `serverLeave`.
 
-Cost path (only when `LIVE_AUDIO_SILENCE_GATING` is enabled — off by default):
-
 - [ ] With **no listener yet**, the English transcript still flows — the default translator
-      runs whenever the broadcaster is present.
+      runs whenever the broadcaster is present, whatever the cost path is set to.
+
+Cost path (only when `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level — off by default; the
+startup log line reports which):
+
 - [ ] **Silence suspend/resume**: stay silent >30 s (server logs "Suspending Gemini after…");
       then speak — the first words resume translation ("resuming Gemini after…") without the
       listener resubscribing.
+- [ ] With the threshold **unset**, the opposite: stay silent >30 s and confirm no
+      "Suspending Gemini" line appears, with the mic both open-but-quiet and fully muted.
 
 ## 5. TTS (text-to-speech on translated notes)
 
@@ -75,7 +85,8 @@ Cost path (only when `LIVE_AUDIO_SILENCE_GATING` is enabled — off by default):
 
 ## 6. Teardown sanity
 
-- [ ] Close all listener tabs; confirm translator bots get reaped (server logs) — no orphaned
-      Gemini sessions burning quota. (With the cost path enabled, closing listeners is not
-      enough: the default translator stays up for the transcript until the broadcaster also
-      leaves.)
+- [ ] Close all listener tabs; confirm the supervisor winds the translator bots down within
+      ~2 minutes (60 s demand grace + a reconcile tick; watch for `[SessionManager] Supervisor
+      stopping …` in server logs) — no orphaned Gemini sessions burning quota. (With the cost
+      path enabled, closing listeners is not enough: the default translator stays up for the
+      transcript until the broadcaster also leaves.)

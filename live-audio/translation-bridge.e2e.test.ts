@@ -96,6 +96,9 @@ class FakeAudioStream {
 
 class FakePublication {
   subscribed = false;
+  // undefined by default, like the SDK's `muted?: boolean` — the bridge must treat
+  // unknown as live, so only an explicit `true` reads as a muted mic.
+  muted: boolean | undefined = undefined;
   constructor(
     readonly track: FakeRemoteTrack,
     readonly participant: FakeParticipant,
@@ -140,7 +143,11 @@ class FakeRoom extends EventEmitter {
   }
 
   async connect(): Promise<void> {}
-  async disconnect(): Promise<void> {}
+  // The real SDK emits Disconnected (CLIENT_INITIATED) on a manual disconnect, so every
+  // test that calls bridge.stop() also exercises the "deliberate disconnect" guard.
+  async disconnect(): Promise<void> {
+    this.emit(RoomEvent.Disconnected, 0);
+  }
 
   /** Put a participant in the room with a live mic, as if they were already publishing. */
   seatOrganizer(identity: string): FakeRemoteTrack {
@@ -278,7 +285,9 @@ vi.mock("ws", () => ({ default: FakeGeminiSocket }));
 
 // ---------------------------------------------------------------------------
 
-const { TranslationBridge } = await import("./translation-bridge.ts");
+const { TranslationBridge, SILENCE_THRESHOLD_DBFS, SILENCE_GATING_OFF_DBFS } = await import(
+  "./translation-bridge.ts"
+);
 
 const ORGANIZER = "organizer-host";
 
@@ -464,6 +473,106 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await bridge.stop();
   });
 
+  it("is recreatable, not a zombie, after an unexpected room disconnect", async () => {
+    // A room Disconnected the bridge didn't ask for (duplicate identity, LiveKit server
+    // restart, lost connectivity). Before the fix this set status="closed" and nothing
+    // else: the bridge stayed in the manager's map looking deliberately stopped, held
+    // its Gemini socket open, and the language was dead until a brand-new listener
+    // happened to request it. Now it must read as failed ("error", which ensureBridge
+    // treats as stale) with the Gemini side torn down.
+    const events: string[] = [];
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 2);
+    expect(framesToGemini()).toBe(2);
+
+    room.emit(RoomEvent.Disconnected, 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(bridge.status).toBe("error");
+    expect(events).toContain("livekit_disconnected");
+    // No paid-for zombie: every Gemini socket is closed.
+    for (const socket of FakeGeminiSocket.instances) {
+      expect(socket.readyState).not.toBe(FakeGeminiSocket.OPEN);
+    }
+
+    // A deliberate stop stays "closed" — the disconnect its room.disconnect() emits
+    // must not be mistaken for a failure.
+    await bridge.stop();
+    expect(bridge.status).toBe("closed");
+  });
+
+  it("escalates to teardown when reconcile cannot bring a dead input back", async () => {
+    // The watchdog's level-1 recovery (reconcile) assumes re-subscribing fixes the pipe.
+    // Here it doesn't: the publication still exists and claims to be subscribed, but its
+    // stream is dead and no replacement ever appears. Before the fix the bridge
+    // reconciled forever, deaf but "active". Now, after repeated fruitless recoveries,
+    // it must tear itself down — leaving the room so listeners see the translator gone
+    // and re-request the language, which recreates the bridge from scratch.
+    const events: string[] = [];
+    const { bridge, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 2);
+    expect(framesToGemini()).toBe(2);
+
+    // The stream dies; the publication stays, already-subscribed, so reconcile is a no-op.
+    mic.end();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(events).toContain("organizer_audio_stalled"); // level 1 was tried...
+    expect(events).toContain("organizer_audio_unrecoverable"); // ...and gave way to level 2
+    expect(bridge.status).toBe("closed"); // stop(): out of the room, recreatable on demand
+  });
+
+  it("drops a setupComplete that lost a race with stop() — no socket resurrection", async () => {
+    // The epoch guard. A goAway starts a make-before-break replacement; the bridge is
+    // stopped before that socket finishes setup, but its setupComplete is already in
+    // flight. Pre-fix, onSocketReady swapped the dead-on-arrival socket in anyway —
+    // an open, paid-for Gemini session strapped to a closed bridge, invisible to
+    // every monitor. The guard must drop it instead.
+    const events: string[] = [];
+    const { bridge, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 1);
+
+    // Gemini warns it will terminate → the bridge opens a pending replacement...
+    FakeGeminiSocket.instances[0].emit(
+      "message",
+      Buffer.from(JSON.stringify({ goAway: { timeLeft: "5s" } }))
+    );
+    // ...and the bridge is stopped before that replacement completes setup.
+    await bridge.stop();
+    await vi.advanceTimersByTimeAsync(100); // the replacement's setupComplete lands now
+
+    expect(events.filter((e) => e === "gemini_session_setup_complete")).toHaveLength(1); // initial only
+    expect(events).toContain("gemini_stale_socket_dropped");
+    expect(bridge.status).toBe("closed");
+  });
+
+  it("never escalates against a muted mic — that silence is expected", async () => {
+    // Same dead-frames signal, opposite meaning: the organizer muted their mic. Frames
+    // stopping is correct behavior, and recreating the bridge wouldn't (and shouldn't)
+    // end it — escalation here would churn a Gemini session every ~45s for the whole
+    // mute. The mute state on the publication is what tells the two apart.
+    const events: string[] = [];
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(mic, 2);
+
+    mic.end();
+    const organizer = room.remoteParticipants.get(ORGANIZER) as FakeParticipant;
+    for (const [, pub] of organizer.trackPublications) pub.muted = true;
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    expect(events).not.toContain("organizer_audio_unrecoverable");
+    expect(bridge.status).toBe("active");
+    await bridge.stop();
+  });
+
   // -------------------------------------------------------------------------
   // Silence gating × stall watchdog — the seam the merge created.
   //
@@ -483,7 +592,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
   it("a long pause suspends Gemini WITHOUT the watchdog tearing down the live input", async () => {
     const events: string[] = [];
     const { bridge, seated: mic } = await boot((room) => room.seatOrganizer(ORGANIZER), {
-      silenceGatingEnabled: true,
+      silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
       recordEvent: (event: string) => events.push(event),
     });
 
@@ -521,7 +630,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     // can notice. (Same failure as the "unknown-unknown" test, now with gating enabled.)
     const events: string[] = [];
     const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
-      silenceGatingEnabled: true,
+      silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
       recordEvent: (event: string) => events.push(event),
     });
 
@@ -546,6 +655,45 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     const before = framesToGemini();
     await speakVoice(newMic, 3);
     expect(framesToGemini()).toBeGreaterThan(before);
+    await bridge.stop();
+  });
+
+  // Gating off is expressed as a voice bar of -Infinity rather than a separate flag, so
+  // these two pin down that the bar alone really does mean "never suspends" — across both
+  // routes into suspendForSilence. Without that, "off" would be a config that runs half
+  // the gating machinery, which is exactly the shape that made this hard to reason about.
+
+  it("with the voice bar off, open-mic room tone never suspends Gemini", async () => {
+    // The per-frame route. Room tone is digital silence here (-Infinity dBFS), the worst
+    // case for a `>=` test — it still has to read as voice at the off bar, or the quietest
+    // possible input would be the one thing that suspends a bridge with gating disabled.
+    const events: string[] = [];
+    const { bridge, seated: mic } = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      silenceThresholdDbfs: SILENCE_GATING_OFF_DBFS,
+      recordEvent: (event: string) => events.push(event),
+    });
+
+    await speakVoice(mic, 3);
+    await holdSilence(mic, 90_000); // 3x the suspend window
+    expect(events).not.toContain("gemini_suspended_silence");
+    expect(bridge.status).toBe("active");
+    await bridge.stop();
+  });
+
+  it("with the voice bar off, a muted mic sending nothing never suspends Gemini", async () => {
+    // The timer route, and the reason the off bar is checked when starting the monitor
+    // instead of being left to fall out of the per-frame test: with no frames arriving
+    // there is nothing to read as voice, `lastVoiceAt` just stops advancing, and the
+    // window elapses on a bridge that is supposed to stay up. The stall watchdog may
+    // fire here — a genuinely dead input is its job — but suspending is not.
+    const events: string[] = [];
+    const { bridge } = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      silenceThresholdDbfs: SILENCE_GATING_OFF_DBFS,
+      recordEvent: (event: string) => events.push(event),
+    });
+
+    await vi.advanceTimersByTimeAsync(45_000); // past the 30s suspend window, no frames at all
+    expect(events).not.toContain("gemini_suspended_silence");
     await bridge.stop();
   });
 });

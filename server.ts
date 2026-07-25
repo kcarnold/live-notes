@@ -31,6 +31,7 @@ import { buildSessionExport, renderSessionHtml, sessionExportFilename } from './
 import { AccessToken } from 'livekit-server-sdk';
 import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
+import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -205,11 +206,12 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
   return { url, apiKey, apiSecret };
 }
 
-// Cost optimization (silence suspend/resume + always-on default translator) is off
-// unless LIVE_AUDIO_SILENCE_GATING is truthy, so the goaway/reliability fixes can
-// ship while the cost path is still being validated. The goaway/reconnect buffering
-// is independent and always on.
-const SILENCE_GATING_ENABLED = /^(1|true|yes|on)$/i.test(process.env.LIVE_AUDIO_SILENCE_GATING ?? '');
+// The cost path's only knob: the dBFS level below which the organizer's mic counts as
+// silence, at which point a bridge suspends its Gemini socket. Unset (the default)
+// means bridges never suspend. The goaway/reconnect buffering is independent of this
+// and always on, as is the default translator — silence gating no longer decides
+// which bridges exist, only what an existing one does while nobody is speaking.
+const SILENCE_THRESHOLD_DBFS = parseSilenceThresholdDbfs(process.env.LIVE_AUDIO_SILENCE_THRESHOLD_DBFS);
 
 // Give the translation manager what it needs to persist transcripts into Yjs and
 // reap idle translator bots. No-op for transcript/reaper if LiveKit is unconfigured.
@@ -220,9 +222,13 @@ const SILENCE_GATING_ENABLED = /^(1|true|yes|on)$/i.test(process.env.LIVE_AUDIO_
       documentManager,
       livekit: lk,
       telemetry: phClient,
-      silenceGatingEnabled: SILENCE_GATING_ENABLED,
+      silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
     });
-    console.log(`[server] Live-audio silence gating (cost path): ${SILENCE_GATING_ENABLED ? 'ENABLED' : 'disabled'}`);
+    console.log(
+      `[server] Live-audio silence gating (cost path): ${
+        Number.isFinite(SILENCE_THRESHOLD_DBFS) ? `${SILENCE_THRESHOLD_DBFS} dBFS` : 'disabled'
+      }`
+    );
   }
 }
 
@@ -236,12 +242,26 @@ app.post('/api/livekit/token', async (req, res) => {
     const room = req.body?.room as string | undefined;
     const identity = req.body?.identity as string | undefined;
     const role = (req.body?.role as string | undefined) ?? 'attendee';
+    // The language this listener wants translated (BCP-47). Carried as a participant
+    // attribute so the translation supervisor can read demand straight from room
+    // presence — no refcount, no beacon. Optional: attribute-less listeners still get
+    // the default bridge, and their /translate request stamps their language.
+    const listenLanguage = req.body?.listenLanguage as string | undefined;
     if (!room || !identity) {
       return res.status(400).json({ error: 'Missing room or identity' });
     }
 
     const isOrganizer = role === 'organizer';
-    const at = new AccessToken(lk.apiKey, lk.apiSecret, { identity, name: identity, ttl: '4h' });
+    const at = new AccessToken(lk.apiKey, lk.apiSecret, {
+      identity,
+      name: identity,
+      ttl: '4h',
+      attributes: isOrganizer
+        ? { role: 'organizer' }
+        : listenLanguage
+          ? { listen: listenLanguage }
+          : undefined,
+    });
     at.addGrant({
       roomJoin: true,
       room,
@@ -251,19 +271,11 @@ app.post('/api/livekit/token', async (req, res) => {
     });
     const token = await at.toJwt();
 
-    // A broadcaster requesting a publish token IS the signal that a talk is live, so
-    // ensure the default translator runs even before any listener joins — a live talk
-    // always has at least an English transcript. Fire-and-forget: don't block or fail
-    // token issuance on bridge startup; the bridge waits for the organizer's audio,
-    // and the reaper cleans up if they never actually connect.
-    if (isOrganizer) {
-      void TranslationSessionManager.getInstance()
-        .ensureBroadcast(room, ORGANIZER_IDENTITY)
-        .catch((e) => {
-          phClient.captureException(e);
-          console.error('ensureBroadcast failed:', e);
-        });
-    }
+    // A token request means room presence is about to change — poke the translation
+    // supervisor so it reconciles this room within seconds instead of on its next
+    // tick. Delayed a beat so the requester has actually joined by the time the
+    // supervisor looks. Latency-only: the interval loop converges regardless.
+    setTimeout(() => TranslationSessionManager.getInstance().poke(room), 2_000).unref?.();
 
     return res.json({ token, serverUrl: lk.url });
   } catch (error) {
@@ -314,18 +326,15 @@ app.get('/api/livekit/translate/status', (req, res) => {
   }
 });
 
-// Decrement a language's listener count; the bot tears down at zero.
-// POST so navigator.sendBeacon can call it on page unload.
-app.post('/api/livekit/translate/unsubscribe', async (req, res) => {
+// Legacy endpoint, kept for clients cached from before the presence supervisor.
+// Leaving the LiveKit room is now the real "unsubscribe" signal; a beacon here just
+// nudges the supervisor to notice sooner.
+app.post('/api/livekit/translate/unsubscribe', (req, res) => {
   try {
     if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
     const sessionId = req.body?.sessionId as string | undefined;
-    const targetLanguage = req.body?.targetLanguage as string | undefined;
-    if (!sessionId || !targetLanguage) {
-      return res.status(400).json({ error: 'Missing sessionId or targetLanguage' });
-    }
-    const manager = TranslationSessionManager.getInstance();
-    await manager.unsubscribe(sessionId, targetLanguage);
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+    TranslationSessionManager.getInstance().poke(sessionId);
     return res.json({ success: true });
   } catch (error) {
     phClient.captureException(error);

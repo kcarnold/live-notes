@@ -5,7 +5,9 @@ import {
   isSilentFrame,
   nextBackoffMs,
   parseGoAwayTimeLeftMs,
+  parseSilenceThresholdDbfs,
   SILENCE_FLOOR_DBFS,
+  SILENCE_GATING_OFF_DBFS,
   SILENCE_THRESHOLD_DBFS,
   reconcileOrganizerAudio,
   shouldRecoverStalledInput,
@@ -59,6 +61,37 @@ describe("isSilentFrame", () => {
     const frame = toneFrame(2048); // ~-24 dBFS
     expect(isSilentFrame(frame, -20)).toBe(true);
     expect(isSilentFrame(frame, -30)).toBe(false);
+  });
+
+  it("calls nothing silent at the off bar, including digital silence", () => {
+    // The bar doubles as the feature's switch, so this is the property the whole
+    // "no separate flag" simplification rests on: at -Infinity even an all-zeros
+    // frame (which reads -Infinity dBFS) must come out non-silent.
+    expect(isSilentFrame(new Int16Array(1600), SILENCE_GATING_OFF_DBFS)).toBe(false);
+    expect(isSilentFrame(toneFrame(64), SILENCE_GATING_OFF_DBFS)).toBe(false);
+  });
+});
+
+// The env knob. dBFS is negative below full scale, so the direction is easy to get
+// backwards: 0 is not "off", it's the most aggressive gate possible (everything but a
+// clipping-loud frame reads as silence). Off has to be its own value, and the default.
+describe("parseSilenceThresholdDbfs", () => {
+  it("defaults to off when unset or blank", () => {
+    expect(parseSilenceThresholdDbfs(undefined)).toBe(SILENCE_GATING_OFF_DBFS);
+    expect(parseSilenceThresholdDbfs("")).toBe(SILENCE_GATING_OFF_DBFS);
+    expect(parseSilenceThresholdDbfs("   ")).toBe(SILENCE_GATING_OFF_DBFS);
+  });
+
+  it("reads a finite level, so gating is opted into by naming one", () => {
+    expect(parseSilenceThresholdDbfs("-30")).toBe(-30);
+    expect(parseSilenceThresholdDbfs(" -42.5 ")).toBe(-42.5);
+    expect(parseSilenceThresholdDbfs(String(SILENCE_THRESHOLD_DBFS))).toBe(SILENCE_THRESHOLD_DBFS);
+  });
+
+  it("falls back to off rather than gating on a value it can't read", () => {
+    // A typo'd env var must not silently start suspending sessions mid-talk.
+    expect(parseSilenceThresholdDbfs("loud")).toBe(SILENCE_GATING_OFF_DBFS);
+    expect(parseSilenceThresholdDbfs("-Infinity")).toBe(SILENCE_GATING_OFF_DBFS);
   });
 });
 

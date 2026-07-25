@@ -59,6 +59,8 @@ export interface AppStrings {
   englishTranscript: string;
   liveListening: string;
   waitingForSpeaker: string;
+  restartingTranslation: string;
+  waitingForTranscript: string;
   waitingForSpeech: string;
   liveAudioError: string;
   retry: string;
@@ -154,6 +156,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     englishTranscript: 'English transcript',
     liveListening: 'Listening live',
     waitingForSpeaker: 'Waiting for the speaker…',
+    restartingTranslation: 'Restarting translation…',
+    waitingForTranscript: 'Waiting for the transcript…',
     waitingForSpeech: 'Waiting for translated speech…',
     liveAudioError: 'Live audio unavailable',
     retry: 'Retry',
@@ -245,6 +249,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     englishTranscript: 'Transcription anglaise',
     liveListening: 'Écoute en direct',
     waitingForSpeaker: 'En attente de l’orateur…',
+    restartingTranslation: 'Redémarrage de la traduction…',
+    waitingForTranscript: 'En attente de la transcription…',
     waitingForSpeech: 'En attente de la traduction vocale…',
     liveAudioError: 'Audio en direct indisponible',
     retry: 'Réessayer',
@@ -336,6 +342,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     englishTranscript: 'Transcripción en inglés',
     liveListening: 'Escuchando en vivo',
     waitingForSpeaker: 'Esperando al orador…',
+    restartingTranslation: 'Reiniciando la traducción…',
+    waitingForTranscript: 'Esperando la transcripción…',
     waitingForSpeech: 'Esperando la traducción hablada…',
     liveAudioError: 'Audio en vivo no disponible',
     retry: 'Reintentar',
@@ -427,6 +435,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     englishTranscript: 'Transkripsyon anglè',
     liveListening: 'Ap koute an dirèk',
     waitingForSpeaker: 'N ap tann moun k ap pale a…',
+    restartingTranslation: 'N ap redemare tradiksyon an…',
+    waitingForTranscript: 'N ap tann transkripsyon an…',
     waitingForSpeech: 'N ap tann tradiksyon vokal la…',
     liveAudioError: 'Odyo an dirèk pa disponib',
     retry: 'Reeseye',

@@ -55,6 +55,26 @@ import type { TranscriptWriter } from "./transcript-writer.ts";
 
 export type BridgeStatus = "starting" | "active" | "error" | "closed";
 
+/** The Gemini leg's state, derived for reporting (see health()). */
+export type GeminiLegState = "ready" | "connecting" | "backoff" | "suspended" | "down";
+
+/**
+ * Composite health snapshot. `status` alone is a single word that has twice read
+ * "active" through an outage; this is the honest version, surfaced by the status
+ * endpoint so dashboards and the supervisor can see which leg is actually unwell.
+ */
+export interface BridgeHealth {
+  status: BridgeStatus;
+  gemini: GeminiLegState;
+  /** Last time an organizer audio frame entered the bridge (0 = never). */
+  lastInputFrameAt: number;
+  /** Last time translated audio was published to LiveKit (0 = never). */
+  lastOutputFrameAt: number;
+  reconnects: number;
+  /** Gap-buffer depth right now — current added latency in frames. */
+  bufferedFrames: number;
+}
+
 /** Records a telemetry event. Implemented in the server over the PostHog client. */
 export type RecordEvent = (
   event: string,
@@ -73,6 +93,13 @@ export type ReconnectTrigger = "goaway" | "close" | "resume";
 // not merely quiet. Recovery is attempted no more than once per stall window.
 const INPUT_STALL_MS = 15_000;
 const STALL_CHECK_INTERVAL_MS = 5_000;
+// Reconcile is the watchdog's level-1 recovery; this is level 2. If this many
+// consecutive stall windows pass with an apparently-live (unmuted, published) organizer
+// mic and still no frames, reconcile isn't fixing it — tear the bridge down so demand
+// (a listener re-requesting the language) recreates it from scratch, which is what the
+// manual redeploy did in the 2026-07-12 outage. A muted or unpublished mic never
+// escalates: that silence is expected, and recreating wouldn't (and shouldn't) end it.
+const STALL_ESCALATE_AFTER = 3;
 
 // Exponential-backoff bounds for failed Gemini reconnect attempts (mirrors the
 // Proclaim service's convention; see PROCLAIM_INTEGRATION.md).
@@ -81,16 +108,25 @@ const RECONNECT_BACKOFF = { initialMs: 1_000, maxMs: 30_000 };
 // Silence gating uses two thresholds, because "have we been silent long enough to
 // stop paying?" and "is there any sound here worth keeping?" want opposite biases.
 //
-// SILENCE_THRESHOLD_DBFS (the strict *voice* bar) drives the suspend clock and the
-// resume trigger: only clear speech keeps the session alive / wakes it, so room tone
-// doesn't burn money and faint noise doesn't wake it to hallucinate on nothing.
+// The *voice* bar (per-bridge, `silenceThresholdDbfs`) drives the suspend clock and
+// the resume trigger: only clear speech keeps the session alive / wakes it, so room
+// tone doesn't burn money and faint noise doesn't wake it to hallucinate on nothing.
+// That bar is also the feature's only switch. At SILENCE_GATING_OFF_DBFS every frame
+// reads as voice, so the suspend clock can never elapse and the bridge is a plain
+// always-on session — there is no second boolean to keep in sync with it, and no
+// configuration in which some of the gating machinery is live and the rest isn't.
+// SILENCE_THRESHOLD_DBFS is the level to use when you do want gating.
 //
 // SILENCE_FLOOR_DBFS (the *dead-air* floor, well below the voice bar) is the only
 // thing the gap-collapse is allowed to drop. An unvoiced consonant (/s/, /f/, a
 // plosive burst diluted across a 100 ms frame) can read below the voice bar but sits
 // far above this floor, so it is always kept — we never trade a clipped consonant
-// for lower latency. Only genuine near-digital dead air collapses.
+// for lower latency. Only genuine near-digital dead air collapses. It belongs to the
+// reconnect buffer, not to gating, so it stays fixed however the voice bar is set.
 export const SILENCE_THRESHOLD_DBFS = -30;
+// Gating off. `frameRmsDbfs` bottoms out at -Infinity for pure digital silence, and
+// the voice test is `>=`, so at this bar even a frame of zeroes counts as voice.
+export const SILENCE_GATING_OFF_DBFS = -Infinity;
 export const SILENCE_FLOOR_DBFS = -50;
 const SILENCE_SUSPEND_MS = 30_000;
 const SILENCE_CHECK_INTERVAL_MS = 5_000;
@@ -148,6 +184,20 @@ export function isSilentFrame(
   thresholdDbfs: number = SILENCE_THRESHOLD_DBFS
 ): boolean {
   return frameRmsDbfs(data) < thresholdDbfs;
+}
+
+/**
+ * Read the voice bar from its env value (`LIVE_AUDIO_SILENCE_THRESHOLD_DBFS`), in
+ * dBFS. Unset — or anything non-finite, including a literal "-Infinity" — means
+ * gating off, so the cost path is opted into by naming a level (e.g. `-30`) and
+ * never arrives by accident. Note the sign: dBFS is negative below full scale, so
+ * a *higher* bar gates more aggressively and `0` would treat all real speech as
+ * silence. That's the opposite of off.
+ */
+export function parseSilenceThresholdDbfs(raw: string | undefined): number {
+  if (raw == null || raw.trim() === "") return SILENCE_GATING_OFF_DBFS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : SILENCE_GATING_OFF_DBFS;
 }
 
 /**
@@ -320,6 +370,15 @@ export class TranslationBridge {
   // collapse dead air (see MAX_GAP_SILENCE_FRAMES).
   private bufferedSilenceRun: number = 0;
 
+  // Teardown epoch. Incremented whenever the Gemini side is torn down (stop, room
+  // failure, silence suspend), and captured by every socket's handlers when the
+  // socket is wired. A handler whose epoch is stale — its socket belongs to a life
+  // the bridge has already left — is dropped instead of acting, which closes the
+  // whole "async callback fires in a state it wasn't written for" class (e.g. a
+  // setupComplete racing a suspend and swapping a paid-for socket into a bridge
+  // that believes it has none).
+  private epoch: number = 0;
+
   // Reconnect state. `pendingWs` is a replacement socket being established (during
   // a make-before-break swap or a backoff retry); `reconnecting` guards against
   // launching two overlapping reconnects (e.g. goAway then the actual close).
@@ -340,6 +399,9 @@ export class TranslationBridge {
   private lastOrganizerFrameAt: number = 0;
   private lastStallRecoveryAt: number = 0;
   private stallWatchdog: ReturnType<typeof setInterval> | null = null;
+  // Stall windows in a row where reconcile didn't bring frames back (see
+  // STALL_ESCALATE_AFTER). Reset whenever frames arrive or the mic reads muted.
+  private consecutiveStallRecoveries: number = 0;
 
   // Persists finalized transcript segments into the shared Yjs doc.
   private readonly writer: TranscriptWriter | null;
@@ -349,12 +411,11 @@ export class TranslationBridge {
   private readonly writesSourceTranscript: boolean;
   // Telemetry sink (PostHog, injected by the server). Null in tests / when unset.
   private readonly recordEvent: RecordEvent | null;
-  // Cost optimization: when off (the default) the bridge never suspends its Gemini
-  // socket for silence — the silence monitor isn't started, so it behaves exactly as
-  // before this feature (always-on session). The goaway/reconnect buffering below is
-  // independent and always active. Gated so the reliability fixes can ship while the
-  // suspend/resume cost path is still being validated.
-  private readonly silenceGatingEnabled: boolean;
+  // The voice bar, in dBFS — the cost path's only knob. At SILENCE_GATING_OFF_DBFS
+  // (the default) every frame reads as voice, so the bridge never suspends and is a
+  // plain always-on session. The goaway/reconnect buffering is independent of this
+  // and always active.
+  private readonly silenceThresholdDbfs: number;
 
   // The source (input) transcript is published under this language code.
   static readonly SOURCE_CODE = "en";
@@ -371,7 +432,7 @@ export class TranslationBridge {
       writer?: TranscriptWriter | null;
       writesSourceTranscript?: boolean;
       recordEvent?: RecordEvent | null;
-      silenceGatingEnabled?: boolean;
+      silenceThresholdDbfs?: number;
     }
   ) {
     this.sessionId = sessionId;
@@ -385,7 +446,31 @@ export class TranslationBridge {
     this.writer = config.writer ?? null;
     this.writesSourceTranscript = config.writesSourceTranscript ?? false;
     this.recordEvent = config.recordEvent ?? null;
-    this.silenceGatingEnabled = config.silenceGatingEnabled ?? false;
+    this.silenceThresholdDbfs = config.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
+  }
+
+  /**
+   * The Gemini leg's current state, derived from the connection fields rather than
+   * stored — so it can't drift from them. Reporting only; no behavior reads this.
+   */
+  private geminiLegState(): GeminiLegState {
+    if (this.suspended) return "suspended";
+    if (this.geminiWs && this.geminiSetupComplete) return "ready";
+    if (this.pendingWs) return "connecting";
+    if (this.reconnectTimer) return "backoff";
+    return "down";
+  }
+
+  /** Composite health snapshot for the status endpoint / supervisor / dashboards. */
+  health(): BridgeHealth {
+    return {
+      status: this.status,
+      gemini: this.geminiLegState(),
+      lastInputFrameAt: this.lastOrganizerFrameAt,
+      lastOutputFrameAt: this.lastAudioFrameTime,
+      reconnects: this.reconnectCount,
+      bufferedFrames: this.pendingFrames.length,
+    };
   }
 
   /** Emit a telemetry event tagged with this bridge's language and identity. */
@@ -416,10 +501,10 @@ export class TranslationBridge {
 
       this.status = "active";
       // Start the silence clock now so an organizer who joins but never speaks
-      // still suspends after the grace window rather than immediately. Only when the
-      // cost path is enabled — otherwise the socket stays up for the whole session.
+      // still suspends after the grace window rather than immediately. Unconditional:
+      // the monitor itself no-ops when the voice bar is off.
       this.lastVoiceAt = Date.now();
-      if (this.silenceGatingEnabled) this.startSilenceMonitor();
+      this.startSilenceMonitor();
       console.log(
         `[TranslationBridge:${this.targetLanguage}] Bridge is active`
       );
@@ -473,7 +558,27 @@ export class TranslationBridge {
     }
     this.pipedTracks.clear();
 
-    // Stop any in-flight reconnect so it doesn't resurrect the socket after teardown.
+    this.teardownGeminiSide();
+
+    if (this.room) {
+      await this.room.disconnect();
+      this.room = null;
+    }
+
+    this.audioSource = null;
+    this.localTrack = null;
+    this.suspended = false;
+  }
+
+  /**
+   * Close the Gemini side completely: the active socket, any pending replacement, any
+   * scheduled retry, and the gap buffer. Used by stop() and by failure paths (room
+   * disconnect, watchdog escalation) where the bridge is done but must not leave a
+   * paid-for socket behind. The sockets' close handlers see a non-active status (or
+   * suspended) and won't reconnect.
+   */
+  private teardownGeminiSide(): void {
+    this.epoch++;
     this.reconnecting = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -483,21 +588,11 @@ export class TranslationBridge {
       this.pendingWs.close();
       this.pendingWs = null;
     }
-
     if (this.geminiWs) {
       this.geminiWs.close();
       this.geminiWs = null;
     }
-
-    if (this.room) {
-      await this.room.disconnect();
-      this.room = null;
-    }
-
-    this.audioSource = null;
-    this.localTrack = null;
     this.geminiSetupComplete = false;
-    this.suspended = false;
     this.pendingFrames = [];
     this.bufferedSilenceRun = 0;
   }
@@ -528,7 +623,15 @@ export class TranslationBridge {
         `[TranslationBridge:${this.targetLanguage}] Disconnected from room (reason: ${DisconnectReason[reason] ?? reason})`
       );
       this.record("livekit_disconnected", { reason: DisconnectReason[reason] ?? String(reason) });
-      this.status = "closed";
+      // stop() disconnects the room deliberately, with status already "closed" — done.
+      if (this.status === "closed") return;
+      // Any other disconnect (duplicate identity, LiveKit server restart, connectivity
+      // loss past the SDK's resume) is a failure. "error" marks the bridge recreatable —
+      // ensureBridge treats it as stale, and listeners re-request the language when they
+      // see the translator gone. Drop the Gemini side too, so the bridge can't linger as
+      // a zombie holding a paid-for session that no audio will ever reach.
+      this.status = "error";
+      this.teardownGeminiSide();
     });
 
     this.room.on(RoomEvent.Reconnecting, () => {
@@ -663,6 +766,8 @@ export class TranslationBridge {
   ): void {
     let openedAt = 0;
     let ready = false;
+    // The life of the bridge this socket belongs to; see the epoch field.
+    const wiredEpoch = this.epoch;
 
     ws.on("open", () => {
       openedAt = Date.now();
@@ -692,6 +797,27 @@ export class TranslationBridge {
       }
 
       if (message.setupComplete) {
+        // The bridge may have moved on while this socket was setting up — suspended
+        // for silence, stopped, or failed with its room. Swapping in then would strand
+        // an open, paid-for socket in a bridge that believes it has none. (status
+        // "starting" is fine: that's the initial socket completing during start().)
+        if (
+          wiredEpoch !== this.epoch ||
+          this.suspended ||
+          this.status === "closed" ||
+          this.status === "error"
+        ) {
+          console.log(
+            `[TranslationBridge:${this.targetLanguage}] Dropping stale setupComplete (${opts.role})`
+          );
+          this.record("gemini_stale_socket_dropped", { role: opts.role, trigger: opts.trigger });
+          try {
+            ws.close();
+          } catch {
+            // already closing
+          }
+          return;
+        }
         ready = true;
         this.onSocketReady(ws, opts.role, openedAt ? Date.now() - openedAt : 0, opts.trigger);
         return;
@@ -819,7 +945,7 @@ export class TranslationBridge {
   /** Open a replacement socket; it swaps in once its setup completes. */
   private openReplacement(trigger: ReconnectTrigger, attempt: number): void {
     this.reconnectTimer = null;
-    if (this.status !== "active") {
+    if (this.status !== "active" || this.suspended) {
       this.reconnecting = false;
       return;
     }
@@ -837,9 +963,15 @@ export class TranslationBridge {
    * driven per-frame (the first non-silent frame reopens the socket), but this
    * timer also catches the case where the mic is muted and no frames arrive at
    * all — then `lastVoiceAt` simply stops advancing and the window elapses.
+   *
+   * That muted-mic path is why an off voice bar is checked here and not left to
+   * fall out of the per-frame test: with no frames at all there is nothing to read
+   * as voice, so the clock would elapse on a bridge that is meant never to suspend.
+   * This is the one place the switch is read; everywhere else the bar is just a bar.
    */
   private startSilenceMonitor(): void {
     if (this.silenceTimer) return;
+    if (this.silenceThresholdDbfs === SILENCE_GATING_OFF_DBFS) return;
     this.silenceTimer = setInterval(() => {
       if (this.status !== "active" || this.suspended) return;
       if (this.lastVoiceAt && Date.now() - this.lastVoiceAt > SILENCE_SUSPEND_MS) {
@@ -863,26 +995,12 @@ export class TranslationBridge {
       `[TranslationBridge:${this.targetLanguage}] Suspending Gemini after ${silentMs}ms of silence`
     );
     // Set suspended before closing so the socket's close handler treats this as an
-    // intentional teardown rather than a session drop to reconnect from.
+    // intentional teardown rather than a session drop to reconnect from. The shared
+    // teardown also drops any stale gap buffer (from here we only keep a short
+    // silence pre-roll) and bumps the epoch, so an in-flight setupComplete from
+    // before the suspend can't swap a socket back in.
     this.suspended = true;
-    this.geminiSetupComplete = false;
-    // Drop any stale gap buffer; from here we only keep a short silence pre-roll.
-    this.pendingFrames = [];
-    this.bufferedSilenceRun = 0;
-
-    this.reconnecting = false;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.pendingWs) {
-      this.pendingWs.close();
-      this.pendingWs = null;
-    }
-    if (this.geminiWs) {
-      this.geminiWs.close();
-      this.geminiWs = null;
-    }
+    this.teardownGeminiSide();
 
     this.record("gemini_suspended_silence", {
       silentMs,
@@ -1123,7 +1241,7 @@ export class TranslationBridge {
    * Safe to call at any time, from any trigger, as often as we like.
    */
   private reconcile(trigger: string): void {
-    if (!this.room || this.status === "closed") return;
+    if (!this.room || this.status === "closed" || this.status === "error") return;
     const subscribed = reconcileOrganizerAudio({
       organizerIdentity: this.organizerIdentity,
       participants: this.room.remoteParticipants.values(),
@@ -1143,6 +1261,10 @@ export class TranslationBridge {
     this.stallWatchdog = setInterval(() => {
       if (this.status !== "active") return;
       const now = Date.now();
+      // Frames since the last recovery mean it worked — the escalation clock resets.
+      if (this.lastOrganizerFrameAt > this.lastStallRecoveryAt) {
+        this.consecutiveStallRecoveries = 0;
+      }
       if (
         !shouldRecoverStalledInput({
           now,
@@ -1155,6 +1277,29 @@ export class TranslationBridge {
       }
       this.lastStallRecoveryAt = now;
       const stalledMs = now - this.lastOrganizerFrameAt;
+
+      // Level 2: reconcile has had its chances and frames never came back. Only when
+      // the organizer's mic *looks* live — a muted/unpublished mic is expected silence,
+      // and recreating the bridge wouldn't end it (just churn a Gemini session).
+      if (this.organizerHasUnmutedAudio()) {
+        this.consecutiveStallRecoveries++;
+        if (this.consecutiveStallRecoveries >= STALL_ESCALATE_AFTER) {
+          console.error(
+            `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms after ${this.consecutiveStallRecoveries} reconcile attempts — tearing down for recreation`
+          );
+          this.record("organizer_audio_unrecoverable", {
+            stalledMs,
+            recoveries: this.consecutiveStallRecoveries,
+          });
+          // stop() leaves the room, so listeners see the translator vanish and
+          // re-request the language, which recreates the bridge from scratch.
+          void this.stop();
+          return;
+        }
+      } else {
+        this.consecutiveStallRecoveries = 0;
+      }
+
       console.warn(
         `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription`
       );
@@ -1163,6 +1308,24 @@ export class TranslationBridge {
     }, STALL_CHECK_INTERVAL_MS);
     // Don't hold the process open on this timer alone.
     this.stallWatchdog.unref?.();
+  }
+
+  /**
+   * Does the organizer currently have an audio publication that isn't muted? Frames
+   * should be flowing from such a mic, so their sustained absence marks the input
+   * pipe as broken rather than merely quiet. `muted` can be undefined on some SDK
+   * paths; treat unknown as live so a broken pipe is never mistaken for a muted mic.
+   */
+  private organizerHasUnmutedAudio(): boolean {
+    if (!this.room) return false;
+    for (const participant of this.room.remoteParticipants.values()) {
+      if (participant.identity !== this.organizerIdentity) continue;
+      for (const [, pub] of participant.trackPublications) {
+        if (pub.kind !== TrackKind.KIND_AUDIO) continue;
+        if (pub.muted !== true) return true;
+      }
+    }
+    return false;
   }
 
   private pipeTrackToGemini(track: RemoteAudioTrack): void {
@@ -1226,7 +1389,7 @@ export class TranslationBridge {
     // raw level is passed on so the gap-collapse can tell a faint consonant (kept)
     // from genuine dead air (droppable).
     const dbfs = frameRmsDbfs(frame.data);
-    const isVoice = dbfs >= SILENCE_THRESHOLD_DBFS;
+    const isVoice = dbfs >= this.silenceThresholdDbfs;
     if (isVoice) {
       this.lastVoiceAt = Date.now();
       if (this.suspended) this.resumeFromSilence();
