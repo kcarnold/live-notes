@@ -1,5 +1,5 @@
-import { GoogleGenAI } from '@posthog/ai';
-import genAI, { FunctionCallingConfigMode, type Content, type Part, type FunctionDeclaration } from '@google/genai'; // for types
+import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration, type Part } from '@google/genai'; // for types
+import { Gemini as GoogleGenAI } from '@posthog/ai/gemini';
 import { PostHog } from 'posthog-node';
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
 import { unescapeLiteralEscapes } from './src/slideTranslation.ts';
@@ -139,20 +139,20 @@ export const translateBlock = async (provider: GeminiProvider, todo: Translation
     const config = {
       responseMimeType: 'application/json',
       responseSchema: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         required: ["segments"],
         properties: {
           segments: {
-            type: genAI.Type.ARRAY,
+            type: Type.ARRAY,
             items: {
-              type: genAI.Type.OBJECT,
+              type: Type.OBJECT,
               required: ["segmentId", "translation"],
               properties: {
                 segmentId: {
-                  type: genAI.Type.INTEGER,
+                  type: Type.INTEGER,
                 },
                 translation: {
-                  type: genAI.Type.STRING,
+                  type: Type.STRING,
                 },
               },
             },
@@ -251,20 +251,20 @@ const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
         'published text rather than translating from scratch. Returns the passage in each ' +
         'available target language.',
     parameters: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         properties: {
             book: {
-                type: genAI.Type.STRING,
+                type: Type.STRING,
                 description:
                     'USFM book code (uppercase 3 chars), e.g. GEN, PSA, ISA, MAT, JHN, ROM, 1CO, REV.',
             },
-            chapter: { type: genAI.Type.INTEGER, description: 'Chapter number.' },
+            chapter: { type: Type.INTEGER, description: 'Chapter number.' },
             startVerse: {
-                type: genAI.Type.INTEGER,
+                type: Type.INTEGER,
                 description: 'First verse of the range. Omit to fetch the whole chapter.',
             },
             endVerse: {
-                type: genAI.Type.INTEGER,
+                type: Type.INTEGER,
                 description: 'Last verse of the range. Omit for a single verse (defaults to startVerse).',
             },
         },
@@ -317,32 +317,32 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
         'only the languages and segments that actually change; anything you leave out keeps ' +
         'its current text. For a small fix inside one slide, prefer revise_translation.',
     parameters: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         required: ['languages'],
         properties: {
             languages: {
-                type: genAI.Type.ARRAY,
+                type: Type.ARRAY,
                 items: {
-                    type: genAI.Type.OBJECT,
+                    type: Type.OBJECT,
                     required: ['language', 'segments'],
                     properties: {
-                        language: { type: genAI.Type.STRING },
+                        language: { type: Type.STRING },
                         segments: {
-                            type: genAI.Type.ARRAY,
+                            type: Type.ARRAY,
                             items: {
-                                type: genAI.Type.OBJECT,
+                                type: Type.OBJECT,
                                 required: ['segmentId', 'translation'],
                                 properties: {
                                     segmentId: {
-                                        type: genAI.Type.INTEGER,
+                                        type: Type.INTEGER,
                                         description: 'The id of the source slide this translates.',
                                     },
                                     translation: {
-                                        type: genAI.Type.STRING,
+                                        type: Type.STRING,
                                         description: `The full translated text of this slide. ${LINE_BREAK_FIELD_NOTE}`,
                                     },
                                     note: {
-                                        type: genAI.Type.STRING,
+                                        type: Type.STRING,
                                         description:
                                             'Optional caveat for the reviewer. Omit unless there is ' +
                                             'a genuine ambiguity or judgement call worth flagging.',

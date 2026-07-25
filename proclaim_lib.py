@@ -80,9 +80,12 @@ def decode_richtext_xml(xml: str) -> str:
 
 def split_into_slides(text: str) -> List[str]:
     """Split the text into sections based on blank lines or --."""
-    explicitly_delimited = '--' in text
+    lines = text.strip().splitlines()
+    explicitly_delimited = any(line.strip() == '--' for line in lines)
+    print(f"Split into slides: explicitly_delimited={explicitly_delimited}")
+    print(f"Lines: {lines!r}")
     sections = ['']
-    for line in text.strip().split('\n'):
+    for line in lines:
         line_stripped = line.strip()
         is_slide_break = (line_stripped == '' and not explicitly_delimited) or (line_stripped == '--')
         if is_slide_break:
