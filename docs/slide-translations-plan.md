@@ -327,9 +327,14 @@ Line breaks inside a slide are content, and the agent was getting them wrong in 
 - **How faithfully to follow them.** This is a per-slide judgement the model is asked to
   make: in songs, hymns, poetry, and responsive readings the line structure carries the form,
   so it keeps one output line per source line; in prose (congregational readings, prayers,
-  announcements) the breaks are cosmetic slide-fitting, so it re-breaks where the target
-  language reads naturally while keeping a similar line count. Ties go to preserving the
-  source structure.
+  announcements) the breaks only exist to fit the English on the English slide, so it drops
+  them and writes unbroken prose — the viewer reflows to its own screen size, so a break the
+  model writes is a hard break that survives where it may not belong. Ties go to preserving
+  the source structure.
+- **Said once.** The policy lives in `LINE_BREAK_POLICY` and is interpolated into both the
+  drafting prompt and the seeded review conversation. Tool parameters get
+  `LINE_BREAK_FIELD_NOTE` instead, which covers only the encoding of that field and defers
+  to the policy — a policy stated in two places is one that gets edited in one.
 
 ### Targeted edits (`revise_translation`) — DONE
 `set_translations` records whole slides, which made every follow-up fix — one word, one line

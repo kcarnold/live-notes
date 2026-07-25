@@ -273,17 +273,39 @@ const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
 };
 
 /**
- * Guidance shared by every tool parameter that carries slide text, and repeated in the
- * prompt. Line breaks are the thing models get wrong here in both directions: they escape
- * them, and they either flatten or slavishly copy them.
+ * The line-break policy, stated once and shared by every prompt that needs it (drafting and
+ * the seeded review conversation). Tool parameters deliberately do NOT restate it — see
+ * `LINE_BREAK_FIELD_NOTE` — so there is one place to edit when the policy changes.
  */
-const LINE_BREAK_GUIDANCE =
-    'Write real line breaks in this text — press newline, never the two characters ' +
-    'backslash-n. How closely to follow the source\'s line breaks depends on the material: ' +
-    'in songs, hymns, poetry, and responsive readings the line structure is part of the ' +
-    'content, so keep one output line per source line; in prose (congregational readings, ' +
-    'prayers, announcements) the breaks are usually just there to make the English sit ' +
-    'nicely on the slide; ignore these (the viewer will flow text based on its screen size.';
+const LINE_BREAK_POLICY = `
+Line breaks within a slide:
+
+Write real line breaks in your translations. Never write the two characters backslash-n —
+that is not a line break, and it shows up on the projected slide exactly as typed.
+
+Whether to reproduce the source's line breaks is a judgement call that depends on what the
+slide is. Decide per slide from its content:
+- Songs, hymns, poetry, and responsive readings: the line structure is part of the content
+  — it carries the meter, the call-and-response turns, the poetic parallelism. Keep one
+  output line per source line, so the translation lines up with the original line for line.
+- Prose — congregational readings, prayers, announcements, narrative Scripture set as
+  paragraphs: the breaks are there only to make the English sit nicely on the English
+  slide. Ignore them. Write the translation as unbroken prose and let it wrap on its own;
+  the viewer reflows text to its own screen size, so any break you write is a hard break
+  that survives where it probably does not belong.
+
+When a slide could be either, keep the source's line structure.
+`;
+
+/**
+ * The line-break note attached to tool parameters that carry slide text. Covers only the
+ * encoding of the field itself; the editorial policy above is not repeated here, because a
+ * policy in two places is a policy that gets edited in one.
+ */
+const LINE_BREAK_FIELD_NOTE =
+    'Use real line breaks — never the two characters backslash-n, which reach the slide ' +
+    'exactly as typed. Whether to keep the source slide\'s breaks at all is covered by the ' +
+    'line-break guidance in the conversation.';
 
 /** Function declaration the model uses to record the finished translations. */
 const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
@@ -293,9 +315,7 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
         'one entry per target language and exactly one segment per requested slide id. You ' +
         'may call it again to revise (e.g. after reviewer feedback) — when revising, include ' +
         'only the languages and segments that actually change; anything you leave out keeps ' +
-        'its current text. For a small fix inside one slide, prefer revise_translation. Add a ' +
-        'per-segment "note" ONLY when there is a genuine caveat, ambiguity, or choice the ' +
-        'reviewer should know about — otherwise omit it.',
+        'its current text. For a small fix inside one slide, prefer revise_translation.',
     parameters: {
         type: genAI.Type.OBJECT,
         required: ['languages'],
@@ -319,7 +339,7 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
                                     },
                                     translation: {
                                         type: genAI.Type.STRING,
-                                        description: `The full translated text of this slide. ${LINE_BREAK_GUIDANCE}`,
+                                        description: `The full translated text of this slide. ${LINE_BREAK_FIELD_NOTE}`,
                                     },
                                     note: {
                                         type: genAI.Type.STRING,
@@ -373,7 +393,7 @@ const REVISE_TRANSLATION_TOOL: FunctionDeclaration = {
             },
             replace: {
                 type: genAI.Type.STRING,
-                description: `The replacement text; may be empty to delete. ${LINE_BREAK_GUIDANCE}`,
+                description: `The replacement text; may be empty to delete. ${LINE_BREAK_FIELD_NOTE}`,
             },
         },
     },
@@ -687,27 +707,6 @@ ${generalContext}
     const sourceDocument = renderSlideBlocks(sourceSlides);
     const targetsDocument = renderTargetBlocks(targets, sourceSlides.length);
 
-    const lineBreakSection = `
-Line breaks within a slide:
-
-Write real line breaks in your translations. Never write the two characters backslash-n —
-that is not a line break, and it shows up on the projected slide exactly as typed.
-
-How far to follow the source's line breaks is a judgement call, and it depends on what the
-slide is. Decide per slide from its content:
-- Songs, hymns, poetry, and responsive readings: the line structure is part of the content
-  (it carries the meter, the call-and-response turns, the poetic parallelism). Keep one
-  output line per source line, so the translation lines up with the original line for line.
-- Prose — congregational readings, prayers, announcements, narrative Scripture set as
-  paragraphs: the breaks are usually just there to make the English fall pleasantly on the
-  slide, and the natural break points differ in another language. Re-break wherever the
-  target language reads best, keeping roughly the same number of lines so the text still
-  fits the slide.
-
-When a slide could be either, follow the source's line structure — a preserved break is a
-much smaller mistake than a lost one.
-`;
-
     const referenceSection = referenceText
         ? `
 The reference material below may contain prior translations of this same content. It can
@@ -736,13 +735,11 @@ ${existingTranslation}
 
     const bibleSection = bibleLanguages.length > 0
         ? `
-Some slides are or quote Scripture (an explicit Bible reading, a quoted verse, or an
-adaptation such as "based on Psalm 23"). When a slide draws on a Bible passage, call the
-lookup_bible_passage tool to fetch the canonical published wording in the target languages
-(${bibleLanguages.join(', ')}), then base your translation on that text — adapting only
-where the slide itself does (responsive readings, pronoun changes, partial quotes). Look up
-every reference you recognize — the passage named in the item title above, and any inline
-references — before recording the final translations.
+Canonical Scripture is available through lookup_bible_passage for: ${bibleLanguages.join(', ')}.
+Look up every reference you recognize — the passage named in the item title above, and any
+inline references — before recording the final translations, and base those slides on the
+published wording, adapting only where the slide itself does (responsive readings, pronoun
+changes, partial quotes).
 
 Be reticent in adaptations: prefer direct quotes of the published text, and only adapt
 when it is very clear that the slide itself has deliberately made an adaptation.
@@ -762,18 +759,16 @@ for the passage on these slides.
         : '';
 
     const toolInstruction = `
-When the translations are ready, call the set_translations tool. For each target language
-include exactly one segment per id in its "translate slide ids", with segmentIds matching
-the source slides; do not include ids that were not requested. Do not reply with the
-translations as plain text — record them via the tool. Afterwards, to change something
-small (the reviewer asks for one word, one line, a punctuation fix), use revise_translation
-rather than re-sending the whole slide. If something genuinely needs the reviewer's
-attention, you may also write a short message or attach a per-segment "note", but keep quiet
-when there is nothing useful to say.
+Record this first pass with set_translations, covering every id listed for each language.
+Do not reply with the translations as plain text — they reach the reviewer only through the
+tool. Later rounds are different: change only what the reviewer raises. If something
+genuinely needs their attention, write a short message or attach a per-segment "note" — but
+keep quiet when there is nothing useful to say.
 `;
 
     return `
-You are translating presentation slides into several languages at once.
+You are translating presentation slides into several languages at once. A human reviewer
+checks your work before the service and can send you follow-up requests.
 ${contextSection}${itemTitleSection}
 Each source slide is given as its own block, with its id in the tag. The text inside a block
 is verbatim, including its line breaks:
@@ -788,7 +783,7 @@ not something to translate.
 <targets>
 ${targetsDocument}
 </targets>
-${lineBreakSection}${referenceSection}${existingTranslationSection}${bibleSection}${toolInstruction}`;
+${LINE_BREAK_POLICY}${referenceSection}${existingTranslationSection}${bibleSection}${toolInstruction}`;
 };
 
 /**
@@ -827,13 +822,10 @@ These slides are already translated as follows, with matching slide ids:
 ${current}
 </current_translations>
 
-Await the reviewer's feedback. When asked to change something small — a word, a line, a
-punctuation fix — call revise_translation, which replaces an exact substring of one slide's
-text in one language and leaves everything else alone. Call set_translations instead when a
-whole slide needs rewriting, including only the languages and segments that change. Write
-real line breaks in translated text, never the two characters backslash-n; keep the source's
-line structure for songs, hymns, poetry and responsive readings, and re-break prose wherever
-the target language reads naturally. Only speak up when there is something useful to say.`;
+${LINE_BREAK_POLICY}
+Await the reviewer's feedback, then apply it — revise_translation for a small fix,
+set_translations when a whole slide needs rewriting. Only speak up when there is something
+useful to say.`;
 };
 
 /**

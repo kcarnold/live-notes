@@ -251,7 +251,7 @@ describe('newline handling', () => {
     expect(prompt).not.toContain('Silent night\\nHoly night');
   });
 
-  it('tells the model when line structure matters and when to re-break', async () => {
+  it('tells the model when line structure matters and when to drop it', async () => {
     const { provider, generateContent } = fakeSilentProvider();
 
     await draftItemTranslations(provider, {
@@ -261,9 +261,35 @@ describe('newline handling', () => {
 
     const prompt = generateContent.mock.calls[0][0].contents[0].parts[0].text as string;
     expect(prompt).toContain('Never write the two characters backslash-n');
-    // Songs/poetry keep their lines; prose may be re-broken for the target language.
+    // Songs/poetry keep their lines; prose breaks are cosmetic and the viewer reflows.
     expect(prompt).toMatch(/Songs, hymns, poetry, and responsive readings/);
-    expect(prompt).toMatch(/Re-break wherever the\s+target language reads best/);
+    expect(prompt).toMatch(/Ignore them\. Write the translation as unbroken prose/);
+  });
+
+  // The policy used to be stated in the prompt *and* in each tool parameter, which meant
+  // editing it in one place silently left the other contradicting it.
+  it('states the line-break policy once per prompt, not once per mention', async () => {
+    const { provider, generateContent } = fakeSilentProvider();
+
+    await draftItemTranslations(provider, {
+      sourceSlides: ['Hello'],
+      targets: [{ language: 'French', isTranslationNeeded: [true], context: '' }],
+    });
+
+    const call = generateContent.mock.calls[0][0];
+    const prompt = call.contents[0].parts[0].text as string;
+    const occurrences = prompt.split('Songs, hymns, poetry, and responsive readings').length - 1;
+    expect(occurrences).toBe(1);
+
+    // Tool parameters carry only the encoding rule, deferring on the editorial policy.
+    const declarations = call.config.tools[0].functionDeclarations as Array<{
+      name: string;
+      parameters?: { properties?: Record<string, { description?: string }> };
+    }>;
+    const revise = declarations.find((declaration) => declaration.name === 'revise_translation');
+    const replaceDescription = revise?.parameters?.properties?.replace?.description ?? '';
+    expect(replaceDescription).toContain('never the two characters backslash-n');
+    expect(replaceDescription).not.toContain('Songs, hymns, poetry');
   });
 });
 
