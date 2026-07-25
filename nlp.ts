@@ -374,25 +374,25 @@ const REVISE_TRANSLATION_TOOL: FunctionDeclaration = {
         'missing or appears more than once the call fails and changes nothing, so include ' +
         'enough surrounding text to be unique. Returns the slide\'s new full text.',
     parameters: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         required: ['language', 'segmentId', 'find', 'replace'],
         properties: {
             language: {
-                type: genAI.Type.STRING,
+                type: Type.STRING,
                 description: 'Target language of the translation to edit, exactly as named in the targets.',
             },
             segmentId: {
-                type: genAI.Type.INTEGER,
+                type: Type.INTEGER,
                 description: 'The id of the source slide whose translation is being edited.',
             },
             find: {
-                type: genAI.Type.STRING,
+                type: Type.STRING,
                 description:
                     'The exact substring of the current translation to replace, copied verbatim ' +
                     'including any line breaks it spans. Must occur exactly once.',
             },
             replace: {
-                type: genAI.Type.STRING,
+                type: Type.STRING,
                 description: `The replacement text; may be empty to delete. ${LINE_BREAK_FIELD_NOTE}`,
             },
         },
