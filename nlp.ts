@@ -283,8 +283,7 @@ const LINE_BREAK_GUIDANCE =
     'in songs, hymns, poetry, and responsive readings the line structure is part of the ' +
     'content, so keep one output line per source line; in prose (congregational readings, ' +
     'prayers, announcements) the breaks are usually just there to make the English sit ' +
-    'nicely on the slide, so re-break wherever the target language reads naturally, keeping ' +
-    'roughly the same number of lines so it still fits.';
+    'nicely on the slide; ignore these (the viewer will flow text based on its screen size.';
 
 /** Function declaration the model uses to record the finished translations. */
 const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
