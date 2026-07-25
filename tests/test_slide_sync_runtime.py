@@ -210,3 +210,15 @@ def test_recreate_doc_resets_publisher_translator_and_feed():
     # Both consumers rebound to the new doc.
     assert rt.publisher.ydoc is rt.ydoc
     assert rt.translator.ydoc is rt.ydoc
+
+
+def test_translator_tracks_the_runtime_doc_id_across_rollover():
+    """The translator forwards docId to /api/translateItem, so its bound id must follow every
+    doc_id change — otherwise a rolled-over day writes conversations into yesterday's doc."""
+    rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+    assert rt.translator.doc_id == rt.doc_id
+
+    rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
+
+    assert rt.doc_id == "doc-2030-01-15"
+    assert rt.translator.doc_id == "doc-2030-01-15"

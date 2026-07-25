@@ -58,6 +58,23 @@ def test_parse_item_original_splits_main_content_on_delimiters():
     assert item.itemKind == 'Content'
 
 
+def test_doesnt_split_on_triple_hyphens():
+    db = FakeDB({'item1': content_item(main_lines=['Line one', '---', 'Line two'])})
+    item = parse_item_original(db, 'item1')
+    assert item is not None
+    assert item.slides == ['Line one \n--- \nLine two']
+    assert item.itemKind == 'Content'
+
+
+def test_doesnt_split_on_hyphens_at_eol():
+    db = FakeDB({'item1': content_item(main_lines=['Line one--', 'Line two'])})
+    item = parse_item_original(db, 'item1')
+    assert item is not None
+    assert item.slides == ['Line one-- \nLine two']
+    assert item.itemKind == 'Content'
+
+
+
 def test_parse_item_original_blank_for_image_slideshow():
     db = FakeDB({'img1': content_item(kind='ImageSlideshow', title='Slideshow')})
     item = parse_item_original(db, 'img1')

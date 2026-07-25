@@ -76,7 +76,7 @@ class SlideSyncRuntime:
 
         self.ydoc: Doc = Doc()
         self.publisher.bind(self.ydoc)
-        self.translator.bind(self.ydoc)
+        self.translator.bind(self.ydoc, self.doc_id)
 
     # -- doc id / rollover -----------------------------------------------------
 
@@ -139,7 +139,7 @@ class SlideSyncRuntime:
         """
         self.ydoc = Doc()
         self.publisher.bind(self.ydoc)
-        self.translator.bind(self.ydoc)
+        self.translator.bind(self.ydoc, self.doc_id)
         self.feed.reset()
         logger.info(f"Recreated Yjs document for {self.doc_id}")
 

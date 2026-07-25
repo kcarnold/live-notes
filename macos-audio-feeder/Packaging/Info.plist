@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Info.plist for the packaged .app bundle (Xcode app target or a bundling build script).
+  SwiftPM executables don't apply this automatically; it's here so the menu-bar/login-item
+  behavior and the microphone permission prompt are correctly configured when packaging.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Audio Feeder</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.kenarnold.audio-feeder</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <!-- Menu-bar-only: no Dock icon, no main window. -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Shown in the one-time microphone permission prompt. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Audio Feeder captures one channel of your sound board to broadcast it for live translation.</string>
+</dict>
+</plist>

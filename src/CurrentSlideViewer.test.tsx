@@ -40,28 +40,11 @@ describe('CurrentSlideViewer (pure)', () => {
     expect(screen.getByText('No slides available')).toBeInTheDocument();
   });
 
-  it('shows only the current slide when context is 0', () => {
-    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={1} context={0} />);
+  it('shows only the current slide', () => {
+    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={1} />);
     expect(screen.getByText('b')).toBeInTheDocument();
     expect(screen.queryByText('a')).not.toBeInTheDocument();
     expect(screen.queryByText('c')).not.toBeInTheDocument();
-  });
-
-  it('shows previous/next context slides with labels', () => {
-    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={1} context={1} />);
-    expect(screen.getByText('a')).toBeInTheDocument();
-    expect(screen.getByText('b')).toBeInTheDocument();
-    expect(screen.getByText('c')).toBeInTheDocument();
-    expect(screen.getByText('Previous')).toBeInTheDocument();
-    expect(screen.getByText('Next')).toBeInTheDocument();
-  });
-
-  it('clamps the window at the start (no Previous label at index 0)', () => {
-    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={0} context={1} />);
-    expect(screen.getByText('a')).toBeInTheDocument();
-    expect(screen.getByText('b')).toBeInTheDocument();
-    expect(screen.queryByText('Previous')).not.toBeInTheDocument();
-    expect(screen.getByText('Next')).toBeInTheDocument();
   });
 
   it('splits multi-line slide text and renders blank lines as a non-breaking space', () => {
@@ -77,14 +60,14 @@ describe('CurrentSlideViewer (pure)', () => {
   // so currentIndex can transiently point past the known slides. The viewer must
   // show a real slide, not a blank container.
   it('clamps an out-of-range currentIndex to the last slide', () => {
-    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={5} context={0} />);
+    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={5} />);
     expect(screen.getByText('c')).toBeInTheDocument();
     expect(screen.queryByText('a')).not.toBeInTheDocument();
     expect(screen.queryByText('b')).not.toBeInTheDocument();
   });
 
   it('clamps a negative currentIndex to the first slide', () => {
-    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={-1} context={0} />);
+    render(<CurrentSlideViewer title="T" slides={['a', 'b', 'c']} currentIndex={-1} />);
     expect(screen.getByText('a')).toBeInTheDocument();
     expect(screen.queryByText('c')).not.toBeInTheDocument();
   });

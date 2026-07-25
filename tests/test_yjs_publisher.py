@@ -1,6 +1,8 @@
 """Tests for YjsSlidePublisher: write shape, slide clipping, write-diffing, and the
 single-transaction guarantee that fixes #67."""
 
+import logging
+
 from pycrdt import Doc
 
 from slide_feed import FeedItem, FeedSnapshot
@@ -84,6 +86,47 @@ def test_status_only_cycle_keeps_order_intact():
 
     assert pub.status_map["slideIndex"] == 1
     assert list(pub.service_order_map["order"]) == ["i1"]
+
+
+def test_looping_blank_item_produces_no_writes():
+    """A looping image slideshow keeps reporting advancing slide indices, but the item renders
+    as a single blank slide. Clipping pins it to 0 and the status diff suppresses the writes,
+    so the loop causes no Yjs churn and the pointer stays on slide 0."""
+    blank = item(item_id="img1", title="Slideshow", slides=("",), kind="ImageSlideshow")
+    pub, doc = make_publisher()
+    pub.apply(snap(order=("img1",), items={"img1": blank}, active="img1", slide=0))
+
+    events = []
+    doc.observe(lambda e: events.append(e))
+    for idx in (1, 2, 3):
+        pub.apply(snap(order=("img1",), items={"img1": blank}, active="img1", slide=idx))
+
+    assert events == []
+    assert pub.status_map["slideIndex"] == 0
+
+
+def test_blank_item_clipping_does_not_warn(caplog):
+    """Clipping a looping slideshow is expected, not an anomaly — it must not emit a warning
+    on every poll cycle. Real items with an out-of-range index still warn."""
+    blank = item(item_id="img1", title="Slideshow", slides=("",), kind="ImageSlideshow")
+    pub, _ = make_publisher()
+
+    with caplog.at_level(logging.WARNING, logger="yjs_publisher"):
+        pub.apply(snap(order=("img1",), items={"img1": blank}, active="img1", slide=7))
+    assert caplog.records == []
+
+    pub2, _ = make_publisher()
+    with caplog.at_level(logging.WARNING, logger="yjs_publisher"):
+        pub2.apply(snap(slide=7))  # normal 2-slide item
+    assert len(caplog.records) == 1
+
+
+def test_normal_item_still_pushes_slide_changes():
+    """A real multi-slide item must still push slide-index changes."""
+    pub, _ = make_publisher()
+    pub.apply(snap(slide=0))
+    pub.apply(snap(slide=1))
+    assert pub.status_map["slideIndex"] == 1
 
 
 def test_bind_forces_full_republish_on_fresh_doc():

@@ -47,7 +47,7 @@ async def test_replayed_snapshots_drive_real_consumers():
     pub = YjsSlidePublisher()
     pub.bind(doc)
 
-    async def translate_fn(slides, title, item_id, existing):
+    async def translate_fn(slides, title, item_id, existing, doc_id):
         return {
             lang: [{"text": f"{lang}:{s}", "status": "auto", "provenance": "llm"} for s in slides]
             for lang in LANGS

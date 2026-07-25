@@ -1,5 +1,5 @@
-import { GoogleGenAI } from '@posthog/ai';
-import genAI, { FunctionCallingConfigMode, type Content, type Part, type FunctionDeclaration } from '@google/genai'; // for types
+import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration, type Part } from '@google/genai'; // for types
+import { Gemini as GoogleGenAI } from '@posthog/ai/gemini';
 import { PostHog } from 'posthog-node';
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
 
@@ -31,24 +31,101 @@ export type TranslationBlockResult = {
     translatedText: string;
 }
 
+/**
+ * PostHog LLM-observability tags for a run. Passed straight through the `@posthog/ai`
+ * GoogleGenAI wrapper, which turns each `generateContent` call into an `$ai_generation`
+ * event. `traceId` is the important one: it groups every generation from one conversation
+ * (initial draft + every follow-up round) into a single PostHog trace. Without it the
+ * wrapper emits ungrouped events under a random distinct id — which is exactly why agent
+ * messages from the same conversation weren't grouping.
+ */
+export interface AgentObservability {
+    /** Stable id for whoever/whatever is driving the conversation (we use the day's docId). */
+    distinctId?: string;
+    /** Groups all generations from one conversation into a single trace (the conversation id). */
+    traceId?: string;
+    /** Extra properties attached to every generation event in this run. */
+    properties?: Record<string, unknown>;
+}
+
+/** The subset of `usageMetadata` fields we sum; missing on faked/tool-only responses. */
+type ResponseUsage = {
+    promptTokenCount?: number;
+    cachedContentTokenCount?: number;
+    candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
+    totalTokenCount?: number;
+};
+
+/**
+ * Token usage summed across the model calls in an agent run (and across runs, when a
+ * conversation is resumed). Surfaced so cost is visible and — via `cachedContentTokenCount`
+ * — so we can tell whether Gemini's context cache is actually serving the re-sent prefix.
+ * A run of several rounds with `cachedContentTokenCount` stuck at 0 means we're paying full
+ * price for the whole prompt every round.
+ */
+export interface TokenUsage {
+    promptTokenCount: number;
+    /** Portion of `promptTokenCount` served from the context cache (implicit or explicit). */
+    cachedContentTokenCount: number;
+    candidatesTokenCount: number;
+    thoughtsTokenCount: number;
+    totalTokenCount: number;
+    /** How many model calls contributed to these totals. */
+    callCount: number;
+}
+
+export const emptyUsage = (): TokenUsage => ({
+    promptTokenCount: 0,
+    cachedContentTokenCount: 0,
+    candidatesTokenCount: 0,
+    thoughtsTokenCount: 0,
+    totalTokenCount: 0,
+    callCount: 0,
+});
+
+/** Fold one response's `usageMetadata` into a running total (tolerant of missing fields). */
+export const addUsage = (total: TokenUsage, meta: ResponseUsage | undefined): TokenUsage => ({
+    promptTokenCount: total.promptTokenCount + (meta?.promptTokenCount ?? 0),
+    cachedContentTokenCount: total.cachedContentTokenCount + (meta?.cachedContentTokenCount ?? 0),
+    candidatesTokenCount: total.candidatesTokenCount + (meta?.candidatesTokenCount ?? 0),
+    thoughtsTokenCount: total.thoughtsTokenCount + (meta?.thoughtsTokenCount ?? 0),
+    totalTokenCount: total.totalTokenCount + (meta?.totalTokenCount ?? 0),
+    callCount: total.callCount + 1,
+});
+
+/** Merge two usage totals (e.g. a stored conversation total plus a fresh follow-up run). */
+export const mergeUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
+    promptTokenCount: a.promptTokenCount + b.promptTokenCount,
+    cachedContentTokenCount: a.cachedContentTokenCount + b.cachedContentTokenCount,
+    candidatesTokenCount: a.candidatesTokenCount + b.candidatesTokenCount,
+    thoughtsTokenCount: a.thoughtsTokenCount + b.thoughtsTokenCount,
+    totalTokenCount: a.totalTokenCount + b.totalTokenCount,
+    callCount: a.callCount + b.callCount,
+});
+
+/** Build the `@posthog/ai` per-call tags from an observability object (empty when unset). */
+const posthogTags = (obs?: AgentObservability) =>
+    obs ? { posthogDistinctId: obs.distinctId, posthogTraceId: obs.traceId, posthogProperties: obs.properties } : {};
+
 export const translateBlock = async (provider: GeminiProvider, todo: TranslationTodo, language: string): Promise<TranslationBlockResult[]> => {
     const config = {
       responseMimeType: 'application/json',
       responseSchema: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         required: ["segments"],
         properties: {
           segments: {
-            type: genAI.Type.ARRAY,
+            type: Type.ARRAY,
             items: {
-              type: genAI.Type.OBJECT,
+              type: Type.OBJECT,
               required: ["segmentId", "translation"],
               properties: {
                 segmentId: {
-                  type: genAI.Type.INTEGER,
+                  type: Type.INTEGER,
                 },
                 translation: {
-                  type: genAI.Type.STRING,
+                  type: Type.STRING,
                 },
               },
             },
@@ -147,20 +224,20 @@ const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
         'published text rather than translating from scratch. Returns the passage in each ' +
         'available target language.',
     parameters: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         properties: {
             book: {
-                type: genAI.Type.STRING,
+                type: Type.STRING,
                 description:
                     'USFM book code (uppercase 3 chars), e.g. GEN, PSA, ISA, MAT, JHN, ROM, 1CO, REV.',
             },
-            chapter: { type: genAI.Type.INTEGER, description: 'Chapter number.' },
+            chapter: { type: Type.INTEGER, description: 'Chapter number.' },
             startVerse: {
-                type: genAI.Type.INTEGER,
+                type: Type.INTEGER,
                 description: 'First verse of the range. Omit to fetch the whole chapter.',
             },
             endVerse: {
-                type: genAI.Type.INTEGER,
+                type: Type.INTEGER,
                 description: 'Last verse of the range. Omit for a single verse (defaults to startVerse).',
             },
         },
@@ -178,25 +255,25 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
         '"note" ONLY when there is a genuine caveat, ambiguity, or choice the reviewer should ' +
         'know about — otherwise omit it.',
     parameters: {
-        type: genAI.Type.OBJECT,
+        type: Type.OBJECT,
         required: ['languages'],
         properties: {
             languages: {
-                type: genAI.Type.ARRAY,
+                type: Type.ARRAY,
                 items: {
-                    type: genAI.Type.OBJECT,
+                    type: Type.OBJECT,
                     required: ['language', 'segments'],
                     properties: {
-                        language: { type: genAI.Type.STRING },
+                        language: { type: Type.STRING },
                         segments: {
-                            type: genAI.Type.ARRAY,
+                            type: Type.ARRAY,
                             items: {
-                                type: genAI.Type.OBJECT,
+                                type: Type.OBJECT,
                                 required: ['segmentId', 'translation'],
                                 properties: {
-                                    segmentId: { type: genAI.Type.INTEGER },
-                                    translation: { type: genAI.Type.STRING },
-                                    note: { type: genAI.Type.STRING },
+                                    segmentId: { type: Type.INTEGER },
+                                    translation: { type: Type.STRING },
+                                    note: { type: Type.STRING },
                                 },
                             },
                         },
@@ -241,6 +318,8 @@ export type SlideAgentRunResult = {
     messages: Content[];
     /** Whether the model called `set_translations` during this run. */
     setTranslationsCalled: boolean;
+    /** Token usage summed across this run's model calls (incl. cache hits). */
+    usage: TokenUsage;
 };
 
 /**
@@ -263,9 +342,11 @@ export const runSlideTranslationAgent = async (
         model?: string;
         bibleLanguages: string[];
         onToolCall?: (call: BibleToolCall) => void;
+        /** PostHog trace/distinct-id tags so every round groups under one conversation. */
+        observability?: AgentObservability;
     },
 ): Promise<SlideAgentRunResult> => {
-    const { sourceSlides, messages, bibleLanguages, onToolCall } = params;
+    const { sourceSlides, messages, bibleLanguages, onToolCall, observability } = params;
     const model = params.model ?? provider.defaultModel;
 
     const functionDeclarations: FunctionDeclaration[] = [SET_TRANSLATIONS_TOOL];
@@ -274,6 +355,7 @@ export const runSlideTranslationAgent = async (
 
     let translations: Record<string, TranslationBlockResult[]> = {};
     let setTranslationsCalled = false;
+    let usage = emptyUsage();
 
     for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
         const response = await provider.apiClient.models.generateContent({
@@ -285,7 +367,9 @@ export const runSlideTranslationAgent = async (
                 },
             },
             contents: messages,
+            ...posthogTags(observability),
         });
+        usage = addUsage(usage, response.usageMetadata);
         const calls = response.functionCalls ?? [];
         const modelContent = response.candidates?.[0]?.content;
         // Keep the model turn verbatim (incl. any thought signatures) so a later resume
@@ -336,7 +420,7 @@ export const runSlideTranslationAgent = async (
         messages.push({ role: 'user', parts: responseParts });
     }
 
-    return { translations, messages, setTranslationsCalled };
+    return { translations, messages, setTranslationsCalled, usage };
 };
 
 /**
@@ -533,9 +617,13 @@ export const draftItemTranslations = async (
         onToolCall?: (call: BibleToolCall) => void;
         /** Receives the full agent conversation (raw Gemini Content) once drafting completes. */
         onConversation?: (messages: Content[]) => void;
+        /** Receives the run's token usage (incl. cache hits) once drafting completes. */
+        onUsage?: (usage: TokenUsage) => void;
+        /** PostHog trace/distinct-id tags so the draft's generations group by conversation. */
+        observability?: AgentObservability;
     },
 ): Promise<Record<string, TranslationBlockResult[]>> => {
-    const { sourceSlides, targets, referenceText, existingTranslation, generalContext, onToolCall, onConversation } = params;
+    const { sourceSlides, targets, referenceText, existingTranslation, generalContext, onToolCall, onConversation, onUsage, observability } = params;
     const itemTitle = params.itemTitle?.trim();
     const model = params.model ?? provider.defaultModel;
     // Languages we can actually fetch canonical Scripture for.
@@ -560,7 +648,9 @@ export const draftItemTranslations = async (
         model,
         bibleLanguages,
         onToolCall,
+        observability,
     });
     onConversation?.(result.messages);
+    onUsage?.(result.usage);
     return result.translations;
 };

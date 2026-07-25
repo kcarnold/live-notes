@@ -1,6 +1,123 @@
 import { describe, expect, it } from "vitest";
 
-import { nextBackoffMs, parseGoAwayTimeLeftMs } from "./translation-bridge.ts";
+import {
+  frameRmsDbfs,
+  isSilentFrame,
+  nextBackoffMs,
+  parseGoAwayTimeLeftMs,
+  parseSilenceThresholdDbfs,
+  SILENCE_FLOOR_DBFS,
+  SILENCE_GATING_OFF_DBFS,
+  SILENCE_THRESHOLD_DBFS,
+  reconcileOrganizerAudio,
+  shouldRecoverStalledInput,
+  type AudioParticipantLike,
+  type AudioPublicationLike,
+} from "./translation-bridge.ts";
+
+// Build a PCM16 frame of a constant-amplitude tone (square wave), so its RMS equals
+// the amplitude and the expected dBFS is 20*log10(amp/32768) exactly.
+function toneFrame(amplitude: number, length = 1600): Int16Array {
+  const data = new Int16Array(length);
+  for (let i = 0; i < length; i++) data[i] = i % 2 === 0 ? amplitude : -amplitude;
+  return data;
+}
+
+// Silence gating: we stop paying Gemini to translate a silent mic. These pure
+// helpers decide whether an input frame is speech or room tone; the suspend/resume
+// socket plumbing built on top of them is not unit-tested (same as reconnect).
+describe("frameRmsDbfs", () => {
+  it("is -Infinity for digital silence (all zeros or empty)", () => {
+    expect(frameRmsDbfs(new Int16Array(0))).toBe(-Infinity);
+    expect(frameRmsDbfs(new Int16Array(1600))).toBe(-Infinity);
+  });
+
+  it("is ~0 dBFS for a full-scale tone", () => {
+    expect(frameRmsDbfs(toneFrame(32768))).toBeCloseTo(0, 1);
+  });
+
+  it("drops ~6 dB per halving of amplitude", () => {
+    expect(frameRmsDbfs(toneFrame(16384))).toBeCloseTo(-6.02, 1);
+    expect(frameRmsDbfs(toneFrame(8192))).toBeCloseTo(-12.04, 1);
+  });
+});
+
+describe("isSilentFrame", () => {
+  it("treats quiet room tone (below the threshold) as silence", () => {
+    // ~-42 dBFS — clearly below the -30 dBFS bar.
+    const quiet = toneFrame(256);
+    expect(frameRmsDbfs(quiet)).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+    expect(isSilentFrame(quiet)).toBe(true);
+  });
+
+  it("treats audible speech-level input (above the threshold) as non-silence", () => {
+    // ~-24 dBFS — above the bar, so it must never be mistaken for silence.
+    const speech = toneFrame(2048);
+    expect(frameRmsDbfs(speech)).toBeGreaterThan(SILENCE_THRESHOLD_DBFS);
+    expect(isSilentFrame(speech)).toBe(false);
+  });
+
+  it("honors an explicit threshold", () => {
+    const frame = toneFrame(2048); // ~-24 dBFS
+    expect(isSilentFrame(frame, -20)).toBe(true);
+    expect(isSilentFrame(frame, -30)).toBe(false);
+  });
+
+  it("calls nothing silent at the off bar, including digital silence", () => {
+    // The bar doubles as the feature's switch, so this is the property the whole
+    // "no separate flag" simplification rests on: at -Infinity even an all-zeros
+    // frame (which reads -Infinity dBFS) must come out non-silent.
+    expect(isSilentFrame(new Int16Array(1600), SILENCE_GATING_OFF_DBFS)).toBe(false);
+    expect(isSilentFrame(toneFrame(64), SILENCE_GATING_OFF_DBFS)).toBe(false);
+  });
+});
+
+// The env knob. dBFS is negative below full scale, so the direction is easy to get
+// backwards: 0 is not "off", it's the most aggressive gate possible (everything but a
+// clipping-loud frame reads as silence). Off has to be its own value, and the default.
+describe("parseSilenceThresholdDbfs", () => {
+  it("defaults to off when unset or blank", () => {
+    expect(parseSilenceThresholdDbfs(undefined)).toBe(SILENCE_GATING_OFF_DBFS);
+    expect(parseSilenceThresholdDbfs("")).toBe(SILENCE_GATING_OFF_DBFS);
+    expect(parseSilenceThresholdDbfs("   ")).toBe(SILENCE_GATING_OFF_DBFS);
+  });
+
+  it("reads a finite level, so gating is opted into by naming one", () => {
+    expect(parseSilenceThresholdDbfs("-30")).toBe(-30);
+    expect(parseSilenceThresholdDbfs(" -42.5 ")).toBe(-42.5);
+    expect(parseSilenceThresholdDbfs(String(SILENCE_THRESHOLD_DBFS))).toBe(SILENCE_THRESHOLD_DBFS);
+  });
+
+  it("falls back to off rather than gating on a value it can't read", () => {
+    // A typo'd env var must not silently start suspending sessions mid-talk.
+    expect(parseSilenceThresholdDbfs("loud")).toBe(SILENCE_GATING_OFF_DBFS);
+    expect(parseSilenceThresholdDbfs("-Infinity")).toBe(SILENCE_GATING_OFF_DBFS);
+  });
+});
+
+// Two thresholds keep a faint consonant from being clipped. The voice bar
+// (SILENCE_THRESHOLD_DBFS) is strict — it drives suspend/resume — so a quiet
+// unvoiced consonant reads "silent" for that purpose. But the gap-collapse only
+// drops frames below the much lower dead-air floor (SILENCE_FLOOR_DBFS), and a
+// consonant sits above the floor, so it is always kept.
+describe("silence thresholds", () => {
+  it("keeps the dead-air floor safely below the voice bar", () => {
+    expect(SILENCE_FLOOR_DBFS).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+  });
+
+  it("puts a faint consonant-level frame below the voice bar but above the floor", () => {
+    // ~-42 dBFS: quiet enough to read as non-voice, but well above the dead-air
+    // floor, so the gap-collapse must never drop it.
+    const faint = frameRmsDbfs(toneFrame(256));
+    expect(faint).toBeLessThan(SILENCE_THRESHOLD_DBFS);
+    expect(faint).toBeGreaterThan(SILENCE_FLOOR_DBFS);
+  });
+
+  it("puts genuine dead air below the floor", () => {
+    // ~-54 dBFS: near-digital-silence room tone, the only thing collapse may drop.
+    expect(frameRmsDbfs(toneFrame(64))).toBeLessThan(SILENCE_FLOOR_DBFS);
+  });
+});
 
 // The Gemini Live session is periodically terminated; the bridge reconnects with
 // backoff and reads the goAway `timeLeft` to reconnect proactively. These pure
@@ -65,5 +182,167 @@ describe("nextBackoffMs", () => {
     const ms = nextBackoffMs(0);
     expect(ms).toBeGreaterThanOrEqual(500);
     expect(ms).toBeLessThanOrEqual(1_000);
+  });
+});
+// reconcileOrganizerAudio is the fix for two production outages, both of which left the
+// bridge "active but deaf" — joined, publishing, holding a healthy Gemini socket, and
+// receiving no audio at all. Both had the same root cause: subscription was decided once,
+// from an event, and then drifted from reality.
+//
+//   1. The organizer was in the room but published their mic a beat late, and the
+//      "organizer is here" path returned early without listening for the publish.
+//   2. A LiveKit full reconnect re-created the participants and their tracks as new
+//      objects. Per LiveKit's documented sequence that emits ParticipantConnected for
+//      everyone already in the room, but *no* TrackPublished for their existing
+//      publications — so nothing re-subscribed, and two bridges streamed silence for six
+//      minutes while reporting healthy.
+//
+// Reconciling against current room state makes both unrepresentable: there is no stored
+// decision to go stale. These tests pin that — especially that it reads the room as it
+// *is*, not as it was when the bridge started.
+describe("reconcileOrganizerAudio", () => {
+  const ORGANIZER = "organizer-host";
+
+  class FakePublication implements AudioPublicationLike {
+    subscribed = false;
+    setSubscribedCalls = 0;
+    constructor(readonly kind: string = "audio") {}
+    setSubscribed(subscribed: boolean): void {
+      this.setSubscribedCalls++;
+      this.subscribed = subscribed;
+    }
+  }
+
+  class FakeParticipant implements AudioParticipantLike {
+    readonly trackPublications = new Map<string, FakePublication>();
+    constructor(readonly identity: string) {}
+    publish(pub: FakePublication): this {
+      this.trackPublications.set(String(this.trackPublications.size), pub);
+      return this;
+    }
+  }
+
+  const reconcile = (participants: FakeParticipant[]) =>
+    reconcileOrganizerAudio({
+      organizerIdentity: ORGANIZER,
+      participants,
+      isAudio: (pub) => (pub as FakePublication).kind === "audio",
+    });
+
+  it("subscribes to the organizer's published audio", () => {
+    const mic = new FakePublication();
+    const organizer = new FakeParticipant(ORGANIZER).publish(mic);
+
+    expect(reconcile([organizer])).toBe(1);
+    expect(mic.subscribed).toBe(true);
+  });
+
+  it("is a no-op when the organizer is present but hasn't published yet (outage 1's race)", () => {
+    // The bridge starts inside the organizer's join/getUserMedia window. Reconcile finds
+    // nothing to do — and, crucially, stores no decision that would need undoing. The
+    // TrackPublished trigger will simply run it again a moment later.
+    const organizer = new FakeParticipant(ORGANIZER);
+
+    expect(reconcile([organizer])).toBe(0);
+  });
+
+  it("subscribes to the organizer's new track objects after a full reconnect (outage 2)", () => {
+    const firstMic = new FakePublication();
+    const before = new FakeParticipant(ORGANIZER).publish(firstMic);
+    expect(reconcile([before])).toBe(1);
+
+    // LiveKit rebuilds the session: same identity, brand-new participant and publication
+    // objects, and no TrackPublished event. Reconcile reads the room as it is now.
+    const republishedMic = new FakePublication();
+    const after = new FakeParticipant(ORGANIZER).publish(republishedMic);
+
+    expect(reconcile([after])).toBe(1);
+    expect(republishedMic.subscribed).toBe(true);
+  });
+
+  it("is idempotent — repeated reconciles don't thrash the subscription", () => {
+    // The watchdog reconciles on a timer, and several triggers can fire at once. None of
+    // that may disturb a healthy subscription.
+    const mic = new FakePublication();
+    const organizer = new FakeParticipant(ORGANIZER).publish(mic);
+
+    reconcile([organizer]);
+    reconcile([organizer]);
+    reconcile([organizer]);
+
+    expect(mic.subscribed).toBe(true);
+    expect(mic.setSubscribedCalls).toBe(3); // always true, never toggled off
+  });
+
+  it("ignores non-organizer participants and the organizer's non-audio tracks", () => {
+    const organizerVideo = new FakePublication("video");
+    const organizer = new FakeParticipant(ORGANIZER).publish(organizerVideo);
+    // Another translator bot's published audio, and an attendee — neither is our input.
+    const otherBot = new FakeParticipant("translator-es").publish(new FakePublication());
+    const attendee = new FakeParticipant("attendee-xyz").publish(new FakePublication());
+
+    expect(reconcile([organizer, otherBot, attendee])).toBe(0);
+    expect(organizerVideo.subscribed).toBe(false);
+  });
+
+  it("subscribes to every organizer audio publication, not just the first", () => {
+    const a = new FakePublication();
+    const b = new FakePublication();
+    const organizer = new FakeParticipant(ORGANIZER).publish(a).publish(b);
+
+    expect(reconcile([organizer])).toBe(2);
+    expect(a.subscribed && b.subscribed).toBe(true);
+  });
+
+  it("tolerates an empty room", () => {
+    expect(reconcile([])).toBe(0);
+  });
+});
+
+// The watchdog is the layer that doesn't need to know why the audio stopped. Organizer
+// audio arrives every 100ms, so a long gap is unambiguous — but "never started" is the
+// startup case, which the subscription wiring owns, and firing there would fight it.
+describe("shouldRecoverStalledInput", () => {
+  const stallMs = 15_000;
+
+  it("recovers when audio was flowing and then stopped", () => {
+    expect(
+      shouldRecoverStalledInput({ now: 100_000, lastFrameAt: 80_000, lastRecoveryAt: 0, stallMs })
+    ).toBe(true);
+  });
+
+  it("does not fire while audio is flowing", () => {
+    expect(
+      shouldRecoverStalledInput({ now: 100_000, lastFrameAt: 99_900, lastRecoveryAt: 0, stallMs })
+    ).toBe(false);
+  });
+
+  it("does not fire before any audio has ever arrived (that's the startup path)", () => {
+    expect(
+      shouldRecoverStalledInput({ now: 100_000, lastFrameAt: 0, lastRecoveryAt: 0, stallMs })
+    ).toBe(false);
+  });
+
+  it("holds off during the cooldown, so a muted speaker yields one event not a storm", () => {
+    // Stalled for 40s, but we already attempted recovery 5s ago.
+    expect(
+      shouldRecoverStalledInput({
+        now: 100_000,
+        lastFrameAt: 60_000,
+        lastRecoveryAt: 95_000,
+        stallMs,
+      })
+    ).toBe(false);
+  });
+
+  it("retries once the cooldown elapses and the input is still dead", () => {
+    expect(
+      shouldRecoverStalledInput({
+        now: 100_000,
+        lastFrameAt: 60_000,
+        lastRecoveryAt: 85_000,
+        stallMs,
+      })
+    ).toBe(true);
   });
 });

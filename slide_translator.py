@@ -27,9 +27,13 @@ from slide_feed import FeedItem, FeedSnapshot, SnapshotBus
 
 logger = logging.getLogger(__name__)
 
-# (slides, item_title, item_id, existing_translation) -> {language: [{text, status, provenance}]}
+# (slides, item_title, item_id, existing_translation, doc_id)
+#   -> {language: [{text, status, provenance}]}
+# doc_id names the doc this session is bound to, so the server can write the agent
+# conversation into the same per-day doc. It arrives via bind() rather than being closed over
+# at construction, because a date rollover swaps the doc underneath a long-lived translator.
 TranslateFn = Callable[
-    [List[str], Optional[str], Optional[str], Optional[str]],
+    [List[str], Optional[str], Optional[str], Optional[str], Optional[str]],
     Awaitable[Optional[Dict[str, Any]]],
 ]
 
@@ -47,10 +51,12 @@ class SlideTranslator:
         self.scan_interval = scan_interval
         self._report_exception = report_exception or (lambda _e: None)
         self.ydoc: Optional[Doc] = None
+        self.doc_id: Optional[str] = None
 
-    def bind(self, doc: Doc) -> None:
+    def bind(self, doc: Doc, doc_id: Optional[str] = None) -> None:
         """(Re)acquire the slideTranslations map and reset the attempted-content cache."""
         self.ydoc = doc
+        self.doc_id = doc_id
         self.translations_map = doc.get('slideTranslations', type=Map)
         self._translated_hashes: Dict[str, str] = {}
 
@@ -89,7 +95,7 @@ class SlideTranslator:
                 continue
 
             translations = await self.translate_fn(
-                item.slides, item.title, item.item_id, item.existing_translation
+                item.slides, item.title, item.item_id, item.existing_translation, self.doc_id
             )
             # Mark attempted even on failure so we don't hammer the same content; a real
             # content change produces a new hash and another attempt.

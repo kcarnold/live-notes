@@ -42,6 +42,9 @@ export interface AppStrings {
   noContent: string;
   notTranslated: string;
 
+  // Stick-to-bottom scrolling (BilingualBlockViewer, LiveTranscript)
+  jumpToLatest: string;
+
   // Slide viewer
   noSlides: string;
   waitingForProclaim: string;
@@ -56,6 +59,8 @@ export interface AppStrings {
   englishTranscript: string;
   liveListening: string;
   waitingForSpeaker: string;
+  restartingTranslation: string;
+  waitingForTranscript: string;
   waitingForSpeech: string;
   liveAudioError: string;
   retry: string;
@@ -72,6 +77,21 @@ export interface AppStrings {
 
   // Navigation
   goHome: string;
+  downloadSession: string;
+
+  // Status / admin page (skeleton for #72)
+  statusTitle: string;
+  statusHealthTitle: string;
+  statusHealthPlaceholder: string;
+  statusNotReporting: string;
+  statusCanaryTitle: string;
+  statusCanaryPlaceholder: string;
+  statusExportTitle: string;
+  statusExportDescription: string;
+  statusTranscriptsTitle: string;
+  statusTranscriptsEmpty: string;
+  statusTranscriptSource: string;
+  statusTranscriptNoUpdates: string;
 
   // Layout diagram component labels
   componentSourceText: string;
@@ -130,11 +150,14 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Error: ',
     noContent: 'No content yet',
     notTranslated: '(not translated)',
+    jumpToLatest: '↓ New',
     listenLive: 'Listen live',
     stopAudio: 'Stop audio',
     englishTranscript: 'English transcript',
     liveListening: 'Listening live',
     waitingForSpeaker: 'Waiting for the speaker…',
+    restartingTranslation: 'Restarting translation…',
+    waitingForTranscript: 'Waiting for the transcript…',
     waitingForSpeech: 'Waiting for translated speech…',
     liveAudioError: 'Live audio unavailable',
     retry: 'Retry',
@@ -155,6 +178,20 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Next',
     untitledPresentation: 'Untitled Presentation',
     goHome: 'Go home',
+    downloadSession: 'Download session',
+    statusTitle: 'Session status',
+    statusHealthTitle: 'Component health',
+    statusHealthPlaceholder: 'Live component heartbeats will appear here.',
+    statusNotReporting: 'Not yet reporting',
+    statusCanaryTitle: 'Preflight canary',
+    statusCanaryPlaceholder: 'A pre-service end-to-end check will run here.',
+    statusExportTitle: 'Session export',
+    statusExportDescription:
+      'Download this session’s notes, slide translations, and live transcripts as a single readable HTML file.',
+    statusTranscriptsTitle: 'Live transcripts',
+    statusTranscriptsEmpty: 'No live transcripts in this session yet.',
+    statusTranscriptSource: 'source',
+    statusTranscriptNoUpdates: 'No updates since page load',
     componentSourceText: 'Source Text',
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
@@ -206,11 +243,14 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Erreur\u00a0: ',
     noContent: 'Aucun contenu pour l\u2019instant',
     notTranslated: '(non traduit)',
+    jumpToLatest: '\u2193 Nouveau',
     listenLive: 'Écouter en direct',
     stopAudio: 'Couper le son',
     englishTranscript: 'Transcription anglaise',
     liveListening: 'Écoute en direct',
     waitingForSpeaker: 'En attente de l’orateur…',
+    restartingTranslation: 'Redémarrage de la traduction…',
+    waitingForTranscript: 'En attente de la transcription…',
     waitingForSpeech: 'En attente de la traduction vocale…',
     liveAudioError: 'Audio en direct indisponible',
     retry: 'Réessayer',
@@ -231,6 +271,20 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Suivant',
     untitledPresentation: 'Pr\u00e9sentation sans titre',
     goHome: 'Accueil',
+    downloadSession: 'Télécharger la session',
+    statusTitle: 'État de la session',
+    statusHealthTitle: 'État des composants',
+    statusHealthPlaceholder: 'L’état en direct des composants apparaîtra ici.',
+    statusNotReporting: 'Pas encore de données',
+    statusCanaryTitle: 'Vérification préalable',
+    statusCanaryPlaceholder: 'Un contrôle de bout en bout avant le service s’exécutera ici.',
+    statusExportTitle: 'Exporter la session',
+    statusExportDescription:
+      'Téléchargez les notes, les traductions de diapositives et les transcriptions en direct de cette session dans un seul fichier HTML lisible.',
+    statusTranscriptsTitle: 'Transcriptions en direct',
+    statusTranscriptsEmpty: 'Aucune transcription en direct dans cette session pour l’instant.',
+    statusTranscriptSource: 'source',
+    statusTranscriptNoUpdates: 'Aucune mise à jour depuis le chargement de la page',
     componentSourceText: 'Texte source',
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
@@ -282,11 +336,14 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Error: ',
     noContent: 'Sin contenido a\u00fan',
     notTranslated: '(no traducido)',
+    jumpToLatest: '\u2193 Nuevo',
     listenLive: 'Escuchar en vivo',
     stopAudio: 'Detener audio',
     englishTranscript: 'Transcripción en inglés',
     liveListening: 'Escuchando en vivo',
     waitingForSpeaker: 'Esperando al orador…',
+    restartingTranslation: 'Reiniciando la traducción…',
+    waitingForTranscript: 'Esperando la transcripción…',
     waitingForSpeech: 'Esperando la traducción hablada…',
     liveAudioError: 'Audio en vivo no disponible',
     retry: 'Reintentar',
@@ -307,6 +364,20 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Siguiente',
     untitledPresentation: 'Presentaci\u00f3n sin t\u00edtulo',
     goHome: 'Ir al inicio',
+    downloadSession: 'Descargar sesión',
+    statusTitle: 'Estado de la sesión',
+    statusHealthTitle: 'Estado de los componentes',
+    statusHealthPlaceholder: 'El estado en vivo de los componentes aparecerá aquí.',
+    statusNotReporting: 'Sin datos todavía',
+    statusCanaryTitle: 'Verificación previa',
+    statusCanaryPlaceholder: 'Aquí se ejecutará una comprobación de extremo a extremo antes del servicio.',
+    statusExportTitle: 'Exportar sesión',
+    statusExportDescription:
+      'Descargue las notas, las traducciones de diapositivas y las transcripciones en vivo de esta sesión en un solo archivo HTML legible.',
+    statusTranscriptsTitle: 'Transcripciones en vivo',
+    statusTranscriptsEmpty: 'Aún no hay transcripciones en vivo en esta sesión.',
+    statusTranscriptSource: 'fuente',
+    statusTranscriptNoUpdates: 'Sin actualizaciones desde que se cargó la página',
     componentSourceText: 'Texto fuente',
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
@@ -358,11 +429,14 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     ttsError: 'Er\u00e8\u00a0: ',
     noContent: 'Pa gen kontni pou kounye a',
     notTranslated: '(pa tradui)',
+    jumpToLatest: '↓ Nouvo',
     listenLive: 'Koute an dirèk',
     stopAudio: 'Sispann odyo',
     englishTranscript: 'Transkripsyon anglè',
     liveListening: 'Ap koute an dirèk',
     waitingForSpeaker: 'N ap tann moun k ap pale a…',
+    restartingTranslation: 'N ap redemare tradiksyon an…',
+    waitingForTranscript: 'N ap tann transkripsyon an…',
     waitingForSpeech: 'N ap tann tradiksyon vokal la…',
     liveAudioError: 'Odyo an dirèk pa disponib',
     retry: 'Reeseye',
@@ -383,6 +457,20 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Apr\u00e8',
     untitledPresentation: 'Prezantasyon San Tit',
     goHome: 'Retounen lakay',
+    downloadSession: 'Telechaje sesyon an',
+    statusTitle: 'Estati sesyon an',
+    statusHealthTitle: 'Estati konpozan yo',
+    statusHealthPlaceholder: 'Estati konpozan yo an dirèk ap parèt isit la.',
+    statusNotReporting: 'Poko gen done',
+    statusCanaryTitle: 'Tchèk anvan sèvis la',
+    statusCanaryPlaceholder: 'Yon tchèk konplè anvan sèvis la ap fèt isit la.',
+    statusExportTitle: 'Ekspòte sesyon an',
+    statusExportDescription:
+      'Telechaje nòt yo, tradiksyon dyapozitiv yo, ak transkripsyon an dirèk sesyon sa a nan yon sèl fichye HTML ki fasil pou li.',
+    statusTranscriptsTitle: 'Transkripsyon an dirèk',
+    statusTranscriptsEmpty: 'Poko gen transkripsyon an dirèk nan sesyon sa a.',
+    statusTranscriptSource: 'sous',
+    statusTranscriptNoUpdates: 'Pa gen mizajou depi paj la chaje',
     componentSourceText: 'Teks sous',
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',

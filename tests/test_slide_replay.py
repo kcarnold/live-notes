@@ -31,7 +31,7 @@ FIXTURE = Path(__file__).parent / 'fixtures' / 'synthetic_service.jsonl'
 LANGS = ['French', 'Spanish']
 
 
-async def _fake_translate(slides, title, item_id, existing):
+async def _fake_translate(slides, title, item_id, existing, doc_id):
     return {
         lang: [{'text': f'{lang}:{s}', 'status': 'auto', 'provenance': 'llm'} for s in slides]
         for lang in LANGS

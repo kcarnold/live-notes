@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { draftItemTranslations, buildSeedConversationPrompt, GeminiProvider } from './nlp.ts';
+import { draftItemTranslations, buildSeedConversationPrompt, GeminiProvider, emptyUsage, addUsage, mergeUsage } from './nlp.ts';
 
 /**
  * A provider whose model calls `set_translations` with the given args, then ends its turn.
@@ -172,6 +172,86 @@ describe('draftItemTranslations', () => {
     expect(captured?.map((c) => c.role)).toEqual(['user', 'model', 'user', 'model']);
     expect(captured?.[1].parts?.[0].functionCall?.name).toBe('set_translations');
     expect(captured?.[2].parts?.[0].functionResponse?.name).toBe('set_translations');
+  });
+});
+
+describe('token usage accounting', () => {
+  it('sums usageMetadata across rounds, tolerating missing fields', () => {
+    let usage = emptyUsage();
+    usage = addUsage(usage, {
+      promptTokenCount: 1000,
+      cachedContentTokenCount: 0,
+      candidatesTokenCount: 50,
+      totalTokenCount: 1050,
+    });
+    // Round 2: prefix now served from cache; thoughtsTokenCount present, no explicit total.
+    usage = addUsage(usage, {
+      promptTokenCount: 1200,
+      cachedContentTokenCount: 900,
+      candidatesTokenCount: 40,
+      thoughtsTokenCount: 30,
+    });
+    // A tool-only response with no usageMetadata still counts as a call.
+    usage = addUsage(usage, undefined);
+
+    expect(usage.promptTokenCount).toBe(2200);
+    expect(usage.cachedContentTokenCount).toBe(900);
+    expect(usage.candidatesTokenCount).toBe(90);
+    expect(usage.thoughtsTokenCount).toBe(30);
+    expect(usage.totalTokenCount).toBe(1050);
+    expect(usage.callCount).toBe(3);
+  });
+
+  it('mergeUsage adds two running totals field-by-field', () => {
+    const a = { ...emptyUsage(), promptTokenCount: 100, cachedContentTokenCount: 40, callCount: 1 };
+    const b = { ...emptyUsage(), promptTokenCount: 200, cachedContentTokenCount: 150, callCount: 2 };
+    const merged = mergeUsage(a, b);
+    expect(merged.promptTokenCount).toBe(300);
+    expect(merged.cachedContentTokenCount).toBe(190);
+    expect(merged.callCount).toBe(3);
+  });
+
+  it('surfaces accumulated usage and tags generations for PostHog grouping', async () => {
+    const args = {
+      languages: [{ language: 'French', segments: [{ segmentId: 0, translation: 'Bonjour' }] }],
+    };
+    const callPart = { functionCall: { name: 'set_translations', args } };
+    const generateContent = vi
+      .fn()
+      .mockResolvedValueOnce({
+        functionCalls: [{ name: 'set_translations', args }],
+        candidates: [{ content: { role: 'model', parts: [callPart] } }],
+        usageMetadata: { promptTokenCount: 1000, cachedContentTokenCount: 0, candidatesTokenCount: 20, totalTokenCount: 1020 },
+      })
+      .mockResolvedValueOnce({
+        functionCalls: [],
+        candidates: [{ content: { role: 'model', parts: [{ text: 'Done.' }] } }],
+        usageMetadata: { promptTokenCount: 1100, cachedContentTokenCount: 950, candidatesTokenCount: 10, totalTokenCount: 1110 },
+      });
+    const provider = {
+      apiClient: { models: { generateContent } },
+      defaultModel: 'fake-model',
+      maxTokens: 1000,
+    } as unknown as GeminiProvider;
+
+    let usage: import('./nlp.ts').TokenUsage | undefined;
+    await draftItemTranslations(provider, {
+      sourceSlides: ['Hello'],
+      targets: [{ language: 'French', isTranslationNeeded: [true], context: '' }],
+      observability: { distinctId: 'doc-2026-07-12', traceId: 'conv-abc', properties: { source: 'test' } },
+      onUsage: (u) => { usage = u; },
+    });
+
+    expect(usage?.promptTokenCount).toBe(2100);
+    expect(usage?.cachedContentTokenCount).toBe(950);
+    expect(usage?.callCount).toBe(2);
+
+    // Every generation carries the trace/distinct-id tags so the conversation groups in PostHog.
+    for (const call of generateContent.mock.calls) {
+      expect(call[0].posthogTraceId).toBe('conv-abc');
+      expect(call[0].posthogDistinctId).toBe('doc-2026-07-12');
+      expect(call[0].posthogProperties).toEqual({ source: 'test' });
+    }
   });
 });
 

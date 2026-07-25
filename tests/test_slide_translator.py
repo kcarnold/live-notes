@@ -92,7 +92,7 @@ def test_scan_order_rotates_active_first():
 async def test_translate_pending_translates_misses_active_first():
     translated = []
 
-    async def fake(slides, title, item_id, existing):
+    async def fake(slides, title, item_id, existing, doc_id):
         translated.append(item_id)
         return auto_result(slides)
 
@@ -144,7 +144,7 @@ async def test_translate_pending_attempts_each_content_once():
 async def test_existing_translation_from_snapshot_forwarded():
     captured = {}
 
-    async def fake(slides, title, item_id, existing):
+    async def fake(slides, title, item_id, existing, doc_id):
         captured["existing"] = existing
         return auto_result(slides)
 
@@ -155,12 +155,32 @@ async def test_existing_translation_from_snapshot_forwarded():
     assert captured["existing"] == "Bonjou"
 
 
+async def test_bound_doc_id_forwarded_to_translate_fn():
+    """The server writes the agent conversation into the doc named by docId, so the currently
+    bound doc id must reach the translate call — including after a rollover rebinds the doc."""
+    captured = []
+
+    async def fake(slides, title, item_id, existing, doc_id):
+        captured.append(doc_id)
+        return auto_result(slides)
+
+    tr, _ = make_translator(fake)
+    tr.bind(Doc(), "doc-2026-07-25")
+    await tr._translate_pending(snap(["i1"], {"i1": feed_item("i1", "X", ["Hello"])}, active="i1"))
+
+    # A date rollover rebinds to a fresh doc; the next call must carry the new id.
+    tr.bind(Doc(), "doc-2026-07-26")
+    await tr._translate_pending(snap(["i1"], {"i1": feed_item("i1", "X", ["Hello"])}, active="i1"))
+
+    assert captured == ["doc-2026-07-25", "doc-2026-07-26"]
+
+
 async def test_run_translates_from_bus():
     """The background loop picks up a published snapshot and translates it."""
     bus = SnapshotBus()
     translated = []
 
-    async def fake(slides, title, item_id, existing):
+    async def fake(slides, title, item_id, existing, doc_id):
         translated.append(item_id)
         return auto_result(slides)
 

@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 
 from pycrdt import Doc, Map
 
+from proclaim_lib import is_blank_item
 from slide_feed import FeedSnapshot
 
 logger = logging.getLogger(__name__)
@@ -77,16 +78,25 @@ class YjsSlidePublisher:
             logger.info(f"Published status: {item_id} slide {slide_index}")
 
     def _clip(self, snap: FeedSnapshot, item_id: Optional[str], slide_index: int) -> int:
-        """Clip the slide index into the active item's range (when the item is known)."""
+        """Clip the slide index into the active item's range (when the item is known).
+
+        Blank items (image slideshows, offering, etc.) collapse to a single blank slide, but
+        the source keeps reporting the slideshow's own advancing index as it loops. Clipping
+        pins those to 0 — and since ``_apply_status`` diffs the *clipped* index, the looping
+        produces no Yjs writes at all. Log it at debug for blank items so a slideshow doesn't
+        emit a warning every poll cycle.
+        """
         item = snap.items.get(item_id) if item_id else None
         if item is None:
             return slide_index
+        clip_log = logger.debug if is_blank_item(item.item_kind, item.title) else logger.warning
         max_index = len(item.slides) - 1
         if slide_index > max_index:
-            logger.warning(
+            clip_log(
                 f"Slide index {slide_index} out of range for item {item_id}, clipping to {max_index}"
             )
             slide_index = max_index
         if slide_index < 0:
+            clip_log(f"Slide index {slide_index} less than 0 for item {item_id}, clipping to 0")
             slide_index = 0
         return slide_index

@@ -116,10 +116,15 @@ def make_translate_fn(ysweet_url: str, languages: List[str]):
         item_title: Optional[str],
         item_id: Optional[str],
         existing_translation: Optional[str],
+        doc_id: Optional[str],
     ) -> Optional[Dict[str, Any]]:
         if not slides or not languages:
             return None
         body: Dict[str, Any] = {"slides": slides, "languages": languages}
+        # docId names the per-day doc the server writes the agent conversation into (the
+        # same doc this session is connected to).
+        if doc_id:
+            body["docId"] = doc_id
         if item_title and item_title != "Unknown":
             body["itemTitle"] = item_title
         if item_id:
