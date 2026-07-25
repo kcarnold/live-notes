@@ -114,6 +114,59 @@ Either install with `--no-auto-update`, or set `PROCLAIM_AUTO_UPDATE` to `0` in
 the plist's `EnvironmentVariables` and reload. The service then runs whatever is
 checked out, exactly as it did before auto-update existed.
 
+### Developing on a machine that also runs the service
+
+The wrapper only moves the checkout **it lives in** (it resolves the repo from
+its own path), and only when something runs it. Normal development is untouched:
+
+```bash
+uv run proclaim_service.py       # never touches git — no wrapper involved
+uv run pytest                    # likewise
+```
+
+It also won't destroy uncommitted work: with a dirty tree the checkout is
+refused, your edits stay, and the previous version runs. But a **clean** tree on
+a feature branch *will* be switched to `proclaim-stable` the next time launchd
+restarts the service — quietly, in the background. So don't point an
+auto-updating LaunchAgent at the checkout you develop in. Either:
+
+```bash
+bash install_proclaim_service.sh --no-auto-update        # freeze this install
+bash install_proclaim_service.sh --branch=my-feature     # or track your own branch
+```
+
+or keep a separate clone for the installed service.
+
+### Testing the wrapper itself
+
+The automated version needs no Proclaim, no network, and no real `uv`:
+
+```bash
+uv run pytest tests/test_proclaim_launcher.py
+```
+
+Those tests build a throwaway remote and checkout, then break the update every
+way that matters (unreachable remote, hung fetch, local edits, failed dependency
+sync) and assert the service still started.
+
+To watch it by hand without touching your working repo, clone it into a scratch
+directory and drive that clone. `UV_BIN=/bin/echo` turns the final `exec` into a
+dry run that prints what *would* have started:
+
+```bash
+git clone --bare . /tmp/proclaim-origin.git
+git -C /tmp/proclaim-origin.git branch -f proclaim-stable HEAD~1   # a "release"
+git clone /tmp/proclaim-origin.git /tmp/proclaim-test
+
+UV_BIN=/bin/echo bash /tmp/proclaim-test/proclaim_service_launch.sh
+# ... updated proclaim-stable: d298ed4 -> beb4fbb
+# ... starting proclaim service (beb4fbb on proclaim-stable)
+```
+
+Move `/tmp/proclaim-origin.git`'s `proclaim-stable` around and re-run to
+rehearse promotions and rollbacks; add an uncommitted edit in
+`/tmp/proclaim-test` to watch the update decline and run the old version.
+
 ## Management
 
 ### Check service status
