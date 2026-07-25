@@ -23,7 +23,7 @@ const listener = (id: string, listen?: string): PresentParticipant => ({
 });
 
 describe("computeDesiredLanguages", () => {
-  const opts = { defaultLanguage: "fr", silenceGatingEnabled: false };
+  const opts = { defaultLanguage: "fr" };
 
   it("wants nothing without a broadcaster — the waiting room costs nothing", () => {
     // The 2026-07-19 outage shape: a listener waiting for the talk to start must not
@@ -44,19 +44,20 @@ describe("computeDesiredLanguages", () => {
     expect(computeDesiredLanguages([organizer, listener("a")], opts)).toEqual(new Set(["fr"]));
   });
 
-  it("wants nothing for a broadcaster alone with the cost path off", () => {
-    // An idle bridge burns a Gemini session; without silence-suspend, don't.
-    expect(computeDesiredLanguages([organizer], opts).size).toBe(0);
-  });
-
-  it("keeps the default bridge for a lone broadcaster with the cost path on", () => {
-    // Silence is ~free, so a live talk always gets its English transcript.
-    const desired = computeDesiredLanguages([organizer], { ...opts, silenceGatingEnabled: true });
-    expect(desired).toEqual(new Set(["fr"]));
+  it("runs the default bridge for a lone broadcaster, whatever the cost setting", () => {
+    // The default bridge is the sole writer of the English transcript, so it can't be
+    // conditional on listeners: a talk that starts before anyone tunes in must still be
+    // transcribed, or the first listener arrives mid-sentence with no history. Cost is
+    // the bridge's own concern (silenceThresholdDbfs), not a reason to not exist.
+    expect(computeDesiredLanguages([organizer], opts)).toEqual(new Set(["fr"]));
   });
 
   it("never counts translator bots as listeners", () => {
-    expect(computeDesiredLanguages([organizer, bot("es"), bot("fr")], opts).size).toBe(0);
+    // Only the default — the bots' own languages must not keep themselves alive, or a
+    // bridge nobody wants would justify its own existence and never wind down.
+    expect(computeDesiredLanguages([organizer, bot("es"), bot("fr")], opts)).toEqual(
+      new Set(["fr"])
+    );
   });
 });
 
@@ -138,7 +139,7 @@ class FakeBridge {
   async simulateScenario(): Promise<void> {}
 }
 
-function makeManager(rooms: Map<string, PresentParticipant[]>, opts?: { silenceGatingEnabled?: boolean }) {
+function makeManager(rooms: Map<string, PresentParticipant[]>) {
   const created: FakeBridge[] = [];
   const directory: RoomDirectory = {
     listRooms: async () => [...rooms.keys()],
@@ -154,7 +155,6 @@ function makeManager(rooms: Map<string, PresentParticipant[]>, opts?: { silenceG
     // only constructed lazily per session and these tests never await its sync.
     documentManager: null as unknown as DocumentManager,
     livekit: { url: "ws://fake", apiKey: "k", apiSecret: "s" },
-    silenceGatingEnabled: opts?.silenceGatingEnabled ?? false,
     directory,
     bridgeFactory: (sessionId, targetLanguage) => {
       const bridge = new FakeBridge(sessionId, targetLanguage);

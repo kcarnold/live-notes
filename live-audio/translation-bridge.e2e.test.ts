@@ -285,7 +285,9 @@ vi.mock("ws", () => ({ default: FakeGeminiSocket }));
 
 // ---------------------------------------------------------------------------
 
-const { TranslationBridge } = await import("./translation-bridge.ts");
+const { TranslationBridge, SILENCE_THRESHOLD_DBFS, SILENCE_GATING_OFF_DBFS } = await import(
+  "./translation-bridge.ts"
+);
 
 const ORGANIZER = "organizer-host";
 
@@ -590,7 +592,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
   it("a long pause suspends Gemini WITHOUT the watchdog tearing down the live input", async () => {
     const events: string[] = [];
     const { bridge, seated: mic } = await boot((room) => room.seatOrganizer(ORGANIZER), {
-      silenceGatingEnabled: true,
+      silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
       recordEvent: (event: string) => events.push(event),
     });
 
@@ -628,7 +630,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     // can notice. (Same failure as the "unknown-unknown" test, now with gating enabled.)
     const events: string[] = [];
     const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
-      silenceGatingEnabled: true,
+      silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
       recordEvent: (event: string) => events.push(event),
     });
 
@@ -653,6 +655,45 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     const before = framesToGemini();
     await speakVoice(newMic, 3);
     expect(framesToGemini()).toBeGreaterThan(before);
+    await bridge.stop();
+  });
+
+  // Gating off is expressed as a voice bar of -Infinity rather than a separate flag, so
+  // these two pin down that the bar alone really does mean "never suspends" — across both
+  // routes into suspendForSilence. Without that, "off" would be a config that runs half
+  // the gating machinery, which is exactly the shape that made this hard to reason about.
+
+  it("with the voice bar off, open-mic room tone never suspends Gemini", async () => {
+    // The per-frame route. Room tone is digital silence here (-Infinity dBFS), the worst
+    // case for a `>=` test — it still has to read as voice at the off bar, or the quietest
+    // possible input would be the one thing that suspends a bridge with gating disabled.
+    const events: string[] = [];
+    const { bridge, seated: mic } = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      silenceThresholdDbfs: SILENCE_GATING_OFF_DBFS,
+      recordEvent: (event: string) => events.push(event),
+    });
+
+    await speakVoice(mic, 3);
+    await holdSilence(mic, 90_000); // 3x the suspend window
+    expect(events).not.toContain("gemini_suspended_silence");
+    expect(bridge.status).toBe("active");
+    await bridge.stop();
+  });
+
+  it("with the voice bar off, a muted mic sending nothing never suspends Gemini", async () => {
+    // The timer route, and the reason the off bar is checked when starting the monitor
+    // instead of being left to fall out of the per-frame test: with no frames arriving
+    // there is nothing to read as voice, `lastVoiceAt` just stops advancing, and the
+    // window elapses on a bridge that is supposed to stay up. The stall watchdog may
+    // fire here — a genuinely dead input is its job — but suspending is not.
+    const events: string[] = [];
+    const { bridge } = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      silenceThresholdDbfs: SILENCE_GATING_OFF_DBFS,
+      recordEvent: (event: string) => events.push(event),
+    });
+
+    await vi.advanceTimersByTimeAsync(45_000); // past the 30s suspend window, no frames at all
+    expect(events).not.toContain("gemini_suspended_silence");
     await bridge.stop();
   });
 });

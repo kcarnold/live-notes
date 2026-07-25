@@ -66,13 +66,17 @@ an incident happens that this list would not have caught, add a line.
       fails, so it can't be provoked by running longer. `scenario` also accepts
       `signalReconnect`, `nodeFailure`, `migration`, `serverLeave`.
 
-Cost path (only when `LIVE_AUDIO_SILENCE_GATING` is enabled — off by default):
-
 - [ ] With **no listener yet**, the English transcript still flows — the default translator
-      runs whenever the broadcaster is present.
+      runs whenever the broadcaster is present, whatever the cost path is set to.
+
+Cost path (only when `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level — off by default; the
+startup log line reports which):
+
 - [ ] **Silence suspend/resume**: stay silent >30 s (server logs "Suspending Gemini after…");
       then speak — the first words resume translation ("resuming Gemini after…") without the
       listener resubscribing.
+- [ ] With the threshold **unset**, the opposite: stay silent >30 s and confirm no
+      "Suspending Gemini" line appears, with the mic both open-but-quiet and fully muted.
 
 ## 5. TTS (text-to-speech on translated notes)
 

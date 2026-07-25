@@ -31,6 +31,7 @@ import { buildSessionExport, renderSessionHtml, sessionExportFilename } from './
 import { AccessToken } from 'livekit-server-sdk';
 import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
+import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -205,11 +206,12 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
   return { url, apiKey, apiSecret };
 }
 
-// Cost optimization (silence suspend/resume + always-on default translator) is off
-// unless LIVE_AUDIO_SILENCE_GATING is truthy, so the goaway/reliability fixes can
-// ship while the cost path is still being validated. The goaway/reconnect buffering
-// is independent and always on.
-const SILENCE_GATING_ENABLED = /^(1|true|yes|on)$/i.test(process.env.LIVE_AUDIO_SILENCE_GATING ?? '');
+// The cost path's only knob: the dBFS level below which the organizer's mic counts as
+// silence, at which point a bridge suspends its Gemini socket. Unset (the default)
+// means bridges never suspend. The goaway/reconnect buffering is independent of this
+// and always on, as is the default translator — silence gating no longer decides
+// which bridges exist, only what an existing one does while nobody is speaking.
+const SILENCE_THRESHOLD_DBFS = parseSilenceThresholdDbfs(process.env.LIVE_AUDIO_SILENCE_THRESHOLD_DBFS);
 
 // Give the translation manager what it needs to persist transcripts into Yjs and
 // reap idle translator bots. No-op for transcript/reaper if LiveKit is unconfigured.
@@ -220,9 +222,13 @@ const SILENCE_GATING_ENABLED = /^(1|true|yes|on)$/i.test(process.env.LIVE_AUDIO_
       documentManager,
       livekit: lk,
       telemetry: phClient,
-      silenceGatingEnabled: SILENCE_GATING_ENABLED,
+      silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
     });
-    console.log(`[server] Live-audio silence gating (cost path): ${SILENCE_GATING_ENABLED ? 'ENABLED' : 'disabled'}`);
+    console.log(
+      `[server] Live-audio silence gating (cost path): ${
+        Number.isFinite(SILENCE_THRESHOLD_DBFS) ? `${SILENCE_THRESHOLD_DBFS} dBFS` : 'disabled'
+      }`
+    );
   }
 }
 

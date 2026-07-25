@@ -108,16 +108,25 @@ const RECONNECT_BACKOFF = { initialMs: 1_000, maxMs: 30_000 };
 // Silence gating uses two thresholds, because "have we been silent long enough to
 // stop paying?" and "is there any sound here worth keeping?" want opposite biases.
 //
-// SILENCE_THRESHOLD_DBFS (the strict *voice* bar) drives the suspend clock and the
-// resume trigger: only clear speech keeps the session alive / wakes it, so room tone
-// doesn't burn money and faint noise doesn't wake it to hallucinate on nothing.
+// The *voice* bar (per-bridge, `silenceThresholdDbfs`) drives the suspend clock and
+// the resume trigger: only clear speech keeps the session alive / wakes it, so room
+// tone doesn't burn money and faint noise doesn't wake it to hallucinate on nothing.
+// That bar is also the feature's only switch. At SILENCE_GATING_OFF_DBFS every frame
+// reads as voice, so the suspend clock can never elapse and the bridge is a plain
+// always-on session — there is no second boolean to keep in sync with it, and no
+// configuration in which some of the gating machinery is live and the rest isn't.
+// SILENCE_THRESHOLD_DBFS is the level to use when you do want gating.
 //
 // SILENCE_FLOOR_DBFS (the *dead-air* floor, well below the voice bar) is the only
 // thing the gap-collapse is allowed to drop. An unvoiced consonant (/s/, /f/, a
 // plosive burst diluted across a 100 ms frame) can read below the voice bar but sits
 // far above this floor, so it is always kept — we never trade a clipped consonant
-// for lower latency. Only genuine near-digital dead air collapses.
+// for lower latency. Only genuine near-digital dead air collapses. It belongs to the
+// reconnect buffer, not to gating, so it stays fixed however the voice bar is set.
 export const SILENCE_THRESHOLD_DBFS = -30;
+// Gating off. `frameRmsDbfs` bottoms out at -Infinity for pure digital silence, and
+// the voice test is `>=`, so at this bar even a frame of zeroes counts as voice.
+export const SILENCE_GATING_OFF_DBFS = -Infinity;
 export const SILENCE_FLOOR_DBFS = -50;
 const SILENCE_SUSPEND_MS = 30_000;
 const SILENCE_CHECK_INTERVAL_MS = 5_000;
@@ -175,6 +184,20 @@ export function isSilentFrame(
   thresholdDbfs: number = SILENCE_THRESHOLD_DBFS
 ): boolean {
   return frameRmsDbfs(data) < thresholdDbfs;
+}
+
+/**
+ * Read the voice bar from its env value (`LIVE_AUDIO_SILENCE_THRESHOLD_DBFS`), in
+ * dBFS. Unset — or anything non-finite, including a literal "-Infinity" — means
+ * gating off, so the cost path is opted into by naming a level (e.g. `-30`) and
+ * never arrives by accident. Note the sign: dBFS is negative below full scale, so
+ * a *higher* bar gates more aggressively and `0` would treat all real speech as
+ * silence. That's the opposite of off.
+ */
+export function parseSilenceThresholdDbfs(raw: string | undefined): number {
+  if (raw == null || raw.trim() === "") return SILENCE_GATING_OFF_DBFS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : SILENCE_GATING_OFF_DBFS;
 }
 
 /**
@@ -388,12 +411,11 @@ export class TranslationBridge {
   private readonly writesSourceTranscript: boolean;
   // Telemetry sink (PostHog, injected by the server). Null in tests / when unset.
   private readonly recordEvent: RecordEvent | null;
-  // Cost optimization: when off (the default) the bridge never suspends its Gemini
-  // socket for silence — the silence monitor isn't started, so it behaves exactly as
-  // before this feature (always-on session). The goaway/reconnect buffering below is
-  // independent and always active. Gated so the reliability fixes can ship while the
-  // suspend/resume cost path is still being validated.
-  private readonly silenceGatingEnabled: boolean;
+  // The voice bar, in dBFS — the cost path's only knob. At SILENCE_GATING_OFF_DBFS
+  // (the default) every frame reads as voice, so the bridge never suspends and is a
+  // plain always-on session. The goaway/reconnect buffering is independent of this
+  // and always active.
+  private readonly silenceThresholdDbfs: number;
 
   // The source (input) transcript is published under this language code.
   static readonly SOURCE_CODE = "en";
@@ -410,7 +432,7 @@ export class TranslationBridge {
       writer?: TranscriptWriter | null;
       writesSourceTranscript?: boolean;
       recordEvent?: RecordEvent | null;
-      silenceGatingEnabled?: boolean;
+      silenceThresholdDbfs?: number;
     }
   ) {
     this.sessionId = sessionId;
@@ -424,7 +446,7 @@ export class TranslationBridge {
     this.writer = config.writer ?? null;
     this.writesSourceTranscript = config.writesSourceTranscript ?? false;
     this.recordEvent = config.recordEvent ?? null;
-    this.silenceGatingEnabled = config.silenceGatingEnabled ?? false;
+    this.silenceThresholdDbfs = config.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
   }
 
   /**
@@ -479,10 +501,10 @@ export class TranslationBridge {
 
       this.status = "active";
       // Start the silence clock now so an organizer who joins but never speaks
-      // still suspends after the grace window rather than immediately. Only when the
-      // cost path is enabled — otherwise the socket stays up for the whole session.
+      // still suspends after the grace window rather than immediately. Unconditional:
+      // the monitor itself no-ops when the voice bar is off.
       this.lastVoiceAt = Date.now();
-      if (this.silenceGatingEnabled) this.startSilenceMonitor();
+      this.startSilenceMonitor();
       console.log(
         `[TranslationBridge:${this.targetLanguage}] Bridge is active`
       );
@@ -941,9 +963,15 @@ export class TranslationBridge {
    * driven per-frame (the first non-silent frame reopens the socket), but this
    * timer also catches the case where the mic is muted and no frames arrive at
    * all — then `lastVoiceAt` simply stops advancing and the window elapses.
+   *
+   * That muted-mic path is why an off voice bar is checked here and not left to
+   * fall out of the per-frame test: with no frames at all there is nothing to read
+   * as voice, so the clock would elapse on a bridge that is meant never to suspend.
+   * This is the one place the switch is read; everywhere else the bar is just a bar.
    */
   private startSilenceMonitor(): void {
     if (this.silenceTimer) return;
+    if (this.silenceThresholdDbfs === SILENCE_GATING_OFF_DBFS) return;
     this.silenceTimer = setInterval(() => {
       if (this.status !== "active" || this.suspended) return;
       if (this.lastVoiceAt && Date.now() - this.lastVoiceAt > SILENCE_SUSPEND_MS) {
@@ -1361,7 +1389,7 @@ export class TranslationBridge {
     // raw level is passed on so the gap-collapse can tell a faint consonant (kept)
     // from genuine dead air (droppable).
     const dbfs = frameRmsDbfs(frame.data);
-    const isVoice = dbfs >= SILENCE_THRESHOLD_DBFS;
+    const isVoice = dbfs >= this.silenceThresholdDbfs;
     if (isVoice) {
       this.lastVoiceAt = Date.now();
       if (this.suspended) this.resumeFromSilence();

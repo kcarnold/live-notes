@@ -22,7 +22,7 @@ import type { DocumentManager } from "@y-sweet/sdk";
 import { RoomServiceClient } from "livekit-server-sdk";
 
 import { TranscriptWriter } from "./transcript-writer.ts";
-import { TranslationBridge } from "./translation-bridge.ts";
+import { SILENCE_GATING_OFF_DBFS, TranslationBridge } from "./translation-bridge.ts";
 import type { BridgeHealth, BridgeStatus } from "./translation-bridge.ts";
 
 /**
@@ -89,32 +89,34 @@ const START_RETRY_MS = 30_000;
  *   - No broadcaster → nothing runs. A listener waiting for the talk to start costs
  *     nothing, and the bridge starts on the tick where the organizer appears — the
  *     "waiting-room reap" outage (2026-07-19) is inexpressible in this shape.
- *   - Broadcaster present → every language some listener's `listen` attribute names,
- *     plus the default language (the source-transcript writer) while anyone is
- *     listening — or unconditionally when the silence-gating cost path makes an idle
- *     bridge ~free.
+ *   - Broadcaster present → the default language, always, plus every language some
+ *     listener's `listen` attribute names.
  *
- * Listeners without a `listen` attribute (older clients) still count as listeners, so
- * the default bridge runs for them; their specific language arrives via the
- * `/translate` nudge, which stamps demand directly.
+ * The default bridge is unconditional because it is not really a translation: it is
+ * the sole writer of the source (English) transcript, so tying it to listener count
+ * meant a talk with nobody yet listening transcribed nothing, and the first listener
+ * to arrive got a transcript starting mid-sentence. A live talk always gets its
+ * transcript; whether that bridge suspends itself through the quiet parts is the
+ * bridge's own business (see `silenceThresholdDbfs`), not a demand question.
+ *
+ * Listeners without a `listen` attribute (older clients, and anyone listening to the
+ * original audio) therefore need no special case: they read a transcript that is
+ * already being written.
  */
 export function computeDesiredLanguages(
   participants: PresentParticipant[],
-  opts: { defaultLanguage: string; silenceGatingEnabled: boolean }
+  opts: { defaultLanguage: string }
 ): Set<string> {
   const desired = new Set<string>();
   const hasBroadcaster = participants.some((p) => p.identity.startsWith(ORGANIZER_PREFIX));
   if (!hasBroadcaster) return desired;
 
-  const listeners = participants.filter(
-    (p) => !p.identity.startsWith(ORGANIZER_PREFIX) && !p.identity.startsWith(TRANSLATOR_PREFIX)
-  );
-  for (const listener of listeners) {
-    const lang = listener.attributes?.[LISTEN_ATTRIBUTE];
+  desired.add(opts.defaultLanguage);
+  for (const participant of participants) {
+    if (participant.identity.startsWith(ORGANIZER_PREFIX)) continue;
+    if (participant.identity.startsWith(TRANSLATOR_PREFIX)) continue;
+    const lang = participant.attributes?.[LISTEN_ATTRIBUTE];
     if (lang) desired.add(lang);
-  }
-  if (opts.silenceGatingEnabled || listeners.length > 0) {
-    desired.add(opts.defaultLanguage);
   }
   return desired;
 }
@@ -197,10 +199,10 @@ export class TranslationSessionManager {
   private supervisorTimer: ReturnType<typeof setInterval> | null = null;
   private reconciling = false;
 
-  // Cost optimization master switch (default off). When off, bridges never suspend
-  // for silence and the default bridge runs only while someone is listening. When on,
-  // silence is free so the default translator runs for any present broadcaster.
-  private silenceGatingEnabled: boolean = false;
+  // The voice bar handed to every bridge, in dBFS. Off by default, in which case
+  // bridges never suspend for silence. Purely a per-bridge cost setting — it has no
+  // say in which bridges exist (see computeDesiredLanguages).
+  private silenceThresholdDbfs: number = SILENCE_GATING_OFF_DBFS;
 
   static getInstance(): TranslationSessionManager {
     if (!TranslationSessionManager.instance) {
@@ -218,14 +220,14 @@ export class TranslationSessionManager {
     documentManager: DocumentManager;
     livekit: LiveKitConfig;
     telemetry?: TelemetryClient;
-    silenceGatingEnabled?: boolean;
+    silenceThresholdDbfs?: number;
     directory?: RoomDirectory;
     bridgeFactory?: typeof defaultBridgeFactory;
   }): void {
     this.documentManager = opts.documentManager;
     this.livekitConfig = opts.livekit;
     this.telemetry = opts.telemetry ?? null;
-    this.silenceGatingEnabled = opts.silenceGatingEnabled ?? false;
+    this.silenceThresholdDbfs = opts.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
     this.directory = opts.directory ?? roomServiceDirectory(opts.livekit);
     if (opts.bridgeFactory) this.bridgeFactory = opts.bridgeFactory;
     this.startSupervisor();
@@ -341,7 +343,7 @@ export class TranslationSessionManager {
       writer,
       writesSourceTranscript: targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE,
       recordEvent,
-      silenceGatingEnabled: this.silenceGatingEnabled,
+      silenceThresholdDbfs: this.silenceThresholdDbfs,
     };
 
     console.log(`[SessionManager] Creating new bridge for ${targetLanguage} in session ${sessionId}`);
@@ -485,7 +487,6 @@ export class TranslationSessionManager {
 
     const desired = computeDesiredLanguages(participants, {
       defaultLanguage: TranslationSessionManager.DEFAULT_LANGUAGE,
-      silenceGatingEnabled: this.silenceGatingEnabled,
     });
 
     const now = Date.now();
