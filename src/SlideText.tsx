@@ -25,7 +25,7 @@ export function SlideText({ lines, header, placeholder }: SlideTextProps) {
   // Re-fit whenever the content changes.
   const contentKey = placeholder != null ? ' placeholder' : (lines ?? []).join('\n');
   const { containerRef, textRef, fontSize } = useFitText<HTMLDivElement, HTMLDivElement>([
-    contentKey,
+    contentKey, { min: 14, max: 100, steps: 10 }
   ]);
 
   return (
