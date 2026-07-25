@@ -82,3 +82,42 @@ would be cheap to surface for a health/liveness view:
 
 Because in-process state is per-instance and lost on restart, anything meant for alerting should be
 mirrored to PostHog (or another external sink) as periodic gauges, not just the edge events above.
+
+## Web status view (StatusView) — current status
+
+The session status page ([src/StatusView.tsx](../src/StatusView.tsx), reachable via the `status`
+layout component) is where these signals surface for an operator. Current state:
+
+- **Live transcripts (built).** [src/TranscriptHealth.tsx](../src/TranscriptHealth.tsx) renders one
+  tile per `liveTranscript-<code>` language present in the doc — source (`en`) first — showing char
+  count, a tail preview, and a staleness dot. This is source #4 (transcript growth), the end-to-end
+  "translation is actually flowing" heartbeat, read straight from Yjs with no backend change.
+  - Discovery + labeling live in [src/transcriptKeys.ts](../src/transcriptKeys.ts) (`liveTranscriptCodes`,
+    `liveTranscriptLabel`, and the key-namespace constants), shared with the session export
+    ([sessionExport.ts](../sessionExport.ts)) so both agree on the namespace. Kept dependency-free
+    (type-only Yjs import) so the client doesn't pull the server export path into its bundle.
+  - **Freshness is client-relative.** Y.Text carries no timestamp, so "updated Ns ago" is measured
+    from when a delta is observed *while the page is open* — it can't recover the last-write time
+    from before you loaded. The initial sync populate is deliberately ignored so a stale backlog
+    doesn't read as "just updated." Good for "is it moving now"; not an absolute liveness clock.
+- **Component health tiles (skeleton).** The Server / Proclaim / bridges / broadcaster tiles are
+  still placeholders — nothing writes the `status` Y.Map yet (that's the #72 heartbeat producers).
+- **Preflight canary (skeleton).** Placeholder; no end-to-end check runs yet.
+
+## Next steps (roughly in order of effort)
+
+1. **Live-audio bridges tile** — cheapest real health signal. Poll the existing
+   `GET /api/livekit/translate/status?sessionId=…` (source #2) the way
+   [src/BroadcastControl.tsx](../src/BroadcastControl.tsx) already does, and render a tile per
+   `translator-*` with `status` + `subscriberCount`. Pair it visually with the transcript tiles,
+   since bridge `status: active` can read healthy while deaf (see Questions above). No backend work.
+2. **Absolute transcript freshness** — if the client-relative clock isn't enough, have
+   [transcript-writer.ts](../live-audio/transcript-writer.ts) stamp `lastWrittenAt` per code into the
+   `status` Y.Map. Survives reloads and gives the tiles a real wall-clock age; this is the first
+   `status`-map producer and sets the pattern for the rest.
+3. **Component heartbeats (#72)** — server, Proclaim service, and broadcaster each write a periodic
+   heartbeat into the `status` Y.Map so the skeleton health tiles turn real. Broadcaster presence
+   specifically needs LiveKit `listParticipants` (source #3); the current status endpoint lists only
+   translators, so this wants a small new endpoint or field.
+4. **Preflight canary** — a ~30 s end-to-end check run before a service; the `simulateScenario` hook
+   on the session manager is a starting point, but wiring a real canary is a feature, not a wire-up.
