@@ -5,11 +5,12 @@
     <key>Label</key>
     <string>org.kenarnold.proclaim-service</string>
 
+    <!-- Launch wrapper: updates the checkout from the release branch, then runs
+         the service. Update failures degrade to "runs the last version". -->
     <key>ProgramArguments</key>
     <array>
-        <string>{{UV_PATH}}</string>
-        <string>run</string>
-        <string>{{SERVICE_SCRIPT}}</string>
+        <string>/bin/bash</string>
+        <string>{{LAUNCH_SCRIPT}}</string>
     </array>
 
     <!-- Auto-restart on exit -->
@@ -26,6 +27,20 @@
         <!-- Set PATH to include the venv if using one, or system paths -->
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+
+        <!-- Auto-update: the wrapper needs absolute tool paths (launchd's PATH is
+             minimal) and the release branch to track. Set PROCLAIM_AUTO_UPDATE to
+             0 to freeze this install at whatever is checked out. -->
+        <key>UV_BIN</key>
+        <string>{{UV_PATH}}</string>
+        <key>GIT_BIN</key>
+        <string>{{GIT_PATH}}</string>
+        <key>PROCLAIM_SERVICE_SCRIPT</key>
+        <string>{{SERVICE_SCRIPT}}</string>
+        <key>PROCLAIM_UPDATE_BRANCH</key>
+        <string>{{UPDATE_BRANCH}}</string>
+        <key>PROCLAIM_AUTO_UPDATE</key>
+        <string>{{AUTO_UPDATE}}</string>
 
         <key>YSWEET_URL</key>
         <string>{{YSWEET_URL}}</string>

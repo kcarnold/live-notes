@@ -6,6 +6,7 @@ This guide explains how to run `proclaim_service.py` as a persistent background 
 
 The setup includes:
 - **Service** (`proclaim_service.py`): Detects date changes and exits cleanly for restart
+- **Launch wrapper** (`proclaim_service_launch.sh`): What the LaunchAgent actually runs — updates the checkout from the release branch, then starts the service
 - **Plist template** (`org.kenarnold.proclaim-service.plist.template`): Template that gets customized during installation
 - **Install script** (`install_proclaim_service.sh`): Generates the plist with your paths and user, then installs it
 - **Log directory**: Logs stored at `~/Library/Logs/proclaim-service/`
@@ -19,7 +20,7 @@ The install script automatically generates the plist from a template with your c
 ### Run the installer
 
 ```bash
-bash install_proclaim_service.sh
+bash install_proclaim_service.sh --server-url=https://notelate.com
 ```
 
 That's it! The installer will:
@@ -29,6 +30,89 @@ That's it! The installer will:
 - ✓ Load the service
 
 The service should now start automatically and restart on reboot.
+
+Options:
+
+| Flag | Meaning |
+|---|---|
+| `--server-url=<url>` | Y-Sweet / API server (default `https://notelate.com`) |
+| `--branch=<branch>` | Release branch to track (default `proclaim-stable`) |
+| `--no-auto-update` | Install without the pull-on-launch update; runs whatever is checked out |
+
+## Automatic updates
+
+The machine running Proclaim is unattended, and a Sunday morning is the worst
+possible time to discover a broken update. So the update story is deliberately
+boring: **every launch is an update opportunity, and a failed update just runs
+the version that was already working.**
+
+### How it works
+
+The LaunchAgent runs `proclaim_service_launch.sh`, which on every start:
+
+1. Fetches `origin/proclaim-stable` (bounded by a timeout — a dead network can't
+   wedge the launch).
+2. Checks out and fast-forwards to it.
+3. Runs `uv sync` if the SHA changed, so new dependencies ride along.
+4. Starts the service — **unconditionally**, whatever happened above.
+
+Because `KeepAlive` is on, every crash restart, reboot, and midnight document
+roll re-runs that sequence.
+
+Failure modes, all of which end with the service running:
+
+| What went wrong | What happens |
+|---|---|
+| Network/remote unreachable | Fetch fails, previous version runs |
+| Uncommitted local edits in the checkout | Checkout fails, edits kept, previous version runs |
+| Local commits on `proclaim-stable` | Fast-forward refused, previous version runs |
+| New version's dependencies won't install | Checkout rolls back to the previous SHA, that version runs |
+| `git` missing entirely | Update skipped, service runs |
+
+### Releasing
+
+`proclaim-stable` is the release channel *and* the Sunday-freeze mechanism, in
+one primitive. Promotion is a deliberate act:
+
+```bash
+git push origin main:proclaim-stable
+```
+
+Don't move the branch after Thursday — an installed service picks up whatever
+the branch points at the next time it restarts, and nobody wants to debug that
+at 9:45 on Sunday.
+
+To roll a bad release back, move the branch to a known-good commit and restart
+the service:
+
+```bash
+git push --force-with-lease origin <good-sha>:proclaim-stable
+```
+
+### Applying an update
+
+Restarting the service *is* updating it:
+
+```bash
+launchctl stop org.kenarnold.proclaim-service   # KeepAlive restarts it, updating on the way up
+```
+
+### Checking which version is running
+
+The service reports its SHA, branch, and update channel into the session doc's
+`status` map, so the session status page (`/status`) shows the running version
+and flags **"Update pending — restart the service"** when `proclaim-stable` has
+moved past it. The same information is in the log at startup:
+
+```bash
+grep -E 'proclaim-launcher|Version:' ~/Library/Logs/proclaim-service/stdout.log | tail
+```
+
+### Turning updates off
+
+Either install with `--no-auto-update`, or set `PROCLAIM_AUTO_UPDATE` to `0` in
+the plist's `EnvironmentVariables` and reload. The service then runs whatever is
+checked out, exactly as it did before auto-update existed.
 
 ## Management
 
@@ -150,8 +234,21 @@ cat ~/Library/Logs/proclaim-service/stderr.log
 
 Common issues:
 - Path to wrapper script is incorrect
-- Python/uv is not in PATH (add to EnvironmentVariables)
+- Python/uv is not in PATH (`UV_BIN` in the plist's EnvironmentVariables)
 - Proclaim or Y-Sweet is not running
+
+### Updates aren't being picked up
+
+The wrapper logs every update decision to `stdout.log` with a
+`proclaim-launcher` tag:
+
+```bash
+grep proclaim-launcher ~/Library/Logs/proclaim-service/stdout.log | tail
+```
+
+Look for `running the current version` (the update was skipped and why) or
+`rolling back` (the new version's dependencies wouldn't install). A checkout with
+uncommitted local edits will never update until they're stashed or committed.
 
 ### Service keeps restarting
 

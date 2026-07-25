@@ -50,7 +50,11 @@ derived data) drives the testing/replay strategy.
   voice, and nothing can suspend. It affects only what a bridge does while nobody speaks —
   *which* bridges exist is decided independently (see the supervisor below).
 - **proclaim_service.py**: polls Proclaim's local HTTP API (~1 s) and reads its SQLite DB,
-  pushes presentations + slide status into Yjs. Installed as a macOS LaunchAgent.
+  pushes presentations + slide status into Yjs. Installed as a macOS LaunchAgent that runs
+  `proclaim_service_launch.sh`: every launch fast-forwards the checkout to the
+  `proclaim-stable` release branch and then starts the service regardless of how the update
+  went, so the machine degrades to "runs last version", never "doesn't run". The running SHA
+  is announced in the `status` map (`proclaimService`).
 - **Y-Sweet**: persistence and fan-out for the per-service Y.Doc (`doc-YYYY-MM-DD`).
 
 ## The Yjs doc is stimulus + response mixed together
@@ -62,7 +66,7 @@ doc is *derived* data that the system under test will regenerate.
 | Writer | Writes into Yjs | True input boundary |
 |---|---|---|
 | Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
-| `proclaim_service.py` | `proclaimPresentations`, `proclaimStatus` | Proclaim local HTTP API responses + `PresentationManager.db` |
+| `proclaim_service.py` | `proclaimPresentations`, `proclaimStatus`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
 | translation-bridge / transcript-writer | live transcript | Organizer audio track + Gemini Live responses |
 | Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |

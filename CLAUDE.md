@@ -332,6 +332,20 @@ The install script:
 3. Generates `~/Library/LaunchAgents/org.kenarnold.proclaim-service.plist` from the template
 4. Loads the service as a LaunchAgent (auto-restarts, survives reboots)
 
+#### Auto-update on launch
+
+The LaunchAgent runs [proclaim_service_launch.sh](proclaim_service_launch.sh), not `uv run`
+directly: each launch fast-forwards the checkout to the release branch (`proclaim-stable`),
+`uv sync`s if the SHA moved, then starts the service **unconditionally**. Every update step
+is best-effort and timeout-bounded, and a failed dependency sync rolls the checkout back to
+the SHA that was running — the invariant is "runs last version", never "doesn't run".
+Releasing is `git push origin main:proclaim-stable` (don't move it after Thursday); applying
+an update is restarting the service. The service reports its SHA/branch/channel into the
+session doc's `status` Y.Map (key `proclaimService`), and the status view flags "update
+pending — restart the service" when the channel has moved past it. Install with
+`--no-auto-update` (or set `PROCLAIM_AUTO_UPDATE=0` in the plist) to freeze an install.
+Details in [PROCLAIM_SERVICE_SETUP.md](PROCLAIM_SERVICE_SETUP.md#automatic-updates).
+
 #### PostHog Config Endpoint
 
 `GET /api/config` on the Express server returns `{ posthogKey, posthogHost }` — used by the install script and any other service that needs to report to the same PostHog project without separately managing the key.

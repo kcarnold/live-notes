@@ -92,6 +92,7 @@ export interface AppStrings {
   statusTranscriptsEmpty: string;
   statusTranscriptSource: string;
   statusTranscriptNoUpdates: string;
+  statusUpdatePending: string;
 
   // Layout diagram component labels
   componentSourceText: string;
@@ -192,6 +193,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'No live transcripts in this session yet.',
     statusTranscriptSource: 'source',
     statusTranscriptNoUpdates: 'No updates since page load',
+    statusUpdatePending: 'Update pending — restart the service',
     componentSourceText: 'Source Text',
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
@@ -285,6 +287,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'Aucune transcription en direct dans cette session pour l’instant.',
     statusTranscriptSource: 'source',
     statusTranscriptNoUpdates: 'Aucune mise à jour depuis le chargement de la page',
+    statusUpdatePending: 'Mise à jour en attente — redémarrez le service',
     componentSourceText: 'Texte source',
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
@@ -378,6 +381,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'Aún no hay transcripciones en vivo en esta sesión.',
     statusTranscriptSource: 'fuente',
     statusTranscriptNoUpdates: 'Sin actualizaciones desde que se cargó la página',
+    statusUpdatePending: 'Actualización pendiente — reinicie el servicio',
     componentSourceText: 'Texto fuente',
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
@@ -471,6 +475,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'Poko gen transkripsyon an dirèk nan sesyon sa a.',
     statusTranscriptSource: 'sous',
     statusTranscriptNoUpdates: 'Pa gen mizajou depi paj la chaje',
+    statusUpdatePending: 'Gen yon mizajou k ap tann — rekòmanse sèvis la',
     componentSourceText: 'Teks sous',
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',

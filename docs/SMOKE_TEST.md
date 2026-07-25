@@ -33,6 +33,8 @@ an incident happens that this list would not have caught, add a line.
 - [ ] Proclaim service running (LaunchAgent) and pointed at today's doc.
 - [ ] Advance a slide in Proclaim; current-slide view updates on both devices within ~2 s.
 - [ ] Slide translations show for the on-air item; review screen loads its conversation.
+- [ ] `/status` shows the Proclaim service's SHA/branch, and no "update pending" flag
+      (if it flags one, restart the service — restarting is what applies an update).
 
 ## 4. Live audio translation
 

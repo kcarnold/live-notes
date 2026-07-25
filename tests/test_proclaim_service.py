@@ -583,3 +583,75 @@ def test_recreate_doc_resets_state():
     assert service.last_item_id is None
     assert service.last_slide_index is None
     assert service.current_item_slides is None
+
+
+def test_version_info_prefers_the_launch_wrappers_environment():
+    """The wrapper resolved the SHAs at launch; that beats asking git now."""
+    info = ps.service_version_info({
+        "PROCLAIM_SERVICE_GIT_SHA": "a" * 40,
+        "PROCLAIM_SERVICE_GIT_BRANCH": "proclaim-stable",
+        "PROCLAIM_UPDATE_CHANNEL": "proclaim-stable",
+        "PROCLAIM_UPDATE_CHANNEL_SHA": "a" * 40,
+    })
+
+    assert info["gitSha"] == "a" * 40
+    assert info["gitShaShort"] == "aaaaaaa"
+    assert info["gitBranch"] == "proclaim-stable"
+    assert info["updateChannel"] == "proclaim-stable"
+    assert info["updatePending"] is False
+
+
+def test_version_info_flags_a_pending_update():
+    """A release branch that has moved past the running SHA means "restart me"."""
+    info = ps.service_version_info({
+        "PROCLAIM_SERVICE_GIT_SHA": "a" * 40,
+        "PROCLAIM_SERVICE_GIT_BRANCH": "proclaim-stable",
+        "PROCLAIM_UPDATE_CHANNEL_SHA": "b" * 40,
+    })
+
+    assert info["updatePending"] is True
+
+
+def test_version_info_never_guesses_when_the_shas_are_unknown():
+    """No wrapper env and no git answer: report unknown, not "update pending"."""
+    with mock.patch.object(ps, "_git_output", return_value=""):
+        info = ps.service_version_info({})
+
+    assert info["gitSha"] == ""
+    assert info["updatePending"] is False
+
+
+def test_publish_service_status_announces_version_and_identity():
+    """The status map entry is what the status view reads (#72/#73)."""
+    service = make_service()
+    service.version_info = {
+        "gitSha": "a" * 40,
+        "gitShaShort": "aaaaaaa",
+        "gitBranch": "proclaim-stable",
+        "updateChannel": "proclaim-stable",
+        "channelSha": "b" * 40,
+        "updatePending": True,
+    }
+
+    service.publish_service_status()
+
+    entry = service.component_status_map["proclaimService"]
+    assert entry["role"] == "proclaim-service"
+    assert entry["gitShaShort"] == "aaaaaaa"
+    assert entry["updatePending"] is True
+    assert entry["clientId"] == service.ydoc.client_id
+    assert entry["startedAt"] and entry["connectedAt"]
+
+
+async def test_fresh_connection_announces_service_status(fast_timing):
+    """Every session announces the running version onto the freshly connected doc."""
+    service = make_service()
+    websocket = FakeWebSocket(fail_ping_after=1)
+    service._fetch_status = mock.AsyncMock(return_value=status())
+
+    with patched_connection(websocket):
+        with contextlib.suppress(ps.HTTPXWSException):
+            with anyio.fail_after(2):
+                await service._run_session()
+
+    assert "proclaimService" in service.component_status_map

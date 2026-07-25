@@ -24,6 +24,30 @@ import { TranscriptHealth } from './TranscriptHealth';
 /** Planned heartbeat sources from #72. Rendered as placeholder tiles until wired. */
 const PLANNED_COMPONENTS = ['Server', 'Proclaim service', 'Live-audio bridges', 'Broadcaster'] as const;
 
+/** What the Proclaim service reports about itself under the `proclaimService` key (#73). */
+interface ProclaimServiceStatus {
+  gitShaShort?: string;
+  gitBranch?: string;
+  /** The release branch has moved past the running SHA — restart to pick it up. */
+  updatePending: boolean;
+}
+
+/**
+ * Narrow the untyped `status` entry the Proclaim service writes. Returns null when
+ * the service hasn't reported (or reported something unrecognizable), so the tile
+ * falls back to its placeholder.
+ */
+function readProclaimServiceStatus(entries: Record<string, unknown>): ProclaimServiceStatus | null {
+  const raw = entries['proclaimService'];
+  if (!raw || typeof raw !== 'object') return null;
+  const { gitShaShort, gitBranch, updatePending } = raw as Record<string, unknown>;
+  return {
+    gitShaShort: typeof gitShaShort === 'string' && gitShaShort ? gitShaShort : undefined,
+    gitBranch: typeof gitBranch === 'string' && gitBranch ? gitBranch : undefined,
+    updatePending: updatePending === true,
+  };
+}
+
 export interface StatusViewProps {
   /** The session's doc id (drives the export link). */
   docId: string;
@@ -43,6 +67,7 @@ export function StatusView({ docId, statusEntries, liveTranscripts }: StatusView
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
   const reportingCount = Object.keys(statusEntries).length;
+  const proclaim = readProclaimServiceStatus(statusEntries);
 
   const sectionClass =
     'bg-white/80 dark:bg-gray-800/80 rounded shadow p-4 flex flex-col gap-3';
@@ -61,18 +86,42 @@ export function StatusView({ docId, statusEntries, liveTranscripts }: StatusView
         <section className={sectionClass}>
           <h2 className={sectionTitleClass}>{s.statusHealthTitle}</h2>
           <div className="grid grid-cols-2 gap-2">
-            {PLANNED_COMPONENTS.map((name) => (
-              <div
-                key={name}
-                className="rounded border border-gray-200 dark:border-gray-700 p-2 flex items-center gap-2"
-              >
-                <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-300 dark:bg-gray-600" />
-                <div className="flex flex-col">
-                  <span className="text-sm font-medium">{name}</span>
-                  <span className="text-xs text-gray-500 dark:text-gray-400">{s.statusNotReporting}</span>
+            {PLANNED_COMPONENTS.map((name) => {
+              // The Proclaim service is the one component reporting so far (#73): it
+              // announces the version it's running and whether the release branch has
+              // moved on. Everything else stays a placeholder until #72 wires it.
+              const version = name === 'Proclaim service' ? proclaim : null;
+              const dotClass = version
+                ? version.updatePending
+                  ? 'bg-amber-500'
+                  : 'bg-green-500'
+                : 'bg-gray-300 dark:bg-gray-600';
+              return (
+                <div
+                  key={name}
+                  className="rounded border border-gray-200 dark:border-gray-700 p-2 flex items-center gap-2"
+                >
+                  <span className={`inline-block w-2.5 h-2.5 rounded-full ${dotClass}`} />
+                  <div className="flex flex-col">
+                    <span className="text-sm font-medium">{name}</span>
+                    {version ? (
+                      <>
+                        <code className="text-xs text-gray-500 dark:text-gray-400">
+                          {[version.gitShaShort, version.gitBranch].filter(Boolean).join(' · ')}
+                        </code>
+                        {version.updatePending && (
+                          <span className="text-xs text-amber-700 dark:text-amber-400">
+                            {s.statusUpdatePending}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs text-gray-500 dark:text-gray-400">{s.statusNotReporting}</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <p className={placeholderClass}>
             {s.statusHealthPlaceholder}

@@ -45,11 +45,12 @@ import json
 import logging
 import signal
 import socket
+import subprocess
 import argparse
 import anyio
 from typing import Optional, Dict, Any
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timezone
 import httpx
 from posthog import Posthog
 from opentelemetry._logs import set_logger_provider
@@ -146,6 +147,58 @@ else:
     ph = None
 
 
+REPO_DIR = Path(__file__).resolve().parent
+
+
+def _git_output(*args: str) -> str:
+    """Run a read-only git command in the repo, returning '' on any problem."""
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(REPO_DIR), *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as e:  # git missing, not a checkout, hung, ...
+        logger.debug(f"git {' '.join(args)} failed: {e}")
+        return ''
+    if result.returncode != 0:
+        return ''
+    return result.stdout.strip()
+
+
+def service_version_info(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Which version of the service is running, and is a newer one waiting?
+
+    The launch wrapper (``proclaim_service_launch.sh``) exports what it resolved
+    at launch, and that is the authoritative answer for an installed service: the
+    channel SHA is what the release branch pointed at when this process started.
+    Running by hand there's no wrapper, so fall back to asking git directly.
+
+    ``updatePending`` means the release branch has moved past the running SHA —
+    the status view turns that into "update pending: restart the service".
+    """
+    env = os.environ if env is None else env
+
+    sha = env.get('PROCLAIM_SERVICE_GIT_SHA') or _git_output('rev-parse', 'HEAD')
+    branch = env.get('PROCLAIM_SERVICE_GIT_BRANCH') or _git_output('rev-parse', '--abbrev-ref', 'HEAD')
+    channel = env.get('PROCLAIM_UPDATE_CHANNEL', 'proclaim-stable')
+    channel_sha = env.get('PROCLAIM_UPDATE_CHANNEL_SHA')
+    if channel_sha is None:
+        # Local remote-tracking ref only — never fetches, so this can't block startup.
+        channel_sha = _git_output('rev-parse', f'origin/{channel}')
+
+    return {
+        'gitSha': sha,
+        'gitShaShort': sha[:7],
+        'gitBranch': branch,
+        'updateChannel': channel,
+        'channelSha': channel_sha,
+        # Only claim "pending" when both sides are actually known.
+        'updatePending': bool(sha and channel_sha and sha != channel_sha),
+    }
+
+
 class ProclaimClient:
     """Client for Proclaim API (HTTP endpoints)"""
 
@@ -226,6 +279,15 @@ class ProclaimYjsService:
         # Content-addressed translations for the current service (reviewed entries from
         # the server library + auto fallbacks), keyed `${language}:${normalized text}`.
         self.slide_translations_map = self.ydoc.get('slideTranslations', type=Map)
+        # Per-component health/version map shared with the other components (#72);
+        # we own the `proclaimService` key.
+        self.component_status_map = self.ydoc.get('status', type=Map)
+
+        # Which version of the service this is, resolved once at startup (the launch
+        # wrapper's fetch is what makes `channelSha` meaningful, and that happened
+        # before this process existed).
+        self.version_info = service_version_info()
+        self.started_at = datetime.now(timezone.utc).isoformat()
 
         # State tracking
         self.last_item_id: Optional[str] = None
@@ -339,6 +401,7 @@ class ProclaimYjsService:
         self.status_map = self.ydoc.get('proclaimStatus', type=Map)
         self.service_order_map = self.ydoc.get('proclaimServiceOrder', type=Map)
         self.slide_translations_map = self.ydoc.get('slideTranslations', type=Map)
+        self.component_status_map = self.ydoc.get('status', type=Map)
         self.last_item_id = None
         self.last_slide_index = None
         self.current_item_slides = None
@@ -386,6 +449,31 @@ class ProclaimYjsService:
             }
 
         logger.info(f"Stored service item {item_id} ({presentation_data.title}) with {len(presentation_data.slides)} slides")
+
+    def publish_service_status(self) -> None:
+        """Announce this service's identity and version in the shared `status` map.
+
+        Written once per connected session (the doc is recreated on a date roll, so
+        each session needs its own announcement). The clientId lets a delta recorder
+        attribute updates to this writer; the version fields drive the status view's
+        "update pending: restart the service" flag.
+        """
+        entry = {
+            **self.version_info,
+            'role': 'proclaim-service',
+            'clientId': self.ydoc.client_id,
+            'host': socket.gethostname(),
+            'startedAt': self.started_at,
+            'connectedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        with self.ydoc.transaction():
+            self.component_status_map['proclaimService'] = entry
+
+        pending = ' (update pending — restart to pick it up)' if entry['updatePending'] else ''
+        logger.info(
+            f"Reporting version {entry['gitShaShort'] or 'unknown'} "
+            f"on {entry['gitBranch'] or 'unknown'}{pending}"
+        )
 
     def update_status_in_yjs(self, item_id: str, slide_index: int):
         """Update current status in Yjs"""
@@ -741,6 +829,7 @@ class ProclaimYjsService:
             # Force a re-push of the current state onto the freshly connected server.
             self.last_item_id = None
             self.last_slide_index = None
+            self.publish_service_status()
 
             # Run translation off the poll loop: a slow translation must never stall status
             # polling (which is what caused us to miss fast-changing items). The worker is
@@ -822,6 +911,11 @@ class ProclaimYjsService:
         logger.info(f"Proclaim URL: {self.proclaim_client.base_url}")
         logger.info(f"Y-Sweet URL: {self.ysweet_url}")
         logger.info(f"Poll interval: {POLL_INTERVAL}s (on air), {POLL_INTERVAL_OFF_AIR}s (off air)")
+        logger.info(
+            f"Version: {self.version_info['gitShaShort'] or 'unknown'} "
+            f"on {self.version_info['gitBranch'] or 'unknown'} "
+            f"(channel {self.version_info['updateChannel']})"
+        )
 
         backoff = RECONNECT_BACKOFF_INITIAL
         while True:
