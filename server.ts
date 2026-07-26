@@ -311,14 +311,23 @@ app.post('/api/livekit/translate', async (req, res) => {
   }
 });
 
-// List active translator bots + listener counts for a room (drives the speaker dashboard).
-app.get('/api/livekit/translate/status', (req, res) => {
+// List active translator bots + room presence for a session. Drives both the speaker
+// dashboard and the status page (#72), so an operator can read translator and listener
+// counts without a broadcaster page open.
+//
+// The two halves come from different owners and neither can be derived from the other:
+// `translations` is bridge-process memory (Gemini leg state, frame ages), `presence` is
+// LiveKit's view of the room (is the speaker live, who is listening, including
+// attribute-less listeners on the original audio who appear in no subscriberCount).
+// `presence` is null when there is nothing to report — see getRoomPresence.
+app.get('/api/livekit/translate/status', async (req, res) => {
   try {
     if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
     const sessionId = req.query?.sessionId as string | undefined;
     if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
     const manager = TranslationSessionManager.getInstance();
-    return res.json({ translations: manager.getActiveTranslations(sessionId) });
+    const presence = await manager.getRoomPresence(sessionId);
+    return res.json({ translations: manager.getActiveTranslations(sessionId), presence });
   } catch (error) {
     phClient.captureException(error);
     console.error('LiveKit status error:', error);
