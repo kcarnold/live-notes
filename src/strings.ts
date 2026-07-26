@@ -93,6 +93,25 @@ export interface AppStrings {
   statusTranscriptSource: string;
   statusTranscriptNoUpdates: string;
 
+  // Status page — live-audio health tiles (#72)
+  statusComponentServer: string;
+  statusComponentProclaim: string;
+  statusComponentBridges: string;
+  statusComponentBroadcaster: string;
+  statusComponentListeners: string;
+  statusServerReachable: string;
+  statusServerUnreachable: string;
+  statusLiveKitUnconfigured: string;
+  statusBroadcasterLive: string;
+  statusBroadcasterOffline: string;
+  statusBridgesNone: string;
+  statusBridgesRunning: string;
+  statusListenersNone: string;
+  statusGemini: string;
+  statusLastAudio: string;
+  statusNever: string;
+  statusPresenceSnapshot: string;
+
   // Layout diagram component labels
   componentSourceText: string;
   componentTranslatedText: string;
@@ -192,6 +211,23 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'No live transcripts in this session yet.',
     statusTranscriptSource: 'source',
     statusTranscriptNoUpdates: 'No updates since page load',
+    statusComponentServer: 'Server',
+    statusComponentProclaim: 'Proclaim service',
+    statusComponentBridges: 'Translator bridges',
+    statusComponentBroadcaster: 'Broadcaster',
+    statusComponentListeners: 'Listeners',
+    statusServerReachable: 'Reachable',
+    statusServerUnreachable: 'Unreachable',
+    statusLiveKitUnconfigured: 'LiveKit not configured',
+    statusBroadcasterLive: 'Live',
+    statusBroadcasterOffline: 'Not broadcasting',
+    statusBridgesNone: 'None running',
+    statusBridgesRunning: 'running',
+    statusListenersNone: 'Nobody listening',
+    statusGemini: 'Gemini',
+    statusLastAudio: 'last audio',
+    statusNever: 'never',
+    statusPresenceSnapshot: 'Presence snapshot',
     componentSourceText: 'Source Text',
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
@@ -285,6 +321,23 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'Aucune transcription en direct dans cette session pour l’instant.',
     statusTranscriptSource: 'source',
     statusTranscriptNoUpdates: 'Aucune mise à jour depuis le chargement de la page',
+    statusComponentServer: 'Serveur',
+    statusComponentProclaim: 'Service Proclaim',
+    statusComponentBridges: 'Ponts de traduction',
+    statusComponentBroadcaster: 'Diffuseur',
+    statusComponentListeners: 'Auditeurs',
+    statusServerReachable: 'Accessible',
+    statusServerUnreachable: 'Inaccessible',
+    statusLiveKitUnconfigured: 'LiveKit non configuré',
+    statusBroadcasterLive: 'En direct',
+    statusBroadcasterOffline: 'Pas de diffusion',
+    statusBridgesNone: 'Aucun actif',
+    statusBridgesRunning: 'actifs',
+    statusListenersNone: 'Personne n’écoute',
+    statusGemini: 'Gemini',
+    statusLastAudio: 'dernier audio',
+    statusNever: 'jamais',
+    statusPresenceSnapshot: 'Instantané de présence',
     componentSourceText: 'Texte source',
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
@@ -378,6 +431,23 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'Aún no hay transcripciones en vivo en esta sesión.',
     statusTranscriptSource: 'fuente',
     statusTranscriptNoUpdates: 'Sin actualizaciones desde que se cargó la página',
+    statusComponentServer: 'Servidor',
+    statusComponentProclaim: 'Servicio Proclaim',
+    statusComponentBridges: 'Puentes de traducción',
+    statusComponentBroadcaster: 'Emisor',
+    statusComponentListeners: 'Oyentes',
+    statusServerReachable: 'Accesible',
+    statusServerUnreachable: 'Inaccesible',
+    statusLiveKitUnconfigured: 'LiveKit no configurado',
+    statusBroadcasterLive: 'En vivo',
+    statusBroadcasterOffline: 'Sin transmitir',
+    statusBridgesNone: 'Ninguno activo',
+    statusBridgesRunning: 'activos',
+    statusListenersNone: 'Nadie escuchando',
+    statusGemini: 'Gemini',
+    statusLastAudio: 'último audio',
+    statusNever: 'nunca',
+    statusPresenceSnapshot: 'Instantánea de presencia',
     componentSourceText: 'Texto fuente',
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
@@ -471,6 +541,23 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptsEmpty: 'Poko gen transkripsyon an dirèk nan sesyon sa a.',
     statusTranscriptSource: 'sous',
     statusTranscriptNoUpdates: 'Pa gen mizajou depi paj la chaje',
+    statusComponentServer: 'Sèvè',
+    statusComponentProclaim: 'Sèvis Proclaim',
+    statusComponentBridges: 'Pon tradiksyon',
+    statusComponentBroadcaster: 'Moun k ap pale',
+    statusComponentListeners: 'Moun k ap koute',
+    statusServerReachable: 'Aksesib',
+    statusServerUnreachable: 'Pa aksesib',
+    statusLiveKitUnconfigured: 'LiveKit pa konfigire',
+    statusBroadcasterLive: 'An dirèk',
+    statusBroadcasterOffline: 'Pa gen difizyon',
+    statusBridgesNone: 'Pa gen okenn aktif',
+    statusBridgesRunning: 'aktif',
+    statusListenersNone: 'Pèsonn pa ap koute',
+    statusGemini: 'Gemini',
+    statusLastAudio: 'dènye odyo',
+    statusNever: 'jamè',
+    statusPresenceSnapshot: 'Enstantane prezans',
     componentSourceText: 'Teks sous',
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',

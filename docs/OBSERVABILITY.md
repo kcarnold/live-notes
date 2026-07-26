@@ -19,12 +19,21 @@ most of these signals.
    supervisor). Exposed by `GET /api/livekit/translate/status?sessionId=…` →
    `getActiveTranslations()` (`{ language, translatorIdentity, status, subscriberCount,
    health }[]`, where `health` is the bridge's composite snapshot: per-leg Gemini state,
-   last input/output frame ages, reconnect count, gap-buffer depth).
+   last input/output frame ages, reconnect count, gap-buffer depth). The same response also
+   carries `presence` — source #3, summarized — so one poll answers both halves.
 3. **LiveKit RoomService** — source of truth for *room/participant presence* (who's actually
    connected: `organizer-*`, `translator-*`, listeners; their track publications, and each
    listener's `listen=<lang>` attribute — the demand signal). Pull with
    `RoomServiceClient.listParticipants(sessionId)` against the `LIVEKIT_URL` (ws→http). The
    supervisor polls this every 10 s; it does not depend on any client-side beacon.
+   - `getRoomPresence(sessionId)` serves this to the status endpoint as
+     `{ broadcasterPresent, broadcasterIdentity, listeners, translatorIdentities, snapshotAgeMs }`,
+     reusing the supervisor's own snapshot and refreshing only once it ages past ~3 s, so open
+     status pages cost roughly one LiveKit read per interval rather than one per viewer per poll.
+     Two honesty rules are baked in: a failed read never overwrites the cache with an empty room
+     (it returns the last real snapshot with its true `snapshotAgeMs`, which the view flags), and a
+     room never successfully observed returns `null` rather than a phantom empty one. Note that
+     from outside, "room not open yet" and "LiveKit unreadable" both look like `null`.
 4. **Y-Sweet / Yjs transcript doc** — the `liveTranscript-<code>` Y.Text per language is the
    product itself; its steady growth is a good end-to-end "translation is actually flowing"
    heartbeat that no single component can fake (written by `transcript-writer.ts`).
@@ -106,24 +115,31 @@ layout component) is where these signals surface for an operator. Current state:
     from when a delta is observed *while the page is open* — it can't recover the last-write time
     from before you loaded. The initial sync populate is deliberately ignored so a stale backlog
     doesn't read as "just updated." Good for "is it moving now"; not an absolute liveness clock.
-- **Component health tiles (skeleton).** The Server / Proclaim / bridges / broadcaster tiles are
-  still placeholders — nothing writes the `status` Y.Map yet (that's the #72 heartbeat producers).
+- **Live-audio health tiles (built).** Server / translator bridges / broadcaster / listeners are
+  driven by a 3 s poll of `GET /api/livekit/translate/status?sessionId=…`
+  ([src/liveAudioStatus.ts](../src/liveAudioStatus.ts) polls; `computeHealthTiles` in
+  [src/StatusView.tsx](../src/StatusView.tsx) derives the tones), plus a per-language row showing
+  `subscriberCount`, bridge `status`, Gemini leg state, and last-output age. This is what lets an
+  operator read translator and listener counts without a broadcaster page open. Pair it with the
+  transcript tiles: bridge `status: active` can read healthy while deaf (see Questions above).
+  - **Tones encode "normal before a service".** No broadcaster and nobody listening are amber and
+    grey, not red — a panel that cries outage over a quiet room gets ignored by the time it matters.
+    A 503 (LiveKit unconfigured, e.g. a dev machine) is likewise distinct from an unreachable server.
+- **Proclaim service tile (skeleton).** Still a placeholder — nothing writes the `status` Y.Map yet.
+  The split is deliberate: the server can observe its own state and LiveKit's, so those tiles poll;
+  the Proclaim service and the macOS ingest app run behind NAT on someone's Mac and can only report
+  through the doc, which is what the `status` Y.Map is for (#72 heartbeat producers).
 - **Preflight canary (skeleton).** Placeholder; no end-to-end check runs yet.
 
 ## Next steps (roughly in order of effort)
 
-1. **Live-audio bridges tile** — cheapest real health signal. Poll the existing
-   `GET /api/livekit/translate/status?sessionId=…` (source #2) the way
-   [src/BroadcastControl.tsx](../src/BroadcastControl.tsx) already does, and render a tile per
-   `translator-*` with `status` + `subscriberCount`. Pair it visually with the transcript tiles,
-   since bridge `status: active` can read healthy while deaf (see Questions above). No backend work.
-2. **Absolute transcript freshness** — if the client-relative clock isn't enough, have
+1. **Absolute transcript freshness** — if the client-relative clock isn't enough, have
    [transcript-writer.ts](../live-audio/transcript-writer.ts) stamp `lastWrittenAt` per code into the
    `status` Y.Map. Survives reloads and gives the tiles a real wall-clock age; this is the first
    `status`-map producer and sets the pattern for the rest.
-3. **Component heartbeats (#72)** — server, Proclaim service, and broadcaster each write a periodic
-   heartbeat into the `status` Y.Map so the skeleton health tiles turn real. Broadcaster presence
-   specifically needs LiveKit `listParticipants` (source #3); the current status endpoint lists only
-   translators, so this wants a small new endpoint or field.
-4. **Preflight canary** — a ~30 s end-to-end check run before a service; the `simulateScenario` hook
+2. **Component heartbeats (#72)** — the Proclaim service and the macOS ingest app write a periodic
+   heartbeat into the `status` Y.Map so their tiles turn real. Only components the server *can't*
+   poll belong here; broadcaster presence already comes from LiveKit `listParticipants` (source #3)
+   via the `presence` field on the status endpoint.
+3. **Preflight canary** — a ~30 s end-to-end check run before a service; the `simulateScenario` hook
    on the session manager is a starting point, but wiring a real canary is a feature, not a wire-up.

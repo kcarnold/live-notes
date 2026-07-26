@@ -73,6 +73,70 @@ export const LISTEN_ATTRIBUTE = "listen";
 const ORGANIZER_PREFIX = "organizer-";
 const TRANSLATOR_PREFIX = "translator-";
 
+/** A human listener in the room, as the status view reports them. */
+export interface ListenerView {
+  identity: string;
+  /** The language their token asked for, or null (listening to the original audio). */
+  listenLanguage: string | null;
+}
+
+/**
+ * Room presence, shaped for reporting rather than for the reconcile loop.
+ *
+ * This is the half of the status picture LiveKit owns: who is actually in the room.
+ * The other half (is each bridge's Gemini leg alive) exists only in bridge memory and
+ * comes from getActiveTranslations. Neither can substitute for the other, which is why
+ * the status endpoint returns both.
+ */
+export interface RoomPresence {
+  broadcasterPresent: boolean;
+  broadcasterIdentity: string | null;
+  listeners: ListenerView[];
+  translatorIdentities: string[];
+  /**
+   * Age of the underlying LiveKit read, in ms. Non-zero whenever the answer came from
+   * the supervisor's own tick or from a cache kept during a LiveKit read failure — the
+   * view shows it so a frozen snapshot can't be mistaken for a live one.
+   */
+  snapshotAgeMs: number;
+}
+
+/**
+ * How stale a cached presence snapshot may be before a status read refreshes it.
+ * Well under the supervisor's own cadence, so a status page sees room changes promptly;
+ * long enough that N open status pages polling every few seconds collapse into roughly
+ * one LiveKit read each, rather than N.
+ */
+const PRESENCE_MAX_AGE_MS = 3_000;
+
+/** Project a raw presence snapshot into the reporting shape. */
+export function summarizePresence(
+  participants: PresentParticipant[],
+  snapshotAgeMs: number
+): RoomPresence {
+  const broadcaster = participants.find((p) => p.identity.startsWith(ORGANIZER_PREFIX));
+  const listeners: ListenerView[] = [];
+  const translatorIdentities: string[] = [];
+  for (const p of participants) {
+    if (p.identity.startsWith(ORGANIZER_PREFIX)) continue;
+    if (p.identity.startsWith(TRANSLATOR_PREFIX)) {
+      translatorIdentities.push(p.identity);
+      continue;
+    }
+    listeners.push({
+      identity: p.identity,
+      listenLanguage: p.attributes?.[LISTEN_ATTRIBUTE] ?? null,
+    });
+  }
+  return {
+    broadcasterPresent: broadcaster !== undefined,
+    broadcasterIdentity: broadcaster?.identity ?? null,
+    listeners,
+    translatorIdentities,
+    snapshotAgeMs,
+  };
+}
+
 // The supervisor cadence, and the two dampers that keep it from thrashing:
 // a language keeps its bridge for STOP_GRACE_MS after demand last existed (so a page
 // refresh or a transient LiveKit read failure doesn't churn a Gemini session), and a
@@ -190,6 +254,17 @@ export class TranslationSessionManager {
   // Map<`${sessionId}:${language}`, epoch-ms> — last supervisor-initiated start
   // attempt, so a language whose bridge won't start isn't retried every tick.
   private lastStartAttemptAt: Map<string, number> = new Map();
+
+  // Map<sessionId, last *successful* LiveKit presence read>. Written by the supervisor
+  // tick and by on-demand status reads; only ever holds observations, never the empty
+  // list a failed read produces — reporting "nobody is here" from a blind spot is the
+  // same mistake reconcileAll refuses to make with listRooms.
+  private presenceSnapshots: Map<string, { participants: PresentParticipant[]; at: number }> =
+    new Map();
+
+  // In-flight presence refreshes, so concurrent status polls for one room share a
+  // single LiveKit read instead of stampeding it.
+  private presenceRefreshes: Map<string, Promise<PresentParticipant[] | null>> = new Map();
 
   private documentManager: DocumentManager | null = null;
   private livekitConfig: LiveKitConfig | null = null;
@@ -374,6 +449,62 @@ export class TranslationSessionManager {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
+  /**
+   * Read room presence from LiveKit and cache it on success. Returns null when the read
+   * fails (room not open, or LiveKit briefly unreadable) — the cache is left untouched
+   * so a stale-but-real snapshot survives a blip. Concurrent callers for one room share
+   * a single read.
+   */
+  private async readPresence(sessionId: string): Promise<PresentParticipant[] | null> {
+    const inFlight = this.presenceRefreshes.get(sessionId);
+    if (inFlight) return inFlight;
+    const directory = this.directory;
+    if (!directory) return null;
+
+    const read = (async (): Promise<PresentParticipant[] | null> => {
+      try {
+        const participants = await directory.listParticipants(sessionId);
+        this.presenceSnapshots.set(sessionId, { participants, at: Date.now() });
+        return participants;
+      } catch {
+        return null;
+      } finally {
+        this.presenceRefreshes.delete(sessionId);
+      }
+    })();
+    this.presenceRefreshes.set(sessionId, read);
+    return read;
+  }
+
+  /**
+   * Who is in a session's room right now, for the status view. Served from the snapshot
+   * the supervisor already takes each tick, refreshed on demand once it ages past
+   * `maxAgeMs`, so open status pages cost roughly one LiveKit read per interval no
+   * matter how many of them there are.
+   *
+   * Returns null when there is nothing to report: LiveKit unconfigured, or a room that
+   * has never been observed (not started yet, or unreadable — from outside, those look
+   * the same). A room observed before but unreadable now returns its last real snapshot
+   * with the true age, so the view can show staleness instead of a phantom empty room.
+   */
+  async getRoomPresence(
+    sessionId: string,
+    maxAgeMs: number = PRESENCE_MAX_AGE_MS
+  ): Promise<RoomPresence | null> {
+    if (!this.directory) return null;
+
+    const cached = this.presenceSnapshots.get(sessionId);
+    if (cached && Date.now() - cached.at <= maxAgeMs) {
+      return summarizePresence(cached.participants, Date.now() - cached.at);
+    }
+
+    const fresh = await this.readPresence(sessionId);
+    if (fresh) return summarizePresence(fresh, 0);
+
+    const stale = this.presenceSnapshots.get(sessionId);
+    return stale ? summarizePresence(stale.participants, Date.now() - stale.at) : null;
+  }
+
   getActiveTranslations(sessionId: string): TranslationInfo[] {
     const languageMap = this.translations.get(sessionId);
     if (!languageMap) return [];
@@ -429,6 +560,7 @@ export class TranslationSessionManager {
     }
 
     this.lastDesiredAt.delete(sessionId);
+    this.presenceSnapshots.delete(sessionId);
     for (const key of [...this.lastStartAttemptAt.keys()]) {
       if (key.startsWith(`${sessionId}:`)) this.lastStartAttemptAt.delete(key);
     }
@@ -477,13 +609,9 @@ export class TranslationSessionManager {
 
   async reconcileRoom(sessionId: string): Promise<void> {
     if (!this.directory) return;
-    let participants: PresentParticipant[] = [];
-    try {
-      participants = await this.directory.listParticipants(sessionId);
-    } catch {
-      // Room gone or LiveKit briefly unreadable → no visible demand. The stop
-      // grace absorbs transient failures; a genuinely closed room winds down.
-    }
+    // Room gone or LiveKit briefly unreadable → no visible demand. The stop grace
+    // absorbs transient failures; a genuinely closed room winds down.
+    const participants = (await this.readPresence(sessionId)) ?? [];
 
     const desired = computeDesiredLanguages(participants, {
       defaultLanguage: TranslationSessionManager.DEFAULT_LANGUAGE,

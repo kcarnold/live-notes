@@ -5,6 +5,7 @@ import type { DocumentManager } from "@y-sweet/sdk";
 import {
   computeDesiredLanguages,
   planRoomActions,
+  summarizePresence,
   TranslationSessionManager,
   type PresentParticipant,
   type RoomDirectory,
@@ -292,5 +293,134 @@ describe("TranslationSessionManager supervisor", () => {
 
     await manager.reconcileAll();
     expect(runningLanguages(manager, "doc-1")).toEqual(["es", "fr"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Presence reporting: the half of the status picture LiveKit owns. The rules that
+// matter are about *honesty under failure* — a status view that quietly reports an
+// empty room during a LiveKit blip is worse than one that reports nothing.
+// ---------------------------------------------------------------------------
+
+describe("summarizePresence", () => {
+  it("splits the room into broadcaster, human listeners, and bots", () => {
+    const p = summarizePresence(
+      [organizer, bot("es"), listener("a", "es"), listener("b")],
+      0
+    );
+    expect(p.broadcasterPresent).toBe(true);
+    expect(p.broadcasterIdentity).toBe("organizer-host");
+    expect(p.translatorIdentities).toEqual(["translator-es"]);
+    expect(p.listeners).toEqual([
+      { identity: "attendee-a", listenLanguage: "es" },
+      // Listening to the original audio: counted, with no language. No subscriberCount
+      // anywhere would ever show this person.
+      { identity: "attendee-b", listenLanguage: null },
+    ]);
+  });
+
+  it("reports an empty room without a broadcaster", () => {
+    const p = summarizePresence([], 0);
+    expect(p.broadcasterPresent).toBe(false);
+    expect(p.broadcasterIdentity).toBeNull();
+    expect(p.listeners).toEqual([]);
+  });
+});
+
+describe("TranslationSessionManager.getRoomPresence", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function makePresenceManager(initial: PresentParticipant[] = [organizer, listener("a", "es")]) {
+    let participants = initial;
+    let failing = false;
+    let calls = 0;
+    const directory: RoomDirectory = {
+      listRooms: async () => ["doc-1"],
+      listParticipants: async () => {
+        calls += 1;
+        if (failing) throw new Error("livekit unreachable");
+        return participants;
+      },
+    };
+    const manager = new TranslationSessionManager();
+    manager.init({
+      documentManager: null as unknown as DocumentManager,
+      livekit: { url: "ws://fake", apiKey: "k", apiSecret: "s" },
+      directory,
+      bridgeFactory: (sessionId, targetLanguage) =>
+        new FakeBridge(sessionId, targetLanguage) as unknown as TranslationBridge,
+    });
+    return {
+      manager,
+      calls: () => calls,
+      setParticipants: (p: PresentParticipant[]) => {
+        participants = p;
+      },
+      setFailing: (v: boolean) => {
+        failing = v;
+      },
+    };
+  }
+
+  it("serves the supervisor's own snapshot instead of re-reading LiveKit", async () => {
+    // The whole point of caching: a status page open through a service must not turn
+    // into a LiveKit read per poll per viewer.
+    const { manager, calls } = makePresenceManager();
+    await manager.reconcileAll();
+    const before = calls();
+
+    const presence = await manager.getRoomPresence("doc-1");
+    expect(presence?.broadcasterPresent).toBe(true);
+    expect(presence?.listeners).toHaveLength(1);
+    expect(calls()).toBe(before);
+  });
+
+  it("refreshes once the snapshot ages past the window", async () => {
+    const { manager, calls, setParticipants } = makePresenceManager();
+    await manager.reconcileAll();
+    const before = calls();
+
+    setParticipants([organizer, listener("a", "es"), listener("b", "ht")]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const presence = await manager.getRoomPresence("doc-1");
+
+    expect(calls()).toBeGreaterThan(before);
+    expect(presence?.listeners).toHaveLength(2);
+  });
+
+  it("keeps reporting the last real snapshot when LiveKit goes unreadable", async () => {
+    // The failure that matters: reporting "nobody is here" from a blind spot would
+    // read, on the status page, exactly like everyone having left.
+    const { manager, setFailing } = makePresenceManager();
+    await manager.reconcileAll();
+
+    setFailing(true);
+    await vi.advanceTimersByTimeAsync(20_000);
+    const presence = await manager.getRoomPresence("doc-1");
+
+    expect(presence?.broadcasterPresent).toBe(true);
+    expect(presence?.snapshotAgeMs).toBeGreaterThanOrEqual(20_000);
+  });
+
+  it("reports nothing for a room it has never seen", async () => {
+    const { manager, setFailing } = makePresenceManager();
+    setFailing(true);
+    expect(await manager.getRoomPresence("doc-1")).toBeNull();
+  });
+
+  it("collapses concurrent status reads into a single LiveKit call", async () => {
+    const { manager, calls } = makePresenceManager();
+    const [a, b, c] = await Promise.all([
+      manager.getRoomPresence("doc-1"),
+      manager.getRoomPresence("doc-1"),
+      manager.getRoomPresence("doc-1"),
+    ]);
+    expect(calls()).toBe(1);
+    expect([a, b, c].every((p) => p?.broadcasterPresent)).toBe(true);
   });
 });
