@@ -17,46 +17,16 @@ custom-audio publishing path).
 - The live-notes server must have LiveKit configured (`LIVEKIT_URL`, `LIVEKIT_API_KEY`,
   `LIVEKIT_API_SECRET`), otherwise `/api/livekit/token` returns 503.
 
-## The spike
+## Custom-audio publishing
 
-The whole design hinged on one assumption: that the LiveKit Swift SDK's custom-audio path
+The design's linchpin — the LiveKit Swift SDK's custom-audio path
 (`AudioManager.setManualRenderingMode(true)` + `AudioManager.shared.mixer.capture(appAudio:)`)
-actually publishes audio on macOS. **Verified** — the `AudioFeederSpike` executable proved it
-end-to-end by publishing a sine tone (no sound board required), and `AudioFeederApp`'s
-`Publisher` uses the same path in production.
-
-The spike is kept around rather than deleted: it's the fastest way to re-check that
-assumption in isolation (no device capture, no scheduling, no UI) if a future LiveKit SDK
-upgrade changes behavior. To re-run it:
-
-```bash
-cd macos-audio-feeder
-
-# Publish a 440 Hz tone into today's session on your dev server:
-swift run AudioFeederSpike --server-url https://dev8.kenarnold.org
-
-# …or target a specific doc / pitch:
-swift run AudioFeederSpike --server-url https://dev8.kenarnold.org --doc doc-2025-06-30 --freq 660
-```
-
-Then open that session in a browser **as a listener** (not the broadcast page) and confirm:
-
-1. `organizer-host` shows up as a participant.
-2. A translator bot spins up and you can hear/See the tone being carried.
-3. Press **Ctrl-C** in the terminal to stop; `organizer-host` leaves and the browser
-   broadcast page becomes usable again.
-
-The first run will prompt for **Microphone** permission (manual rendering still counts as
-audio I/O). Grant it.
-
-### If the spike's API names don't resolve
-
-`setManualRenderingMode` / `mixer.capture(appAudio:)` come from the SDK's `Docs/audio.md`.
-If they don't match the installed SDK version, reconcile them in
-`Sources/AudioFeederSpike/main.swift` (the call site is marked `<<< API UNDER TEST >>>`).
-If the custom-audio path turns out not to work on macOS at all, the fallback is to expose
-the desired channel as its own input device via a macOS **Aggregate Device** and use the
-SDK's normal device capture — still pure Swift.
+actually publishing audio on macOS — has been verified end-to-end on real hardware with a
+real sound board. `AudioFeederApp`'s `Publisher` (`Sources/AudioFeederApp/Publisher.swift`)
+uses that path in production. If a future LiveKit SDK upgrade breaks those API names (see the
+SDK's `Docs/audio.md`), the fallback is a macOS Aggregate Device exposing the desired channel
+as its own input, captured via the SDK's normal device-capture path — still pure Swift; see
+the note in `Publisher.swift`.
 
 ## Tests
 
@@ -75,7 +45,6 @@ macos-audio-feeder/
   Sources/
     AudioFeederCore/     # pure, tested: Config, Scheduler, LevelMeter, ChannelExtractor,
                          #               ToneGenerator, LiveKitTokenClient
-    AudioFeederSpike/    # standalone tone-publishing spike (run this first)
     AudioFeederApp/      # the menu-bar app (capture + publish + UI)
   Tests/
     AudioFeederCoreTests/
@@ -84,7 +53,7 @@ macos-audio-feeder/
 ## The app
 
 ```bash
-swift build              # compiles AudioFeederApp (and the core + spike)
+swift build              # compiles AudioFeederApp (and the core)
 swift run AudioFeederApp # runs from the SwiftPM build for development
 ```
 
@@ -120,8 +89,7 @@ moment the binary moves) — the equivalent of Xcode's "Embed Frameworks" build 
 hand with `otool`/`install_name_tool`. It requires macOS + Xcode command line tools and was
 written and reviewed without access to those (this repo's automation runs on Linux), so **the
 framework-embedding step is unverified and the most likely thing to need a fix on first real
-run** — the same spirit as the spike's own "if the API names don't resolve" note above. Run
-it with `bash -x Packaging/build-app.sh` to see what it finds.
+run**. Run it with `bash -x Packaging/build-app.sh` to see what it finds.
 
 Once built, install by copying `.build/Audio Feeder.app` to `/Applications` (needed for
 `SMAppService` login-item registration to behave normally) and launching it once to grant
@@ -130,14 +98,13 @@ the microphone permission prompt.
 ## Status
 
 - [x] Pure core + unit tests (scheduler, level/RMS, channel pick, config, token contract)
-- [x] Spike (validate custom-audio publishing on macOS) — **verified on a Mac**
 - [x] Capture (`AudioCapture`: AVAudioEngine bound to device by UID, channel extraction)
 - [x] Device enumeration + hot-plug (`DeviceMonitor`, CoreAudio)
 - [x] LiveKit publisher (`Publisher`: token fetch, manual rendering + mixer.capture,
-      retry/backoff, identity release on stop)
+      retry/backoff, identity release on stop) — custom-audio publishing verified end-to-end
+      on real hardware
 - [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device)
 - [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
-- [x] Verify on a Mac: spike first, then end-to-end with a real board
 - [ ] Package as a signed/notarized `.app` bundle — tooling written (`Packaging/build-app.sh`),
       **not yet run on real hardware**; framework embedding is the part most likely to need
       a fix

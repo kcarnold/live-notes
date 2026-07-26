@@ -19,10 +19,6 @@ let package = Package(
     products: [
         .library(name: "AudioFeederCore", targets: ["AudioFeederCore"]),
         .executable(name: "AudioFeederApp", targets: ["AudioFeederApp"]),
-        // A tiny standalone command-line spike to de-risk the linchpin: does
-        // AudioManager manual rendering + mixer.capture(appAudio:) actually publish
-        // audio on macOS? Run it, then join the session in a browser to listen.
-        .executable(name: "AudioFeederSpike", targets: ["AudioFeederSpike"]),
     ],
     dependencies: [
         // The LiveKit Swift client SDK provides the custom-audio publishing path
@@ -35,13 +31,6 @@ let package = Package(
         ),
         .executableTarget(
             name: "AudioFeederApp",
-            dependencies: [
-                "AudioFeederCore",
-                .product(name: "LiveKit", package: "client-sdk-swift"),
-            ]
-        ),
-        .executableTarget(
-            name: "AudioFeederSpike",
             dependencies: [
                 "AudioFeederCore",
                 .product(name: "LiveKit", package: "client-sdk-swift"),
