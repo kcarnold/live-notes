@@ -69,7 +69,8 @@ describe('StatusView', () => {
     expect(screen.getByText('Live')).toBeInTheDocument();
     expect(screen.getByText('2 listeners')).toBeInTheDocument();
     expect(screen.getByText('2/2 running')).toBeInTheDocument();
-    expect(screen.getByText('ES')).toBeInTheDocument();
+    // Rendered upper-case by CSS only, so the text node is still the raw code.
+    expect(screen.getByText('es')).toBeInTheDocument();
   });
 
   it('reads a quiet pre-service room as amber, not as an outage', () => {

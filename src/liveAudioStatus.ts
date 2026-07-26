@@ -54,42 +54,57 @@ export const LIVE_AUDIO_POLL_MS = 3_000;
 export interface LiveAudioStatusResult {
   state: LiveAudioState;
   status: LiveAudioStatus | null;
+  /**
+   * Client epoch ms when this payload arrived (0 when none has). Ages are measured
+   * against this rather than a render-time clock, so rendering stays pure and a tile's
+   * age can't drift between polls.
+   */
+  receivedAt: number;
 }
+
+const LOADING: LiveAudioStatusResult = { state: 'loading', status: null, receivedAt: 0 };
 
 /** Poll the live-audio status endpoint for a session. */
 export function useLiveAudioStatus(
   docId: string,
   intervalMs: number = LIVE_AUDIO_POLL_MS,
 ): LiveAudioStatusResult {
-  const [result, setResult] = useState<LiveAudioStatusResult>({ state: 'loading', status: null });
+  // Stamped with the doc it describes, so switching sessions reads as "loading" by
+  // derivation rather than by resetting state from inside the effect.
+  const [result, setResult] = useState<LiveAudioStatusResult & { docId: string }>({
+    ...LOADING,
+    docId,
+  });
 
   useEffect(() => {
     let active = true;
-    setResult({ state: 'loading', status: null });
 
     const poll = async () => {
+      const settle = (next: LiveAudioStatusResult) => {
+        if (active) setResult({ ...next, docId });
+      };
       try {
         const resp = await fetch(
           `/api/livekit/translate/status?sessionId=${encodeURIComponent(docId)}`,
         );
         if (!active) return;
         if (resp.status === 503) {
-          setResult({ state: 'unconfigured', status: null });
+          settle({ state: 'unconfigured', status: null, receivedAt: Date.now() });
           return;
         }
         if (!resp.ok) {
-          setResult({ state: 'error', status: null });
+          settle({ state: 'error', status: null, receivedAt: Date.now() });
           return;
         }
         const data = (await resp.json()) as LiveAudioStatus;
-        if (!active) return;
-        setResult({
+        settle({
           state: 'ok',
           status: { translations: data.translations ?? [], presence: data.presence ?? null },
+          receivedAt: Date.now(),
         });
       } catch {
         // Network blip or the server going away — both mean we can't see the session.
-        if (active) setResult({ state: 'error', status: null });
+        settle({ state: 'error', status: null, receivedAt: Date.now() });
       }
     };
 
@@ -101,5 +116,5 @@ export function useLiveAudioStatus(
     };
   }, [docId, intervalMs]);
 
-  return result;
+  return result.docId === docId ? result : LOADING;
 }

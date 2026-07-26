@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import { useMap, useYDoc } from '@y-sweet/react';
-import { useStrings, resolveLocale } from './useLocale';
-import type { AppStrings } from './strings';
+import { useStrings } from './useLocale';
 import { getDocId } from './getDocId';
 import { TranscriptHealth } from './TranscriptHealth';
 import { useLiveAudioStatus } from './liveAudioStatus';
 import type { LiveAudioState, LiveAudioStatus, TranslationInfoView } from './liveAudioStatus';
+import { computeHealthTiles, formatAge, formatStamp, TONE_DOT } from './statusTiles';
 
 /**
  * Session status / admin page.
@@ -27,130 +27,8 @@ import type { LiveAudioState, LiveAudioStatus, TranslationInfoView } from './liv
  * container wires it to the doc and the poll.
  */
 
-/** How a tile reads at a glance. */
-type Tone = 'unknown' | 'ok' | 'warn' | 'bad';
-
-interface HealthTile {
-  key: string;
-  name: string;
-  detail: string;
-  tone: Tone;
-}
-
-const TONE_DOT: Record<Tone, string> = {
-  unknown: 'bg-gray-300 dark:bg-gray-600',
-  ok: 'bg-green-500',
-  warn: 'bg-amber-500',
-  bad: 'bg-red-500',
-};
-
-/** Format a server-side epoch-ms stamp as an age, or "never" for 0. */
-function formatStamp(at: number, s: AppStrings): string {
-  if (!at) return s.statusNever;
-  // Server clock vs browser clock: close enough for "seconds ago", and the alternative
-  // (server-computed ages) would go stale in the client between polls anyway.
-  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
-  return new Intl.RelativeTimeFormat(resolveLocale(), { numeric: 'auto' }).format(
-    -seconds,
-    'second',
-  );
-}
-
-/**
- * The health tiles, derived from one poll of the live-audio status endpoint.
- *
- * Exported for direct testing: the tone rules are the whole point of the panel, and a
- * few of them are judgement calls worth pinning down — notably that "no broadcaster"
- * and "nobody listening" are amber/grey rather than red (before a service starts,
- * that's simply the normal state), while an unreachable server is red.
- */
-export function computeHealthTiles(
-  state: LiveAudioState,
-  liveAudio: LiveAudioStatus | null,
-  s: AppStrings,
-): HealthTile[] {
-  const unknown = (key: string, name: string): HealthTile => ({
-    key,
-    name,
-    detail: state === 'unconfigured' ? s.statusLiveKitUnconfigured : s.statusNotReporting,
-    tone: 'unknown',
-  });
-
-  // A 503 means the server answered — it just has no LiveKit. Only a failed or
-  // unfinished request leaves the server itself in doubt.
-  const server: HealthTile = {
-    key: 'server',
-    name: s.statusComponentServer,
-    detail:
-      state === 'loading'
-        ? s.statusNotReporting
-        : state === 'error'
-          ? s.statusServerUnreachable
-          : s.statusServerReachable,
-    tone: state === 'loading' ? 'unknown' : state === 'error' ? 'bad' : 'ok',
-  };
-
-  // Awaits the `status` Y.Map — the server has no way to poll it.
-  const proclaim: HealthTile = {
-    key: 'proclaim',
-    name: s.statusComponentProclaim,
-    detail: s.statusNotReporting,
-    tone: 'unknown',
-  };
-
-  const presence = liveAudio?.presence ?? null;
-  if (state !== 'ok' || !presence) {
-    return [
-      server,
-      proclaim,
-      unknown('bridges', s.statusComponentBridges),
-      unknown('broadcaster', s.statusComponentBroadcaster),
-      unknown('listeners', s.statusComponentListeners),
-    ];
-  }
-
-  const translations = liveAudio?.translations ?? [];
-  const active = translations.filter((t) => t.status === 'active');
-  const bridgeTone: Tone = translations.some((t) => t.status === 'error')
-    ? 'bad'
-    : translations.length === 0
-      ? 'unknown'
-      : active.length < translations.length
-        ? 'warn'
-        : 'ok';
-
-  return [
-    server,
-    proclaim,
-    {
-      key: 'bridges',
-      name: s.statusComponentBridges,
-      detail:
-        translations.length === 0
-          ? s.statusBridgesNone
-          : `${active.length}/${translations.length} ${s.statusBridgesRunning}`,
-      tone: bridgeTone,
-    },
-    {
-      key: 'broadcaster',
-      name: s.statusComponentBroadcaster,
-      detail: presence.broadcasterPresent ? s.statusBroadcasterLive : s.statusBroadcasterOffline,
-      tone: presence.broadcasterPresent ? 'ok' : 'warn',
-    },
-    {
-      key: 'listeners',
-      name: s.statusComponentListeners,
-      detail:
-        presence.listeners.length === 0
-          ? s.statusListenersNone
-          : `${presence.listeners.length} ${s.listeners}`,
-      tone: presence.listeners.length === 0 ? 'unknown' : 'ok',
-    },
-  ];
-}
-
 /** Per-language bridge detail: who's listening and whether the Gemini leg is well. */
-function BridgeRow({ info }: { info: TranslationInfoView }) {
+function BridgeRow({ info, receivedAt }: { info: TranslationInfoView; receivedAt: number }) {
   const s = useStrings();
   const health = info.health;
   return (
@@ -159,7 +37,9 @@ function BridgeRow({ info }: { info: TranslationInfoView }) {
       <span className="text-xs text-gray-500 dark:text-gray-400 text-right">
         {info.subscriberCount} {s.listeners} · {info.status}
         {health ? ` · ${s.statusGemini} ${health.gemini}` : ''}
-        {health ? ` · ${s.statusLastAudio} ${formatStamp(health.lastOutputFrameAt, s)}` : ''}
+        {health
+          ? ` · ${s.statusLastAudio} ${formatStamp(health.lastOutputFrameAt, receivedAt, s)}`
+          : ''}
       </span>
     </li>
   );
@@ -182,6 +62,8 @@ export interface StatusViewProps {
   liveAudioState?: LiveAudioState;
   /** Latest live-audio status payload, if any. */
   liveAudio?: LiveAudioStatus | null;
+  /** When that payload arrived (client epoch ms); frame ages are measured against it. */
+  liveAudioReceivedAt?: number;
 }
 
 export function StatusView({
@@ -190,6 +72,7 @@ export function StatusView({
   liveTranscripts,
   liveAudioState = 'loading',
   liveAudio = null,
+  liveAudioReceivedAt = 0,
 }: StatusViewProps) {
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
@@ -236,7 +119,7 @@ export function StatusView({
               </h3>
               <ul className="flex flex-col gap-1">
                 {translations.map((t) => (
-                  <BridgeRow key={t.language} info={t} />
+                  <BridgeRow key={t.language} info={t} receivedAt={liveAudioReceivedAt} />
                 ))}
               </ul>
             </div>
@@ -246,7 +129,7 @@ export function StatusView({
               old it is rather than letting a frozen snapshot read as live. */}
           {presence && presence.snapshotAgeMs > 15_000 && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
-              {s.statusPresenceSnapshot}: {formatStamp(Date.now() - presence.snapshotAgeMs, s)}
+              {s.statusPresenceSnapshot}: {formatAge(presence.snapshotAgeMs)}
             </p>
           )}
 
@@ -299,7 +182,7 @@ export function StatusViewContainer() {
   useYDoc(); // Ensure this renders within the session's YDocProvider.
   const statusMap = useMap('status');
   const docId = getDocId();
-  const { state, status } = useLiveAudioStatus(docId);
+  const { state, status, receivedAt } = useLiveAudioStatus(docId);
   const statusEntries: Record<string, unknown> = {};
   statusMap.forEach((value, key) => {
     statusEntries[key] = value;
@@ -311,6 +194,7 @@ export function StatusViewContainer() {
       liveTranscripts={<TranscriptHealth />}
       liveAudioState={state}
       liveAudio={status}
+      liveAudioReceivedAt={receivedAt}
     />
   );
 }
