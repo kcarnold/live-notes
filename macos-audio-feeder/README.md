@@ -13,7 +13,9 @@ custom-audio publishing path).
 ## Requirements
 
 - macOS 14+
-- Xcode 15+ / a recent Swift toolchain
+- Xcode 15+ (to build the app bundle); a plain Swift toolchain is enough for `swift test`
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`) — the
+  `.xcodeproj` is generated, not checked in
 - The live-notes server must have LiveKit configured (`LIVEKIT_URL`, `LIVEKIT_API_KEY`,
   `LIVEKIT_API_SECRET`), otherwise `/api/livekit/token` returns 503.
 
@@ -28,20 +30,12 @@ SDK's `Docs/audio.md`), the fallback is a macOS Aggregate Device exposing the de
 as its own input, captured via the SDK's normal device-capture path — still pure Swift; see
 the note in `Publisher.swift`.
 
-## Tests
-
-The pure logic (scheduler, level/RMS, channel extraction, config, token contract) is unit
-tested and has no audio/LiveKit dependencies:
-
-```bash
-swift test
-```
-
 ## Project layout
 
 ```
 macos-audio-feeder/
-  Package.swift
+  Package.swift          # AudioFeederCore ONLY — pure logic + tests, no dependencies
+  project.yml            # XcodeGen spec for the app; AudioFeeder.xcodeproj is generated
   Sources/
     AudioFeederCore/     # pure, tested: Config, Scheduler, LevelMeter, ChannelExtractor,
                          #               ToneGenerator, LiveKitTokenClient
@@ -50,50 +44,66 @@ macos-audio-feeder/
     AudioFeederCoreTests/
 ```
 
-## The app
+The split is deliberate. `Package.swift` holds only the pure core, so `swift test` stays
+fast, needs no Xcode, and (for the non-AVFoundation parts) runs on Linux. The **app** is
+built by Xcode, because a real `.app` bundle needs app-target machinery SwiftPM doesn't have:
+the LiveKit SDK ships WebRTC/UniFFI as binary XCFrameworks that must be embedded and
+re-signed inside the bundle, plus Info.plist processing, entitlements, the hardened runtime,
+and signing/notarization. (Hand-rolling that embedding with `otool`/`install_name_tool` was
+tried first and got it wrong — it picked up a `__MACOSX/` resource-fork stub instead of the
+real 2 MB framework, and `codesign` rejected the result.)
+
+## Tests
 
 ```bash
-swift build              # compiles AudioFeederApp (and the core)
-swift run AudioFeederApp # runs from the SwiftPM build for development
+swift test    # AudioFeederCore: scheduler, level/RMS, channel extraction, config, token contract
 ```
 
-> **Packaging caveat:** a SwiftPM executable (`swift run`) is fine for development, but the
-> menu-bar-only behavior (`LSUIElement`), the microphone permission string, login-item
-> registration (`SMAppService`), and signing/notarization all require a real `.app`
-> **bundle**. Use `Packaging/build-app.sh` (below) to build one instead of `swift build`
-> directly.
+## Building and running the app
+
+The `.xcodeproj` is **generated from `project.yml` and not checked in** — that YAML is the
+reviewable source of truth, since an `.xcodeproj` is XML that conflicts badly on merge.
+
+```bash
+cd macos-audio-feeder
+brew install xcodegen     # once
+xcodegen generate         # writes AudioFeeder.xcodeproj
+open AudioFeeder.xcodeproj # then just hit Run
+```
+
+Re-run `xcodegen generate` after changing `project.yml` (or after adding source files, since
+the file list is captured at generation time).
 
 ## Building a distributable `.app`
+
+`Packaging/build-app.sh` wraps the above plus `xcodebuild archive`/`-exportArchive`; it
+regenerates the project first, so it's always in sync with `project.yml`.
 
 ```bash
 cd macos-audio-feeder
 
-# Unsigned/ad-hoc build for local testing:
+# Unsigned build for local testing:
 Packaging/build-app.sh
 
-# Signed, for distributing to other Macs:
-SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" Packaging/build-app.sh
+# Signed Developer ID build:
+TEAM_ID=ABCDE12345 Packaging/build-app.sh
 
-# Signed + notarized + stapled, zipped up and ready to hand out:
-SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-  NOTARIZE_PROFILE=<keychain-profile> \
-  Packaging/build-app.sh
+# Signed + notarized + stapled, zipped and ready to hand out:
+TEAM_ID=ABCDE12345 NOTARIZE_PROFILE=<keychain-profile> Packaging/build-app.sh
 ```
 
 `NOTARIZE_PROFILE` refers to credentials stored ahead of time via
-`xcrun notarytool store-credentials`; see the comment at the top of the script. Beyond a
-plain `swift build`, the script assembles `Contents/{MacOS,Resources,Frameworks}` from
-`Packaging/Info.plist` and `Packaging/AudioFeeder.entitlements`, and embeds the LiveKit SDK's
-WebRTC/UniFFI XCFrameworks (which SwiftPM otherwise links from inside `.build/`, breaking the
-moment the binary moves) — the equivalent of Xcode's "Embed Frameworks" build phase, done by
-hand with `otool`/`install_name_tool`. It requires macOS + Xcode command line tools and was
-written and reviewed without access to those (this repo's automation runs on Linux), so **the
-framework-embedding step is unverified and the most likely thing to need a fix on first real
-run**. Run it with `bash -x Packaging/build-app.sh` to see what it finds.
+`xcrun notarytool store-credentials`; see the comment at the top of the script. Output lands
+under `.build/xcode/`.
 
-Once built, install by copying `.build/Audio Feeder.app` to `/Applications` (needed for
-`SMAppService` login-item registration to behave normally) and launching it once to grant
-the microphone permission prompt.
+Install by copying `Audio Feeder.app` to `/Applications` (needed for `SMAppService`
+login-item registration to behave normally) and launching it once to grant the microphone
+permission prompt.
+
+> **Dependency pinning:** `.gitignore` excludes `Package.resolved` and the generated
+> `.xcodeproj` (which is where Xcode keeps its own resolved versions), so the exact LiveKit
+> revision isn't committed — `project.yml`'s `from: 2.0.7` only pins the major version. If a
+> reproducible-to-the-commit build matters later, check in the resolved file.
 
 ## Status
 
@@ -105,7 +115,9 @@ the microphone permission prompt.
       on real hardware
 - [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device)
 - [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
-- [ ] Package as a signed/notarized `.app` bundle — tooling written (`Packaging/build-app.sh`),
-      **not yet run on real hardware**; framework embedding is the part most likely to need
-      a fix
+- [x] Build a real `.app` bundle (Xcode target generated from `project.yml`; frameworks
+      embedded automatically)
+- [ ] Sign + notarize a distributable build — `Packaging/build-app.sh` has the
+      archive/export/notarize path, but it needs a `TEAM_ID` and a Developer ID cert to
+      exercise, so **that half is still unrun**
 - [ ] (Optional) WKWebView transcript/translations pane

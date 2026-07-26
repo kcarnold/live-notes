@@ -1,0 +1,76 @@
+# XcodeGen spec for the Audio Feeder app bundle.
+#
+# `AudioFeeder.xcodeproj` is GENERATED from this file and is not checked in — this YAML is
+# the reviewable source of truth (an .xcodeproj is XML that conflicts badly on merge).
+# Regenerate after changing anything here:
+#
+#     brew install xcodegen      # once
+#     xcodegen generate          # from macos-audio-feeder/
+#
+# Why an Xcode project at all, when the core is a Swift package? The LiveKit SDK ships its
+# WebRTC/UniFFI dependencies as binary XCFrameworks. Getting those embedded, re-signed, and
+# resolvable at runtime inside a .app is exactly what Xcode's app target does for free, and
+# what hand-rolled otool/install_name_tool bundling got wrong. See README.md.
+name: AudioFeeder
+
+options:
+  bundleIdPrefix: org.kenarnold
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  # The pure logic lives in this same directory's Package.swift, so it stays testable with a
+  # plain `swift test` (no Xcode, and on Linux for the non-AVFoundation parts).
+  AudioFeederCore:
+    path: .
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift.git
+    from: 2.0.7
+
+targets:
+  AudioFeederApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/AudioFeederApp
+    dependencies:
+      - package: AudioFeederCore
+        product: AudioFeederCore
+      - package: LiveKit
+        product: LiveKit
+    settings:
+      base:
+        PRODUCT_NAME: Audio Feeder
+        PRODUCT_BUNDLE_IDENTIFIER: org.kenarnold.audio-feeder
+        INFOPLIST_FILE: Packaging/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Packaging/AudioFeeder.entitlements
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        # Signing is left to the archive/export step so a plain `xcodebuild build` works
+        # without a Developer ID in the keychain. See Packaging/build-app.sh.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+      configs:
+        # The hardened runtime enables *library validation*, which requires every loaded
+        # library to share the main executable's Team ID. LiveKit's WebRTC/UniFFI frameworks
+        # only end up with our Team ID when a real Developer ID re-signs them during
+        # archive/export — so with ad-hoc signing the app dies at launch with
+        # "different Team IDs". Hence: off for day-to-day Debug runs, on for Release, which
+        # is the config that gets archived and notarized. (The unsigned Release path in
+        # Packaging/build-app.sh overrides it back to NO for the same reason.)
+        Debug:
+          ENABLE_HARDENED_RUNTIME: false
+        Release:
+          ENABLE_HARDENED_RUNTIME: true
+
+schemes:
+  AudioFeederApp:
+    build:
+      targets:
+        AudioFeederApp: all
+    run:
+      config: Debug
+    archive:
+      config: Release
