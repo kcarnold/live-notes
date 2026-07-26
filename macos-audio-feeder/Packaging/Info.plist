@@ -9,6 +9,10 @@
 <dict>
     <key>CFBundleName</key>
     <string>Audio Feeder</string>
+    <key>CFBundleExecutable</key>
+    <string>AudioFeederApp</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
     <key>CFBundleIdentifier</key>
     <string>org.kenarnold.audio-feeder</string>
     <key>CFBundleShortVersionString</key>
@@ -17,6 +21,8 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
     <!-- Menu-bar-only: no Dock icon, no main window. -->
     <key>LSUIElement</key>
     <true/>

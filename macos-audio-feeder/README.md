@@ -17,13 +17,17 @@ custom-audio publishing path).
 - The live-notes server must have LiveKit configured (`LIVEKIT_URL`, `LIVEKIT_API_KEY`,
   `LIVEKIT_API_SECRET`), otherwise `/api/livekit/token` returns 503.
 
-## The spike — run this first
+## The spike
 
-The whole design hinges on one unverified assumption: that the LiveKit Swift SDK's
-custom-audio path (`AudioManager.setManualRenderingMode(true)` +
-`AudioManager.shared.mixer.capture(appAudio:)`) actually publishes audio on macOS. The
-`AudioFeederSpike` executable proves it end-to-end by publishing a sine tone — no sound
-board required.
+The whole design hinged on one assumption: that the LiveKit Swift SDK's custom-audio path
+(`AudioManager.setManualRenderingMode(true)` + `AudioManager.shared.mixer.capture(appAudio:)`)
+actually publishes audio on macOS. **Verified** — the `AudioFeederSpike` executable proved it
+end-to-end by publishing a sine tone (no sound board required), and `AudioFeederApp`'s
+`Publisher` uses the same path in production.
+
+The spike is kept around rather than deleted: it's the fastest way to re-check that
+assumption in isolation (no device capture, no scheduling, no UI) if a future LiveKit SDK
+upgrade changes behavior. To re-run it:
 
 ```bash
 cd macos-audio-feeder
@@ -84,22 +88,57 @@ swift build              # compiles AudioFeederApp (and the core + spike)
 swift run AudioFeederApp # runs from the SwiftPM build for development
 ```
 
-> **Packaging caveat:** a SwiftPM executable is fine for development, but the menu-bar-only
-> behavior (`LSUIElement`), the microphone permission string, login-item registration
-> (`SMAppService`), and signing/notarization all require a real `.app` **bundle**. The
-> `Packaging/Info.plist` and `Packaging/AudioFeeder.entitlements` here are ready for an
-> Xcode app target (or a bundling build script) — that step is still to do.
+> **Packaging caveat:** a SwiftPM executable (`swift run`) is fine for development, but the
+> menu-bar-only behavior (`LSUIElement`), the microphone permission string, login-item
+> registration (`SMAppService`), and signing/notarization all require a real `.app`
+> **bundle**. Use `Packaging/build-app.sh` (below) to build one instead of `swift build`
+> directly.
+
+## Building a distributable `.app`
+
+```bash
+cd macos-audio-feeder
+
+# Unsigned/ad-hoc build for local testing:
+Packaging/build-app.sh
+
+# Signed, for distributing to other Macs:
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" Packaging/build-app.sh
+
+# Signed + notarized + stapled, zipped up and ready to hand out:
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+  NOTARIZE_PROFILE=<keychain-profile> \
+  Packaging/build-app.sh
+```
+
+`NOTARIZE_PROFILE` refers to credentials stored ahead of time via
+`xcrun notarytool store-credentials`; see the comment at the top of the script. Beyond a
+plain `swift build`, the script assembles `Contents/{MacOS,Resources,Frameworks}` from
+`Packaging/Info.plist` and `Packaging/AudioFeeder.entitlements`, and embeds the LiveKit SDK's
+WebRTC/UniFFI XCFrameworks (which SwiftPM otherwise links from inside `.build/`, breaking the
+moment the binary moves) — the equivalent of Xcode's "Embed Frameworks" build phase, done by
+hand with `otool`/`install_name_tool`. It requires macOS + Xcode command line tools and was
+written and reviewed without access to those (this repo's automation runs on Linux), so **the
+framework-embedding step is unverified and the most likely thing to need a fix on first real
+run** — the same spirit as the spike's own "if the API names don't resolve" note above. Run
+it with `bash -x Packaging/build-app.sh` to see what it finds.
+
+Once built, install by copying `.build/Audio Feeder.app` to `/Applications` (needed for
+`SMAppService` login-item registration to behave normally) and launching it once to grant
+the microphone permission prompt.
 
 ## Status
 
 - [x] Pure core + unit tests (scheduler, level/RMS, channel pick, config, token contract)
-- [x] Spike (validate custom-audio publishing on macOS) — **ready to run**
+- [x] Spike (validate custom-audio publishing on macOS) — **verified on a Mac**
 - [x] Capture (`AudioCapture`: AVAudioEngine bound to device by UID, channel extraction)
 - [x] Device enumeration + hot-plug (`DeviceMonitor`, CoreAudio)
 - [x] LiveKit publisher (`Publisher`: token fetch, manual rendering + mixer.capture,
       retry/backoff, identity release on stop)
 - [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device)
 - [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
-- [ ] Package as a signed/notarized `.app` bundle (Info.plist/entitlements provided)
+- [x] Verify on a Mac: spike first, then end-to-end with a real board
+- [ ] Package as a signed/notarized `.app` bundle — tooling written (`Packaging/build-app.sh`),
+      **not yet run on real hardware**; framework embedding is the part most likely to need
+      a fix
 - [ ] (Optional) WKWebView transcript/translations pane
-- [ ] Verify on a Mac: spike first, then end-to-end with a real board
