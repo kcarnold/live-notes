@@ -2,6 +2,7 @@ import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration
 import { Gemini as GoogleGenAI } from '@posthog/ai/gemini';
 import { PostHog } from 'posthog-node';
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
+import { unescapeLiteralEscapes } from './src/slideTranslation.ts';
 
 export class GeminiProvider {
   apiClient: GoogleGenAI;
@@ -107,6 +108,32 @@ export const mergeUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
 /** Build the `@posthog/ai` per-call tags from an observability object (empty when unset). */
 const posthogTags = (obs?: AgentObservability) =>
     obs ? { posthogDistinctId: obs.distinctId, posthogTraceId: obs.traceId, posthogProperties: obs.properties } : {};
+
+/**
+ * Render slides as tagged plain-text blocks — `<slide id="0">…</slide>` — rather than a JSON
+ * array.
+ *
+ * Line breaks inside a slide are meaningful content (song lines, responsive readings), and
+ * JSON encoding turns them into `\n` escape sequences that the model then copies into its own
+ * output. Tagged blocks keep every newline a real newline in both directions.
+ */
+const renderSlideBlocks = (slides: string[], tag = 'slide'): string =>
+    slides.map((text, index) => `<${tag} id="${index}">\n${text.trim()}\n</${tag}>`).join('\n');
+
+/** Render the per-language targets (which ids to translate + style context) as text blocks. */
+const renderTargetBlocks = (targets: DraftItemTarget[], slideCount: number): string =>
+    targets
+        .map((target) => {
+            const ids = Array.from({ length: slideCount }, (_, index) => index).filter(
+                (index) => target.isTranslationNeeded[index],
+            );
+            const context = target.context.trim();
+            const contextBlock = context ? `\n<context>\n${context}\n</context>` : '';
+            return `<target language="${target.language}">\ntranslate slide ids: ${
+                ids.length > 0 ? ids.join(', ') : '(none)'
+            }${contextBlock}\n</target>`;
+        })
+        .join('\n');
 
 export const translateBlock = async (provider: GeminiProvider, todo: TranslationTodo, language: string): Promise<TranslationBlockResult[]> => {
     const config = {
@@ -245,15 +272,50 @@ const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
     },
 };
 
+/**
+ * The line-break policy, stated once and shared by every prompt that needs it (drafting and
+ * the seeded review conversation). Tool parameters deliberately do NOT restate it — see
+ * `LINE_BREAK_FIELD_NOTE` — so there is one place to edit when the policy changes.
+ */
+const LINE_BREAK_POLICY = `
+Line breaks within a slide:
+
+Write real line breaks in your translations. Never write the two characters backslash-n —
+that is not a line break, and it shows up on the projected slide exactly as typed.
+
+Whether to reproduce the source's line breaks is a judgement call that depends on what the
+slide is. Decide per slide from its content:
+- Songs, hymns, poetry, and responsive readings: the line structure is part of the content
+  — it carries the meter, the call-and-response turns, the poetic parallelism. Keep one
+  output line per source line, so the translation lines up with the original line for line.
+- Prose — congregational readings, prayers, announcements, narrative Scripture set as
+  paragraphs: the breaks are there only to make the English sit nicely on the English
+  slide. Ignore them. Write the translation as unbroken prose and let it wrap on its own;
+  the viewer reflows text to its own screen size, so any break you write is a hard break
+  that survives where it probably does not belong.
+
+When a slide could be either, keep the source's line structure.
+`;
+
+/**
+ * The line-break note attached to tool parameters that carry slide text. Covers only the
+ * encoding of the field itself; the editorial policy above is not repeated here, because a
+ * policy in two places is a policy that gets edited in one.
+ */
+const LINE_BREAK_FIELD_NOTE =
+    'Use real line breaks — never the two characters backslash-n, which reach the slide ' +
+    'exactly as typed. Whether to keep the source slide\'s breaks at all is covered by the ' +
+    'line-break guidance in the conversation.';
+
 /** Function declaration the model uses to record the finished translations. */
 const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
     name: 'set_translations',
     description:
         'Record the finished translations. Call this once the translations are ready, with ' +
         'one entry per target language and exactly one segment per requested slide id. You ' +
-        'may call it again to revise (e.g. after reviewer feedback). Add a per-segment ' +
-        '"note" ONLY when there is a genuine caveat, ambiguity, or choice the reviewer should ' +
-        'know about — otherwise omit it.',
+        'may call it again to revise (e.g. after reviewer feedback) — when revising, include ' +
+        'only the languages and segments that actually change; anything you leave out keeps ' +
+        'its current text. For a small fix inside one slide, prefer revise_translation.',
     parameters: {
         type: Type.OBJECT,
         required: ['languages'],
@@ -271,9 +333,20 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
                                 type: Type.OBJECT,
                                 required: ['segmentId', 'translation'],
                                 properties: {
-                                    segmentId: { type: Type.INTEGER },
-                                    translation: { type: Type.STRING },
-                                    note: { type: Type.STRING },
+                                    segmentId: {
+                                        type: Type.INTEGER,
+                                        description: 'The id of the source slide this translates.',
+                                    },
+                                    translation: {
+                                        type: Type.STRING,
+                                        description: `The full translated text of this slide. ${LINE_BREAK_FIELD_NOTE}`,
+                                    },
+                                    note: {
+                                        type: Type.STRING,
+                                        description:
+                                            'Optional caveat for the reviewer. Omit unless there is ' +
+                                            'a genuine ambiguity or judgement call worth flagging.',
+                                    },
                                 },
                             },
                         },
@@ -284,15 +357,81 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
     },
 };
 
-/** Safety cap on agent turns (Bible lookups + set_translations + a closing note). */
-const MAX_AGENT_ROUNDS = 8;
+/**
+ * Function declaration for targeted, `str_replace`-style edits to one recorded translation.
+ *
+ * Without this the only way to fix a single word is to re-send that slide's entire text
+ * through `set_translations`, which costs output tokens and risks the model quietly
+ * rewriting the parts the reviewer already approved.
+ */
+const REVISE_TRANSLATION_TOOL: FunctionDeclaration = {
+    name: 'revise_translation',
+    description:
+        'Make a targeted edit to one slide\'s translation in one language: replace an exact ' +
+        'substring of its current text. Prefer this over set_translations whenever the change ' +
+        'is small (a word, a line, punctuation) — everything else in the slide, and every other ' +
+        'slide, is left untouched. "find" must occur EXACTLY ONCE in the current text; if it is ' +
+        'missing or appears more than once the call fails and changes nothing, so include ' +
+        'enough surrounding text to be unique. Returns the slide\'s new full text.',
+    parameters: {
+        type: Type.OBJECT,
+        required: ['language', 'segmentId', 'find', 'replace'],
+        properties: {
+            language: {
+                type: Type.STRING,
+                description: 'Target language of the translation to edit, exactly as named in the targets.',
+            },
+            segmentId: {
+                type: Type.INTEGER,
+                description: 'The id of the source slide whose translation is being edited.',
+            },
+            find: {
+                type: Type.STRING,
+                description:
+                    'The exact substring of the current translation to replace, copied verbatim ' +
+                    'including any line breaks it spans. Must occur exactly once.',
+            },
+            replace: {
+                type: Type.STRING,
+                description: `The replacement text; may be empty to delete. ${LINE_BREAK_FIELD_NOTE}`,
+            },
+        },
+    },
+};
 
-/** Parse a `set_translations` tool call's args into per-language results. */
-const parseSetTranslations = (
+/**
+ * Safety cap on agent turns (Bible lookups + set_translations + targeted revisions + a
+ * closing note). Each `revise_translation` costs a round, so this allows a handful of
+ * targeted fixes on top of the lookups and the initial draft.
+ */
+const MAX_AGENT_ROUNDS = 12;
+
+/**
+ * The agent's working copy of the translations: language → slide id → current text.
+ *
+ * `set_translations` writes whole slides into it and `revise_translation` edits them in
+ * place, so a run can mix a full draft with follow-up touch-ups and still report one
+ * coherent result. Seeded from `currentTranslations` on a resumed conversation so a targeted
+ * edit works without the model re-sending everything first.
+ */
+type WorkingTranslations = Map<string, Map<number, string>>;
+
+const workingFor = (working: WorkingTranslations, language: string): Map<number, string> => {
+    let perSlide = working.get(language);
+    if (!perSlide) {
+        perSlide = new Map<number, string>();
+        working.set(language, perSlide);
+    }
+    return perSlide;
+};
+
+/** Apply a `set_translations` call to the working copy; returns the ids it touched. */
+const applySetTranslations = (
     args: Record<string, unknown> | undefined,
     sourceSlides: string[],
-): Record<string, TranslationBlockResult[]> => {
-    const out: Record<string, TranslationBlockResult[]> = {};
+    working: WorkingTranslations,
+    changed: Map<string, Set<number>>,
+): void => {
     const languageResults = ((args?.languages as unknown[]) ?? []) as Array<{
         language: string;
         segments: Array<{ segmentId: number; translation: string; note?: string }>;
@@ -300,11 +439,84 @@ const parseSetTranslations = (
     for (const result of languageResults) {
         const language = result.language;
         if (!language) continue;
-        out[language] = (result.segments ?? [])
-            .filter((segment) => segment.segmentId >= 0 && segment.segmentId < sourceSlides.length)
-            .map((segment) => ({
-                sourceText: sourceSlides[segment.segmentId],
-                translatedText: segment.translation ?? '',
+        for (const segment of result.segments ?? []) {
+            const segmentId = segment.segmentId;
+            if (!(segmentId >= 0 && segmentId < sourceSlides.length)) continue;
+            workingFor(working, language).set(segmentId, unescapeLiteralEscapes(segment.translation ?? ''));
+            if (!changed.has(language)) changed.set(language, new Set());
+            changed.get(language)?.add(segmentId);
+        }
+    }
+};
+
+/**
+ * Apply a `revise_translation` call to the working copy.
+ *
+ * Deliberately strict, in the same spirit as a file-editing `str_replace`: a `find` that is
+ * absent or ambiguous changes nothing and reports why, so the model retries with more
+ * context instead of silently editing the wrong line.
+ */
+const applyReviseTranslation = (
+    args: Record<string, unknown> | undefined,
+    sourceSlides: string[],
+    working: WorkingTranslations,
+    changed: Map<string, Set<number>>,
+): Record<string, unknown> => {
+    const language = typeof args?.language === 'string' ? args.language : '';
+    const segmentId = typeof args?.segmentId === 'number' ? args.segmentId : NaN;
+    const find = typeof args?.find === 'string' ? unescapeLiteralEscapes(args.find) : '';
+    const replace = typeof args?.replace === 'string' ? unescapeLiteralEscapes(args.replace) : '';
+
+    if (!language) return { error: 'language is required' };
+    if (!Number.isInteger(segmentId) || segmentId < 0 || segmentId >= sourceSlides.length) {
+        return { error: `segmentId must be an integer between 0 and ${sourceSlides.length - 1}` };
+    }
+    if (find === '') return { error: 'find must be a non-empty substring of the current translation' };
+
+    const perSlide = working.get(language);
+    const current = perSlide?.get(segmentId);
+    if (current === undefined) {
+        return {
+            error:
+                `No translation recorded yet for slide ${segmentId} in ${language}. ` +
+                'Use set_translations to write it first.',
+        };
+    }
+
+    const first = current.indexOf(find);
+    if (first === -1) {
+        return { error: `"find" does not appear in the current ${language} text for slide ${segmentId}.`, currentText: current };
+    }
+    if (current.indexOf(find, first + 1) !== -1) {
+        return {
+            error:
+                `"find" appears more than once in the current ${language} text for slide ` +
+                `${segmentId}. Include more surrounding text so it matches exactly once.`,
+            currentText: current,
+        };
+    }
+
+    const updated = current.slice(0, first) + replace + current.slice(first + find.length);
+    workingFor(working, language).set(segmentId, updated);
+    if (!changed.has(language)) changed.set(language, new Set());
+    changed.get(language)?.add(segmentId);
+    return { ok: true, language, segmentId, text: updated };
+};
+
+/** Collect the slides the run changed, per language, from the working copy. */
+const collectChanged = (
+    working: WorkingTranslations,
+    changed: Map<string, Set<number>>,
+    sourceSlides: string[],
+): Record<string, TranslationBlockResult[]> => {
+    const out: Record<string, TranslationBlockResult[]> = {};
+    for (const [language, ids] of changed) {
+        const perSlide = working.get(language);
+        out[language] = [...ids]
+            .sort((a, b) => a - b)
+            .map((segmentId) => ({
+                sourceText: sourceSlides[segmentId],
+                translatedText: perSlide?.get(segmentId) ?? '',
                 language,
             }));
     }
@@ -312,7 +524,11 @@ const parseSetTranslations = (
 };
 
 export type SlideAgentRunResult = {
-    /** Translations from the most recent `set_translations` call this run (empty if none). */
+    /**
+     * Every slide the run changed, per language — the accumulated effect of all
+     * `set_translations` and `revise_translation` calls, not just the last one. Slides the
+     * run never touched are absent, so a targeted edit reports only what it edited.
+     */
     translations: Record<string, TranslationBlockResult[]>;
     /** The full updated conversation (raw Gemini Content, replay-safe — keep verbatim). */
     messages: Content[];
@@ -325,14 +541,17 @@ export type SlideAgentRunResult = {
 /**
  * Drive the slide-translation agent loop over a conversation until the model ends its turn.
  *
- * The model has two tools: `lookup_bible_passage` (grounds Scripture slides in the published
- * text) and `set_translations` (records the structured output). Both run in one loop — and,
+ * The model has three tools: `lookup_bible_passage` (grounds Scripture slides in the
+ * published text), `set_translations` (records whole slides) and `revise_translation` (a
+ * `str_replace`-style targeted edit to one recorded slide). All run in one loop — and,
  * unlike the old two-call design, `set_translations` is NOT a hard stop: it is executed like
  * any tool and the model is allowed to end its turn naturally (a turn with no function
  * calls), so it can add a closing note or ask a clarifying question instead of translating.
  *
- * `messages` is mutated in place and returned; pass a continuing history to resume from
- * reviewer feedback. `onToolCall` reports each Bible lookup for observability.
+ * Translations accumulate in a working copy across the run, so a draft followed by a
+ * targeted fix reports the final text once. `messages` is mutated in place and returned;
+ * pass a continuing history plus `currentTranslations` to resume from reviewer feedback.
+ * `onToolCall` reports each Bible lookup for observability.
  */
 export const runSlideTranslationAgent = async (
     provider: GeminiProvider,
@@ -341,19 +560,37 @@ export const runSlideTranslationAgent = async (
         messages: Content[];
         model?: string;
         bibleLanguages: string[];
+        /**
+         * Translations that already exist for these slides (language → per-slide text,
+         * index-aligned with `sourceSlides`). Seeds the working copy so `revise_translation`
+         * can edit them without the model re-sending them first. Entries that are empty or
+         * missing are treated as "not yet translated".
+         */
+        currentTranslations?: Record<string, (string | null | undefined)[]>;
         onToolCall?: (call: BibleToolCall) => void;
         /** PostHog trace/distinct-id tags so every round groups under one conversation. */
         observability?: AgentObservability;
     },
 ): Promise<SlideAgentRunResult> => {
-    const { sourceSlides, messages, bibleLanguages, onToolCall, observability } = params;
+    const { sourceSlides, messages, bibleLanguages, currentTranslations, onToolCall, observability } = params;
     const model = params.model ?? provider.defaultModel;
 
-    const functionDeclarations: FunctionDeclaration[] = [SET_TRANSLATIONS_TOOL];
+    const functionDeclarations: FunctionDeclaration[] = [SET_TRANSLATIONS_TOOL, REVISE_TRANSLATION_TOOL];
     if (bibleLanguages.length > 0) functionDeclarations.unshift(BIBLE_LOOKUP_TOOL);
     const tools = [{ functionDeclarations }];
 
-    let translations: Record<string, TranslationBlockResult[]> = {};
+    // Seeded with what already exists, so an edit-only run has something to edit. `changed`
+    // stays empty until the model actually writes, so seeds are never reported as updates.
+    const working: WorkingTranslations = new Map();
+    const changed = new Map<string, Set<number>>();
+    for (const [language, perSlide] of Object.entries(currentTranslations ?? {})) {
+        perSlide.forEach((text, segmentId) => {
+            if (typeof text === 'string' && text !== '' && segmentId < sourceSlides.length) {
+                workingFor(working, language).set(segmentId, text);
+            }
+        });
+    }
+
     let setTranslationsCalled = false;
     let usage = emptyUsage();
 
@@ -380,13 +617,27 @@ export const runSlideTranslationAgent = async (
         const responseParts: Part[] = [];
         for (const call of calls) {
             if (call.name === SET_TRANSLATIONS_TOOL.name) {
-                translations = parseSetTranslations(
+                applySetTranslations(
                     call.args as Record<string, unknown> | undefined,
                     sourceSlides,
+                    working,
+                    changed,
                 );
                 setTranslationsCalled = true;
                 responseParts.push({
                     functionResponse: { name: call.name, response: { ok: true } },
+                });
+            } else if (call.name === REVISE_TRANSLATION_TOOL.name) {
+                responseParts.push({
+                    functionResponse: {
+                        name: call.name,
+                        response: applyReviseTranslation(
+                            call.args as Record<string, unknown> | undefined,
+                            sourceSlides,
+                            working,
+                            changed,
+                        ),
+                    },
                 });
             } else if (call.name === BIBLE_LOOKUP_TOOL.name) {
                 const args = (call.args ?? {}) as Partial<BibleLookupArgs>;
@@ -420,7 +671,12 @@ export const runSlideTranslationAgent = async (
         messages.push({ role: 'user', parts: responseParts });
     }
 
-    return { translations, messages, setTranslationsCalled, usage };
+    return {
+        translations: collectChanged(working, changed, sourceSlides),
+        messages,
+        setTranslationsCalled,
+        usage,
+    };
 };
 
 /**
@@ -448,18 +704,8 @@ ${generalContext}
 `
         : '';
 
-    const sourceDocument = JSON.stringify(
-        sourceSlides.map((text, index) => ({ segmentId: index, text: text.trim() }))
-    );
-    const targetsDocument = JSON.stringify(
-        targets.map((target) => ({
-            language: target.language,
-            translateSegmentIds: sourceSlides
-                .map((_, index) => index)
-                .filter((index) => target.isTranslationNeeded[index]),
-            context: target.context,
-        }))
-    );
+    const sourceDocument = renderSlideBlocks(sourceSlides);
+    const targetsDocument = renderTargetBlocks(targets, sourceSlides.length);
 
     const referenceSection = referenceText
         ? `
@@ -489,13 +735,11 @@ ${existingTranslation}
 
     const bibleSection = bibleLanguages.length > 0
         ? `
-Some slides are or quote Scripture (an explicit Bible reading, a quoted verse, or an
-adaptation such as "based on Psalm 23"). When a slide draws on a Bible passage, call the
-lookup_bible_passage tool to fetch the canonical published wording in the target languages
-(${bibleLanguages.join(', ')}), then base your translation on that text — adapting only
-where the slide itself does (responsive readings, pronoun changes, partial quotes). Look up
-every reference you recognize — the passage named in the item title above, and any inline
-references — before recording the final translations.
+Canonical Scripture is available through lookup_bible_passage for: ${bibleLanguages.join(', ')}.
+Look up every reference you recognize — the passage named in the item title above, and any
+inline references — before recording the final translations, and base those slides on the
+published wording, adapting only where the slide itself does (responsive readings, pronoun
+changes, partial quotes).
 
 Be reticent in adaptations: prefer direct quotes of the published text, and only adapt
 when it is very clear that the slide itself has deliberately made an adaptation.
@@ -515,30 +759,31 @@ for the passage on these slides.
         : '';
 
     const toolInstruction = `
-When the translations are ready, call the set_translations tool. For each target language
-include exactly one segment per id in its "translateSegmentIds", with segmentIds matching
-the source slides; do not include ids that were not requested. Do not reply with the
-translations as plain text — record them via the tool. If something genuinely needs the
-reviewer's attention, you may also write a short message or attach a per-segment "note", but
+Record this first pass with set_translations, covering every id listed for each language.
+Do not reply with the translations as plain text — they reach the reviewer only through the
+tool. Later rounds are different: change only what the reviewer raises. If something
+genuinely needs their attention, write a short message or attach a per-segment "note" — but
 keep quiet when there is nothing useful to say.
 `;
 
     return `
-You are translating presentation slides into several languages at once.
+You are translating presentation slides into several languages at once. A human reviewer
+checks your work before the service and can send you follow-up requests.
 ${contextSection}${itemTitleSection}
-The source slides are a JSON array of segments:
+Each source slide is given as its own block, with its id in the tag. The text inside a block
+is verbatim, including its line breaks:
 <source_slides>
 ${sourceDocument}
 </source_slides>
 
-Translate into the following target languages. For each language, "translateSegmentIds"
-lists exactly which source slide ids to translate. "context" holds already-approved
+Translate into the following target languages. For each language, "translate slide ids"
+lists exactly which source slide ids to translate. Any <context> block holds already-approved
 translations in that language, given only as a guide for style and terminology — it is
 not something to translate.
 <targets>
 ${targetsDocument}
 </targets>
-${referenceSection}${existingTranslationSection}${bibleSection}${toolInstruction}`;
+${LINE_BREAK_POLICY}${referenceSection}${existingTranslationSection}${bibleSection}${toolInstruction}`;
 };
 
 /**
@@ -554,31 +799,33 @@ export const buildSeedConversationPrompt = (params: {
 }): string => {
     const { slides, translations, generalContext } = params;
     const contextSection = generalContext ? `\nContext for these translations:\n${generalContext}\n` : '';
-    const slidesDocument = JSON.stringify(
-        slides.map((text, index) => ({ segmentId: index, text: text.trim() }))
-    );
-    const current = JSON.stringify(
-        Object.entries(translations).map(([language, perSlide]) => ({
-            language,
-            segments: perSlide.map((entry, index) => ({ segmentId: index, translation: entry?.text ?? '' })),
-        }))
-    );
+    const slidesDocument = renderSlideBlocks(slides);
+    const current = Object.entries(translations)
+        .map(
+            ([language, perSlide]) =>
+                `<translations language="${language}">\n${renderSlideBlocks(
+                    slides.map((_, index) => perSlide[index]?.text ?? ''),
+                )}\n</translations>`,
+        )
+        .join('\n');
     return `
 You are reviewing presentation slide translations into several languages.
 ${contextSection}
-The source slides are a JSON array of segments:
+Each source slide is given as its own block, with its id in the tag. The text inside a block
+is verbatim, including its line breaks:
 <source_slides>
 ${slidesDocument}
 </source_slides>
 
-These slides are already translated as follows:
+These slides are already translated as follows, with matching slide ids:
 <current_translations>
 ${current}
 </current_translations>
 
-Await the reviewer's feedback. When asked to change something, call the set_translations
-tool with the revised segments (one entry per affected language, segmentIds matching the
-source slides). Only speak up when there is something useful to say.`;
+${LINE_BREAK_POLICY}
+Await the reviewer's feedback, then apply it — revise_translation for a small fix,
+set_translations when a whole slide needs rewriting. Only speak up when there is something
+useful to say.`;
 };
 
 /**

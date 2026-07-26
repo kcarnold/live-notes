@@ -50,8 +50,10 @@ derived data) drives the testing/replay strategy.
   voice, and nothing can suspend. It affects only what a bridge does while nobody speaks —
   *which* bridges exist is decided independently (see the supervisor below).
 - **proclaim_service.py**: polls Proclaim's local HTTP API (~1 s) and reads its SQLite DB,
-  pushes presentations + slide status into Yjs. Installed as a macOS LaunchAgent that runs
-  `proclaim_service_launch.sh`: every launch fast-forwards the checkout to the
+  pushes presentations + slide status into Yjs. Internally decoupled into a **slide feed**
+  (`ProclaimFeed`, the source) and **consumers** (a Yjs publisher + a translation worker),
+  wired by a source-agnostic runtime — see "Testing seams". Installed as a macOS LaunchAgent
+  that runs `proclaim_service_launch.sh`: every launch fast-forwards the checkout to the
   `proclaim-stable` release branch and then starts the service regardless of how the update
   went, so the machine degrades to "runs last version", never "doesn't run". The running SHA
   is announced in the `status` map (`proclaimService`).
@@ -66,7 +68,7 @@ doc is *derived* data that the system under test will regenerate.
 | Writer | Writes into Yjs | True input boundary |
 |---|---|---|
 | Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
-| `proclaim_service.py` | `proclaimPresentations`, `proclaimStatus`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
+| `proclaim_service.py` (slide feed → Yjs publisher + translator) | `proclaimServiceOrder`, `proclaimPresentations`, `proclaimStatus`, `slideTranslations`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
 | translation-bridge / transcript-writer | live transcript | Organizer audio track + Gemini Live responses |
 | Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |
@@ -103,7 +105,20 @@ writer once each component announces its clientID (planned: via the status heart
 ## Testing seams
 
 - Pure component / Yjs-container split on the frontend (see CLAUDE.md).
-- Python tests fake the Proclaim DB, Y-Sweet websocket, and provider, and scale timing
-  constants via the `fast_timing` fixture (`tests/`) — the model for the TS side.
+- Python tests fake the Proclaim DB, Y-Sweet websocket, and provider (see `tests/helpers.py`),
+  and inject scaled-down timing — the model for the TS side.
+- The Proclaim writer is split at a serializable seam: a `SlideFeed` (source; `ProclaimFeed`)
+  emits a complete `FeedSnapshot` each poll, and the consumers (`YjsSlidePublisher`,
+  `SlideTranslator`) act on it, wired by `SlideSyncRuntime`. A fake/replayed feed drives the
+  **real** consumers with no Proclaim in the loop (`tests/test_slide_seam.py`) — the
+  "simulated proclaim" mode of the replay harness, in miniature. (The snapshot's single-write
+  publisher also fixed #67's status/presentation desync.)
 - The replay harness (tracking issue supersedes #69) extends these seams into recorded,
-  shareable fixtures with per-component real/simulated switches.
+  shareable fixtures with per-component real/simulated switches; the `FeedSnapshot`
+  `to_json`/`from_json` round-trip is the slot where recorded Proclaim output plugs in. The
+  Proclaim slice of this lives in `slide_replay.py`: `proclaim_service.py --record PATH`
+  wraps the live feed to append each snapshot to a JSONL stream, `--replay PATH` re-emits a
+  recording as a `SlideFeed` (honoring the recorded cadence) so the unchanged runtime replays
+  it against Y-Sweet, and `replay_records_through_consumers` plays a recording through the
+  real consumers offline — the network-free regression test, driven by a committed synthetic
+  fixture (`tests/fixtures/synthetic_service.jsonl`).
