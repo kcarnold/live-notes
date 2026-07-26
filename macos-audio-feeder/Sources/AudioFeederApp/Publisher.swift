@@ -7,8 +7,12 @@ import AudioFeederCore
 /// reusing the live-notes token endpoint. Mirrors the browser broadcast contract, so the
 /// server needs no changes and the browser page remains a valid alternative input.
 ///
-/// Uses the SDK's custom-audio path (validated by AudioFeederSpike): manual rendering mode
-/// so the physical mic is never opened, and `mixer.capture(appAudio:)` to feed our buffers.
+/// Uses the SDK's custom-audio path (validated end-to-end on real hardware): manual
+/// rendering mode so the physical mic is never opened, and `mixer.capture(appAudio:)` to
+/// feed our buffers. If a future LiveKit SDK upgrade breaks `setManualRenderingMode` /
+/// `mixer.capture(appAudio:)` (see the SDK's `Docs/audio.md`), the fallback is to expose the
+/// desired channel as its own input device via a macOS Aggregate Device and use the SDK's
+/// normal device capture — still pure Swift.
 @MainActor
 final class Publisher {
     enum State: Equatable {

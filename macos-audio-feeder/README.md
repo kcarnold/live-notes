@@ -13,93 +13,111 @@ custom-audio publishing path).
 ## Requirements
 
 - macOS 14+
-- Xcode 15+ / a recent Swift toolchain
+- Xcode 15+ (to build the app bundle); a plain Swift toolchain is enough for `swift test`
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`) — the
+  `.xcodeproj` is generated, not checked in
 - The live-notes server must have LiveKit configured (`LIVEKIT_URL`, `LIVEKIT_API_KEY`,
   `LIVEKIT_API_SECRET`), otherwise `/api/livekit/token` returns 503.
 
-## The spike — run this first
+## Custom-audio publishing
 
-The whole design hinges on one unverified assumption: that the LiveKit Swift SDK's
-custom-audio path (`AudioManager.setManualRenderingMode(true)` +
-`AudioManager.shared.mixer.capture(appAudio:)`) actually publishes audio on macOS. The
-`AudioFeederSpike` executable proves it end-to-end by publishing a sine tone — no sound
-board required.
-
-```bash
-cd macos-audio-feeder
-
-# Publish a 440 Hz tone into today's session on your dev server:
-swift run AudioFeederSpike --server-url https://dev8.kenarnold.org
-
-# …or target a specific doc / pitch:
-swift run AudioFeederSpike --server-url https://dev8.kenarnold.org --doc doc-2025-06-30 --freq 660
-```
-
-Then open that session in a browser **as a listener** (not the broadcast page) and confirm:
-
-1. `organizer-host` shows up as a participant.
-2. A translator bot spins up and you can hear/See the tone being carried.
-3. Press **Ctrl-C** in the terminal to stop; `organizer-host` leaves and the browser
-   broadcast page becomes usable again.
-
-The first run will prompt for **Microphone** permission (manual rendering still counts as
-audio I/O). Grant it.
-
-### If the spike's API names don't resolve
-
-`setManualRenderingMode` / `mixer.capture(appAudio:)` come from the SDK's `Docs/audio.md`.
-If they don't match the installed SDK version, reconcile them in
-`Sources/AudioFeederSpike/main.swift` (the call site is marked `<<< API UNDER TEST >>>`).
-If the custom-audio path turns out not to work on macOS at all, the fallback is to expose
-the desired channel as its own input device via a macOS **Aggregate Device** and use the
-SDK's normal device capture — still pure Swift.
-
-## Tests
-
-The pure logic (scheduler, level/RMS, channel extraction, config, token contract) is unit
-tested and has no audio/LiveKit dependencies:
-
-```bash
-swift test
-```
+The design's linchpin — the LiveKit Swift SDK's custom-audio path
+(`AudioManager.setManualRenderingMode(true)` + `AudioManager.shared.mixer.capture(appAudio:)`)
+actually publishing audio on macOS — has been verified end-to-end on real hardware with a
+real sound board. `AudioFeederApp`'s `Publisher` (`Sources/AudioFeederApp/Publisher.swift`)
+uses that path in production. If a future LiveKit SDK upgrade breaks those API names (see the
+SDK's `Docs/audio.md`), the fallback is a macOS Aggregate Device exposing the desired channel
+as its own input, captured via the SDK's normal device-capture path — still pure Swift; see
+the note in `Publisher.swift`.
 
 ## Project layout
 
 ```
 macos-audio-feeder/
-  Package.swift
+  Package.swift          # AudioFeederCore ONLY — pure logic + tests, no dependencies
+  project.yml            # XcodeGen spec for the app; AudioFeeder.xcodeproj is generated
   Sources/
     AudioFeederCore/     # pure, tested: Config, Scheduler, LevelMeter, ChannelExtractor,
                          #               ToneGenerator, LiveKitTokenClient
-    AudioFeederSpike/    # standalone tone-publishing spike (run this first)
     AudioFeederApp/      # the menu-bar app (capture + publish + UI)
   Tests/
     AudioFeederCoreTests/
 ```
 
-## The app
+The split is deliberate. `Package.swift` holds only the pure core, so `swift test` stays
+fast, needs no Xcode, and (for the non-AVFoundation parts) runs on Linux. The **app** is
+built by Xcode, because a real `.app` bundle needs app-target machinery SwiftPM doesn't have:
+the LiveKit SDK ships WebRTC/UniFFI as binary XCFrameworks that must be embedded and
+re-signed inside the bundle, plus Info.plist processing, entitlements, the hardened runtime,
+and signing/notarization. (Hand-rolling that embedding with `otool`/`install_name_tool` was
+tried first and got it wrong — it picked up a `__MACOSX/` resource-fork stub instead of the
+real 2 MB framework, and `codesign` rejected the result.)
+
+## Tests
 
 ```bash
-swift build              # compiles AudioFeederApp (and the core + spike)
-swift run AudioFeederApp # runs from the SwiftPM build for development
+swift test    # AudioFeederCore: scheduler, level/RMS, channel extraction, config, token contract
 ```
 
-> **Packaging caveat:** a SwiftPM executable is fine for development, but the menu-bar-only
-> behavior (`LSUIElement`), the microphone permission string, login-item registration
-> (`SMAppService`), and signing/notarization all require a real `.app` **bundle**. The
-> `Packaging/Info.plist` and `Packaging/AudioFeeder.entitlements` here are ready for an
-> Xcode app target (or a bundling build script) — that step is still to do.
+## Building and running the app
+
+The `.xcodeproj` is **generated from `project.yml` and not checked in** — that YAML is the
+reviewable source of truth, since an `.xcodeproj` is XML that conflicts badly on merge.
+
+```bash
+cd macos-audio-feeder
+brew install xcodegen     # once
+xcodegen generate         # writes AudioFeeder.xcodeproj
+open AudioFeeder.xcodeproj # then just hit Run
+```
+
+Re-run `xcodegen generate` after changing `project.yml` (or after adding source files, since
+the file list is captured at generation time).
+
+## Building a distributable `.app`
+
+`Packaging/build-app.sh` wraps the above plus `xcodebuild archive`/`-exportArchive`; it
+regenerates the project first, so it's always in sync with `project.yml`.
+
+```bash
+cd macos-audio-feeder
+
+# Unsigned build for local testing:
+Packaging/build-app.sh
+
+# Signed Developer ID build:
+TEAM_ID=ABCDE12345 Packaging/build-app.sh
+
+# Signed + notarized + stapled, zipped and ready to hand out:
+TEAM_ID=ABCDE12345 NOTARIZE_PROFILE=<keychain-profile> Packaging/build-app.sh
+```
+
+`NOTARIZE_PROFILE` refers to credentials stored ahead of time via
+`xcrun notarytool store-credentials`; see the comment at the top of the script. Output lands
+under `.build/xcode/`.
+
+Install by copying `Audio Feeder.app` to `/Applications` (needed for `SMAppService`
+login-item registration to behave normally) and launching it once to grant the microphone
+permission prompt.
+
+> **Dependency pinning:** `.gitignore` excludes `Package.resolved` and the generated
+> `.xcodeproj` (which is where Xcode keeps its own resolved versions), so the exact LiveKit
+> revision isn't committed — `project.yml`'s `from: 2.0.7` only pins the major version. If a
+> reproducible-to-the-commit build matters later, check in the resolved file.
 
 ## Status
 
 - [x] Pure core + unit tests (scheduler, level/RMS, channel pick, config, token contract)
-- [x] Spike (validate custom-audio publishing on macOS) — **ready to run**
 - [x] Capture (`AudioCapture`: AVAudioEngine bound to device by UID, channel extraction)
 - [x] Device enumeration + hot-plug (`DeviceMonitor`, CoreAudio)
 - [x] LiveKit publisher (`Publisher`: token fetch, manual rendering + mixer.capture,
-      retry/backoff, identity release on stop)
+      retry/backoff, identity release on stop) — custom-audio publishing verified end-to-end
+      on real hardware
 - [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device)
 - [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
-- [ ] Package as a signed/notarized `.app` bundle (Info.plist/entitlements provided)
+- [x] Build a real `.app` bundle (Xcode target generated from `project.yml`; frameworks
+      embedded automatically)
+- [ ] Sign + notarize a distributable build — `Packaging/build-app.sh` has the
+      archive/export/notarize path, but it needs a `TEAM_ID` and a Developer ID cert to
+      exercise, so **that half is still unrun**
 - [ ] (Optional) WKWebView transcript/translations pane
-- [ ] Verify on a Mac: spike first, then end-to-end with a real board

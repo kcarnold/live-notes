@@ -1,22 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Info.plist for the packaged .app bundle (Xcode app target or a bundling build script).
-  SwiftPM executables don't apply this automatically; it's here so the menu-bar/login-item
-  behavior and the microphone permission prompt are correctly configured when packaging.
+  Info.plist for the Audio Feeder .app bundle, consumed by the Xcode target generated from
+  ../project.yml (INFOPLIST_FILE). The $(...) values are substituted at build time from the
+  build settings declared there, so version/identifier/executable names have a single source
+  of truth and can't drift out of sync with the product.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Audio Feeder</string>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
     <key>CFBundleIdentifier</key>
-    <string>org.kenarnold.audio-feeder</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
     <!-- Menu-bar-only: no Dock icon, no main window. -->
     <key>LSUIElement</key>
     <true/>
