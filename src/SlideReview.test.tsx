@@ -21,7 +21,7 @@ describe('SlideReview', () => {
         onSaveCell={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Enter or load an item/i)).toBeInTheDocument();
+    expect(screen.getByText(/Select a service item/i)).toBeInTheDocument();
   });
 
   it('renders source text and an editable cell per slide', () => {

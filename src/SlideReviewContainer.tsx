@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useMap } from '@y-sweet/react';
 import { useAtomValue } from 'jotai';
 
@@ -7,21 +7,20 @@ import { useStrings } from './useLocale';
 import { normalizeSlideText, slideTranslationKey } from './slideTranslation';
 import { SlideReview } from './SlideReview';
 import { SlideConversationPanel } from './SlideConversationPanel';
+import { SlideReferenceDiff } from './SlideReferenceDiff';
+import { computeLookupDiffs, extractLookups } from './referenceLookupDiff';
+import { inputClass, secondaryButtonClass, subtleTextClass } from './slideReviewStyles';
 import {
-  parseSlidesInput,
   lookupLibrary,
   upsertLibraryEntry,
   translateItem,
   sendConversationMessage,
   postConversationNote,
-  type BibleToolCall,
   type SlideConversation,
 } from './slideTranslationApi';
 
 type StringArrays = Record<string, string[]>;
 type NullableStringArrays = Record<string, (string | null)[]>;
-
-const SLIDE_DELIMITER = '\n--\n';
 
 function emptyArrays(length: number): StringArrays {
   return Object.fromEntries(languages.map((language) => [language, Array<string>(length).fill('')]));
@@ -36,10 +35,11 @@ function emptyNullableArrays(length: number): NullableStringArrays {
 /**
  * Yjs/network connector for the slide-translation review screen.
  *
- * Holds the editable item (pasted or loaded from the on-air Proclaim item), the
- * per-language draft translations, and the library state. "Suggest" pre-fills drafts
- * from the LLM (reusing reviewed library entries); "Save" promotes a draft to a
- * reviewed library entry.
+ * The screen is selection-driven: pick a service item (or load the on-air one) and its
+ * slides, the agent's drafts, and the agent's conversation all follow. The Proclaim service
+ * translates on-air items on its own, so the reviewer's job is to *correct*, not to
+ * originate — "Save" promotes a draft to a reviewed library entry, and "Re-translate" is the
+ * fallback for an item the service never got to (or got wrong enough to restart).
  */
 export function SlideReviewContainer() {
   const s = useStrings();
@@ -51,19 +51,13 @@ export function SlideReviewContainer() {
   // The agent conversation lives in the per-day doc (server-written), so we read it live.
   const conversationsMap = useMap('slideConversations');
 
-  const [slidesText, setSlidesText] = useState('');
-  // Title of the loaded on-air item (e.g. a Bible citation like "Psalm 23"). Passed to the
-  // model as a lookup cue; cleared when the operator edits the slide text by hand.
-  const [itemTitle, setItemTitle] = useState('');
   const [slides, setSlides] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<StringArrays>(() => emptyArrays(0));
   const [savedTexts, setSavedTexts] = useState<NullableStringArrays>(() => emptyNullableArrays(0));
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [bibleLookups, setBibleLookups] = useState<BibleToolCall[]>([]);
-  // The currently selected service item (empty for an ad-hoc paste), the conversation key the
-  // server is using for this item, and the agent conversation we've pulled down.
+  // The currently selected service item, the conversation key the server is using for it, and
+  // the agent conversation we've pulled down.
   const [selectedItemId, setSelectedItemId] = useState<string>('');
   const [conversationId, setConversationId] = useState<string | null>(null);
   // Derived live from Yjs: the server writes the conversation into `slideConversations`, and
@@ -104,10 +98,22 @@ export function SlideReviewContainer() {
     setDrafts(nextDrafts);
   }, [translationsMap]);
 
+  // Slides always come from the service item itself, read fresh at the moment they're needed,
+  // so a Proclaim edit between selecting an item and re-translating it can't leave us working
+  // from a stale copy.
+  const readItemSlides = useCallback(
+    (itemId: string): string[] => {
+      const presentation = itemId
+        ? (presentationsMap.get(itemId) as { slides?: string[] } | undefined)
+        : undefined;
+      return (presentation?.slides ?? []).filter((slide) => slide.trim() !== '');
+    },
+    [presentationsMap],
+  );
+
   const commitSlides = useCallback(
     async (slideList: string[]) => {
       setError(null);
-      setMessage(null);
       setSlides(slideList);
       setDrafts(emptyArrays(slideList.length));
       setSavedTexts(emptyNullableArrays(slideList.length));
@@ -124,19 +130,12 @@ export function SlideReviewContainer() {
     [loadSavedFor],
   );
 
-  const handleCommitFromText = useCallback(() => {
-    void commitSlides(parseSlidesInput(slidesText));
-  }, [commitSlides, slidesText]);
-
-  // Load a service item's slides into the editor and pull down its agent conversation (if the
-  // Proclaim service or a prior Suggest already produced one). Used by both the picker and the
-  // "load on-air" button.
+  // Load a service item's slides and pull down its agent conversation (if the Proclaim service
+  // or an earlier re-translate already produced one). Used by both the picker and the "load
+  // on-air" button — the only two ways slides enter this screen.
   const handleSelectItem = useCallback(
     (itemId: string) => {
-      const presentation = itemId
-        ? (presentationsMap.get(itemId) as { slides?: string[]; title?: string } | undefined)
-        : undefined;
-      const itemSlides = (presentation?.slides ?? []).filter((slide) => slide.trim() !== '');
+      const itemSlides = readItemSlides(itemId);
       if (itemSlides.length === 0) {
         setError(s.waitingForProclaim);
         return;
@@ -144,11 +143,9 @@ export function SlideReviewContainer() {
       setSelectedItemId(itemId);
       // The conversation (if any) is read live from `slideConversations` keyed by itemId.
       setConversationId(itemId);
-      setItemTitle(presentation?.title ?? '');
-      setSlidesText(itemSlides.join(SLIDE_DELIMITER));
       void commitSlides(itemSlides);
     },
-    [presentationsMap, commitSlides, s.waitingForProclaim],
+    [readItemSlides, commitSlides, s.waitingForProclaim],
   );
 
   const handleLoadOnAir = useCallback(() => {
@@ -160,23 +157,32 @@ export function SlideReviewContainer() {
     handleSelectItem(itemId);
   }, [statusMap, handleSelectItem, s.waitingForProclaim]);
 
-  const handleSuggest = useCallback(async () => {
-    // Parse fresh from the textarea so we never translate a stale slide set.
-    const slideList = parseSlidesInput(slidesText);
+  /**
+   * Re-run the drafting agent over the selected item.
+   *
+   * The Proclaim service already does this for on-air items, so this is the fallback: an item
+   * the service never reached, or one whose draft is wrong enough that correcting it by hand
+   * costs more than starting over.
+   */
+  const handleReTranslate = useCallback(async () => {
+    if (!selectedItemId) return;
+    const slideList = readItemSlides(selectedItemId);
     setSlides(slideList);
-    if (slideList.length === 0) return;
+    if (slideList.length === 0) {
+      setError(s.waitingForProclaim);
+      return;
+    }
+    // The item title (often a Bible citation like "Psalm 23") is the model's lookup cue.
+    const itemTitle = (presentationsMap.get(selectedItemId) as { title?: string } | undefined)?.title;
     setBusy(true);
     setError(null);
-    setMessage(null);
-    setBibleLookups([]);
     try {
-      const { translations, bibleLookups: lookups, conversationId: newId } = await translateItem(
+      const { translations, conversationId: newId } = await translateItem(
         slideList,
         [...languages],
-        itemTitle.trim() || undefined,
-        selectedItemId || undefined,
+        itemTitle?.trim() || undefined,
+        selectedItemId,
       );
-      setBibleLookups(lookups);
       const nextDrafts = emptyArrays(slideList.length);
       const nextSaved = emptyNullableArrays(slideList.length);
       for (const language of languages) {
@@ -196,7 +202,7 @@ export function SlideReviewContainer() {
     } finally {
       setBusy(false);
     }
-  }, [slidesText, itemTitle, selectedItemId]);
+  }, [selectedItemId, readItemSlides, presentationsMap, s.waitingForProclaim]);
 
   // Apply translations the agent revised during a follow-up: write them live to the
   // slideTranslations map (content-addressed, so they land on the matching slides) and reflect
@@ -237,7 +243,6 @@ export function SlideReviewContainer() {
         // reviewer is actually looking at. The updated conversation streams in live via Yjs;
         // we only need the side outputs.
         const result = await sendConversationMessage(conversationId, text, drafts);
-        if (result.bibleLookups.length > 0) setBibleLookups(result.bibleLookups);
         applyUpdates(result.updatedTranslations);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -300,10 +305,18 @@ export function SlideReviewContainer() {
     [],
   );
 
-  const buttonClass =
-    'px-3 py-1 rounded text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40';
-  const secondaryButtonClass =
-    'px-3 py-1 rounded text-sm font-medium bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600 disabled:opacity-40';
+  // The canonical texts the agent looked up are already in the conversation, so the reference
+  // check is entirely client-side. Recompute only when the conversation or drafts move.
+  const referenceDiffs = useMemo(
+    () => computeLookupDiffs(extractLookups(conversation?.messages ?? []), drafts, [...languages]),
+    [conversation, drafts],
+  );
+
+  // An item the Proclaim service never translated: slides loaded, but nothing to review yet.
+  const hasAnyDraft = languages.some((language) =>
+    (drafts[language] ?? []).some((text) => text.trim() !== ''),
+  );
+  const untranslated = slides.length > 0 && !conversation && !hasAnyDraft;
 
   return (
     <div className="flex flex-col gap-3 h-full overflow-auto p-3">
@@ -314,26 +327,12 @@ export function SlideReviewContainer() {
         )}
       </div>
 
-      <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
-        {s.slidesInputLabel}
-        <textarea
-          className="w-full min-h-[5rem] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 text-sm font-mono"
-          value={slidesText}
-          onChange={(e) => {
-            // A hand-edit means the loaded item title (a Bible citation) no longer applies.
-            setItemTitle('');
-            setSlidesText(e.target.value);
-          }}
-          onBlur={handleCommitFromText}
-        />
-      </label>
-
       <div className="flex items-center gap-2 flex-wrap">
         {serviceOrder.length > 0 && (
-          <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+          <label className={`flex items-center gap-1 ${subtleTextClass}`}>
             {s.selectItemLabel}
             <select
-              className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-1 text-sm"
+              className={inputClass}
               value={selectedItemId}
               onChange={(e) => {
                 if (e.target.value) handleSelectItem(e.target.value);
@@ -351,45 +350,25 @@ export function SlideReviewContainer() {
         <button type="button" className={secondaryButtonClass} onClick={handleLoadOnAir} disabled={busy}>
           {s.loadOnAirItem}
         </button>
+        {/* The Proclaim service drafts on-air items on its own; this is the fallback, so it
+            stays secondary and only lights up once an item is selected. */}
         <button
           type="button"
-          className={buttonClass}
-          onClick={() => void handleSuggest()}
-          disabled={busy || slides.length === 0}
+          className={secondaryButtonClass}
+          onClick={() => void handleReTranslate()}
+          disabled={busy || !selectedItemId || !isEditor}
         >
-          {busy ? s.suggesting : s.suggestTranslations}
+          {busy ? s.reTranslating : s.reTranslate}
         </button>
-        {message && <span className="text-xs text-green-700 dark:text-green-400">{message}</span>}
         {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
       </div>
 
-      {bibleLookups.length > 0 && (
-        <div className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
-          <span className="font-medium">{s.bibleLookupsLabel}</span>
-          <ul className="flex flex-wrap gap-2">
-            {bibleLookups.map((lookup) => (
-              <li
-                key={`${lookup.reference}-${lookup.foundLanguages.join(',')}-${lookup.missingLanguages.join(',')}`}
-                className={`px-2 py-0.5 rounded border ${
-                  lookup.ok
-                    ? 'border-green-300 text-green-700 dark:border-green-700 dark:text-green-400'
-                    : 'border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400'
-                }`}
-                title={
-                  lookup.ok
-                    ? `${s.bibleLookupFound}: ${lookup.foundLanguages.join(', ')}`
-                    : s.bibleLookupMissing
-                }
-              >
-                {lookup.ok ? '✓' : '⚠'} {lookup.reference}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {sourceChanged && (
         <span className="text-xs text-amber-700 dark:text-amber-400">{s.sourceChangedWarning}</span>
+      )}
+
+      {untranslated && (
+        <span className="text-xs text-amber-700 dark:text-amber-400">{s.notTranslatedYet}</span>
       )}
 
       <SlideReview
@@ -402,6 +381,8 @@ export function SlideReviewContainer() {
         onDraftChange={handleDraftChange}
         onSaveCell={(language, slideIndex) => void handleSaveCell(language, slideIndex)}
       />
+
+      <SlideReferenceDiff diffs={referenceDiffs} />
 
       <SlideConversationPanel
         conversation={conversation}

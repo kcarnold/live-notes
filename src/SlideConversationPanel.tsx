@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Content, SlideConversation, TokenUsage } from './slideTranslationApi';
+import { chipClass, primaryButtonClass, subtleTextClass } from './slideReviewStyles';
 import { useStrings } from './useLocale';
 
 /**
@@ -89,10 +90,7 @@ function MessageParts({ message, msgKey }: { message: Content; msgKey: string })
         const summary = summarizeResponse(part.functionResponse);
         if (!summary) return null;
         return (
-          <span
-            key={partKey(`${msgKey}-resp`, i)}
-            className="inline-block px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 text-xs"
-          >
+          <span key={partKey(`${msgKey}-resp`, i)} className={chipClass}>
             {summary}
           </span>
         );
@@ -178,7 +176,7 @@ export function SlideConversationPanel({
       </div>
 
       {visible.length === 0 ? (
-        <p className="text-xs text-gray-400 dark:text-gray-500">{s.noConversation}</p>
+        <p className={subtleTextClass}>{s.noConversation}</p>
       ) : (
         <ul className="flex flex-col gap-2 max-h-72 overflow-auto">
           {visible.map((message, i) => {
@@ -204,7 +202,7 @@ export function SlideConversationPanel({
       {editable && conversation && (
         <div className="flex items-start gap-2">
           <textarea
-            className="flex-1 min-h-[2.5rem] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 text-sm"
+            className="flex-1 min-h-10 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-2 text-sm"
             placeholder={s.followUpPlaceholder}
             value={draft}
             disabled={busy}
@@ -218,7 +216,7 @@ export function SlideConversationPanel({
           />
           <button
             type="button"
-            className="px-3 py-1 rounded text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40"
+            className={primaryButtonClass}
             onClick={handleSend}
             disabled={busy || draft.trim() === ''}
           >
