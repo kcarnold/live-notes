@@ -44,8 +44,8 @@ struct ConfigView: View {
                 Section("Schedule") {
                     Toggle("Enable schedule", isOn: $controller.config.schedule.enabled)
                     weekdayPicker
-                    timeField("Start", minute: $controller.config.schedule.startMinute)
-                    timeField("Stop", minute: $controller.config.schedule.stopMinute)
+                    MinuteField(label: "Start", minute: $controller.config.schedule.startMinute)
+                    MinuteField(label: "Stop", minute: $controller.config.schedule.stopMinute)
                     Text("Manual override always wins over the schedule.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -96,15 +96,52 @@ struct ConfigView: View {
         }
     }
 
-    private func timeField(_ label: String, minute: Binding<Int>) -> some View {
+}
+
+/// An `HH:mm` text field over a minutes-since-midnight value.
+///
+/// It needs its own `@State` string rather than a computed `Binding` over the `Int`, because
+/// a get/set binding that only writes back on a successful parse makes the field unusable:
+/// every intermediate keystroke ("0", "09", "09:") is invalid, so the setter no-ops, SwiftUI
+/// re-renders the *old* formatted value, and the character the user just typed vanishes. The
+/// field looks frozen when it is actually reverting you 60 times a second.
+///
+/// So: the local text is authoritative while the field has focus, the model is updated
+/// whenever the text happens to parse, and on blur or Return the text is normalized back to
+/// `HH:mm` (reverting to the last good value if what's there is unparseable).
+private struct MinuteField: View {
+    let label: String
+    @Binding var minute: Int
+
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
         HStack {
             Text(label)
             Spacer()
-            TextField("HH:mm", text: Binding(
-                get: { Schedule.formatHHMM(minute.wrappedValue) },
-                set: { if let m = Schedule.parseHHMM($0) { minute.wrappedValue = m } }))
+            TextField("HH:mm", text: $text)
                 .frame(width: 70)
                 .multilineTextAlignment(.trailing)
+                .focused($focused)
+                .onSubmit { commit() }
+                .onChange(of: text) { _, new in
+                    // Track the model live while it's parseable, but never rewrite `text`.
+                    if let m = Schedule.parseHHMM(new) { minute = m }
+                }
+                .onChange(of: focused) { _, isFocused in
+                    if !isFocused { commit() }
+                }
+                .onChange(of: minute) { _, new in
+                    // Outside edits (e.g. loading config) win only when we're not typing.
+                    if !focused { text = Schedule.formatHHMM(new) }
+                }
+                .onAppear { text = Schedule.formatHHMM(minute) }
         }
+    }
+
+    private func commit() {
+        if let m = Schedule.parseHHMM(text) { minute = m }
+        text = Schedule.formatHHMM(minute)
     }
 }
