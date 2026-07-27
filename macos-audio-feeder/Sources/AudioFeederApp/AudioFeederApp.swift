@@ -38,8 +38,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover.behavior = .transient        // closes when you click outside, like a menu
         popover.animates = true
-        popover.contentViewController = NSHostingController(
-            rootView: MenuContentView(controller: controller))
+
+        // NSPopover sizes itself from its content view controller's `preferredContentSize`.
+        // NSHostingController only publishes SwiftUI's ideal size there if you ask for it —
+        // the default `sizingOptions` is empty. Without this the popover keeps whatever
+        // frame it first got while the SwiftUI content grows and shrinks underneath, which
+        // is what produced the blank bands above and below the content (worst when a long
+        // error string wrapped the status line onto several lines).
+        let hosting = NSHostingController(rootView: MenuContentView(controller: controller))
+        hosting.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hosting
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.action = #selector(togglePopover(_:))

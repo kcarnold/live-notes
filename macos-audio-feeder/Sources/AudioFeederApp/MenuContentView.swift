@@ -16,10 +16,15 @@ struct MenuContentView: View {
                     .frame(width: 10, height: 10)
             }
 
+            // Error labels carry a whole LiveKit error description, so cap the line count:
+            // an unbounded wrap here is what made the popover lurch between sizes. The full
+            // text is in the log (`category == "publisher"`) and in the tooltip.
             Text(controller.status.label)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
+                .help(controller.status.label)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Input level").font(.caption).foregroundStyle(.secondary)
@@ -63,6 +68,9 @@ struct MenuContentView: View {
             }
         }
         .padding(14)
+        // A fixed width keeps the popover from resizing horizontally as the status text
+        // changes; `sizingOptions` in AppDelegate lets the height follow the content.
+        .frame(width: 300)
     }
 
     private var deviceSummary: some View {
