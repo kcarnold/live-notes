@@ -174,8 +174,12 @@ whether `LiveKitTokenClient`'s request is stale. It isn't. Recorded so nobody re
 
 Consequence worth keeping in view: because the app and the browser page use the *same literal
 identity*, and LiveKit permits one participant per identity, they remain mutually exclusive by
-construction. The app currently handles being evicted badly — see the tracking issue on
-`Publisher` not observing room state.
+construction. That policy is fine; what isn't is that the losing side dies quietly — `Publisher`
+registers no `RoomDelegate`, so it never learns the room dropped, and `AppController` can't
+restart a half-torn-down pipeline anyway. Filed as
+[#97](https://github.com/kcarnold/live-notes/issues/97), which also covers the 4h token TTL and
+whether the feeder should get its own identity (it can't, without first fixing the supervisor's
+first-`organizer-*`-wins participant lookup).
 
 ---
 
