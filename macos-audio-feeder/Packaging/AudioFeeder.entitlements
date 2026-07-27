@@ -1,8 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Entitlements for the signed .app bundle. App Sandbox + the audio-input entitlement give
-  a clean first-class microphone TCC grant; the network client entitlement is needed to
-  reach the live-notes token endpoint and LiveKit.
+  a clean first-class microphone TCC grant; the network entitlements are needed to reach
+  the live-notes token endpoint and LiveKit.
+
+  BOTH network entitlements are required, and the second one is NOT optional despite its
+  misleading name. The App Sandbox splits networking into `network-outbound` (granted by
+  `network.client`, covers connect()) and `network-inbound` (granted by `network.server`,
+  covers bind()/listen()). WebRTC's ICE agent binds a local UDP port per candidate, so with
+  `network.client` alone every bind() fails with EPERM: no udp/srflx/relay candidates are
+  gathered, only `tcp … tcptype active` ones (those only need connect()). ICE then never
+  completes, `Room.connect` times out after `primaryTransportConnectTimeout` (10s) at every
+  LiveKit Cloud region in turn, and the app retries forever without ever publishing.
+
+  This is exactly what happened on 2026-07-26: the app had only ever been run as an
+  unsandboxed SwiftPM executable (`swift run`), so the sandbox was first applied when the
+  XcodeGen app target landed, and the very next run was at the venue. Chrome ships the
+  server entitlement, which is why the browser broadcast page kept working. See
+  ../NOTEBOOK.md.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -11,7 +26,11 @@
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Outbound: token endpoint (HTTPS), LiveKit signal (WSS), ICE via connect(). -->
     <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Inbound: bind() for WebRTC's ICE UDP sockets. Without this, no UDP candidates. -->
+    <key>com.apple.security.network.server</key>
     <true/>
 </dict>
 </plist>
