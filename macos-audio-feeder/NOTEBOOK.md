@@ -106,13 +106,15 @@ Chrome ships the server entitlement, which is why the browser page kept working.
 **Known-remaining, not yet fixed** (real, but not what broke the service):
 
 - `throwing -10877` (`kAudioUnitErr_InvalidElement`) ×4 immediately before each
-  `Room.connect`, from `AudioCapture.start()`. Most likely `inputNode.inputFormat(forBus: 0)`
-  returning a 0ch/0Hz format, which is what a denied microphone TCC grant looks like — and an
-  ad-hoc-signed Xcode build has an unstable code identity, so the grant doesn't survive
-  rebuilds. Secondary suspect: `AudioCapture` sets `kAudioOutputUnitProperty_CurrentDevice`
-  on the shared AUHAL, which on macOS binds **both** the input and output scopes, so a board
-  with no output channels can produce the same error. The new logging prints the resolved
-  format, which should settle it.
+  `Room.connect`, from `AudioCapture.start()`. **Cause not yet confirmed** — the leading
+  theory is `inputNode.inputFormat(forBus: 0)` returning a 0ch/0Hz format, which is what a
+  denied microphone TCC grant looks like from here, and an ad-hoc-signed Xcode build has an
+  unstable code identity so the grant doesn't survive rebuilds. Secondary suspect:
+  `AudioCapture` sets `kAudioOutputUnitProperty_CurrentDevice` on the shared AUHAL, which on
+  macOS binds **both** the input and output scopes, so a board with no output channels can
+  produce the same error. `AudioCapture` now logs the resolved format and refuses to install a
+  tap on an empty one, so the next occurrence should identify itself instead of emitting a
+  bare OSStatus.
 - `HALC_ProxyIOContext::IOWorkLoop: skipping cycle due to overload`. The tap block runs on the
   real-time render thread and allocates a fresh `AVAudioPCMBuffer` (`ChannelExtractor`), runs
   a scalar RMS loop, and spawns **two `Task { @MainActor }` per buffer**. In an unoptimized
@@ -127,6 +129,26 @@ Chrome ships the server entitlement, which is why the browser page kept working.
 **Operational takeaway for unattended runs.** Don't run from Xcode. Build the `.app` once via
 `Packaging/build-app.sh`, copy to `/Applications`, launch, grant the microphone prompt, and
 don't rebuild — so the TCC grant stays attached to one stable code identity.
+
+### Pre-service checklist
+
+Verify at a desk, not at the booth. Every failure above reproduces anywhere, so a clean run at
+home is a real signal.
+
+1. `xcodegen generate` (the file list is captured at generation time, and `Log.swift` is new).
+2. `Packaging/build-app.sh`, then copy `Audio Feeder.app` to `/Applications`.
+3. Confirm the entitlements actually made it into the product — this is the whole fix:
+   ```bash
+   codesign -d --entitlements - --xml "/Applications/Audio Feeder.app" | plutil -p -
+   ```
+   `com.apple.security.network.server` must be present.
+4. Launch it, grant the microphone prompt, pick the board and channel.
+5. With `log stream --predicate 'subsystem == "org.kenarnold.audio-feeder"' --style compact`
+   running, hit **Start now** and watch for, in order: `starting pipeline`, an input format
+   with a plausible sample rate and channel count, `token OK`, `room connected`,
+   `publishing as organizer-host`.
+6. Join the session in a browser and confirm you can hear the board.
+7. Set the schedule, quit, relaunch, and confirm it comes back up on its own.
 
 ---
 
