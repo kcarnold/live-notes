@@ -152,6 +152,33 @@ home is a real signal.
 
 ---
 
+## 2026-07-27 — token contract re-verified against `main` (no change needed)
+
+`main` grew a participant-attribute "tag" for the organizer, which raised the question of
+whether `LiveKitTokenClient`'s request is stale. It isn't. Recorded so nobody re-derives it.
+
+- **The request body is unchanged.** `server.ts` still reads `role` from the POST body, and
+  `role === 'organizer'` is what sets `canPublish` on the grant. `requestBody` sends
+  `{room, identity: "organizer-host", role: "organizer"}`, byte-for-byte what
+  `src/BroadcastControl.tsx` sends. Dropping `role` would yield a token that connects fine
+  and silently publishes nothing.
+- **The tag is an output, not a new input.** The server *also* mirrors the role into a
+  LiveKit participant attribute (`attributes: { role: 'organizer' }`), derived from the same
+  request field. As of today nothing in production reads it — the only attribute actually
+  consumed is `listen` (`LISTEN_ATTRIBUTE`), used by the translation supervisor to count
+  per-language listener demand.
+- **Broadcaster detection is still by identity prefix.** `ORGANIZER_PREFIX = "organizer-"` in
+  both `live-audio/translation-session-manager.ts` and `src/ListenViewer.tsx`. So the literal
+  identity `organizer-host` still matters, and the `AudioFeederCore` test asserting it is
+  guarding the right thing.
+
+Consequence worth keeping in view: because the app and the browser page use the *same literal
+identity*, and LiveKit permits one participant per identity, they remain mutually exclusive by
+construction. The app currently handles being evicted badly — see the tracking issue on
+`Publisher` not observing room state.
+
+---
+
 ## Earlier history (reconstructed from git, 2026-06-30 → 2026-07-26)
 
 Not contemporaneous notes — assembled after the fact from commit messages and code, recorded
