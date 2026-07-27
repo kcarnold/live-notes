@@ -74,6 +74,68 @@ open AudioFeeder.xcodeproj # then just hit Run
 Re-run `xcodegen generate` after changing `project.yml` (or after adding source files, since
 the file list is captured at generation time).
 
+## Watching the logs
+
+The app has no console window and, when it's doing its job, no visible UI beyond a menu-bar
+glyph. Everything it does goes to **unified logging** (`os.Logger`) under the subsystem
+`org.kenarnold.audio-feeder`, so you can watch a run live — or reconstruct one after the
+fact — from any Terminal, with no debugger and no Xcode attached. This works identically for
+an app launched from the Finder, from a login item, or from Xcode.
+
+**Watch live** (leave this running in a Terminal while you test):
+
+```bash
+log stream --predicate 'subsystem == "org.kenarnold.audio-feeder"' --style compact
+```
+
+**Look at what already happened** — this is the important one, because unified logging is a
+ring buffer that's always recording. If the app misbehaved ten minutes ago and you *weren't*
+streaming, the logs are still there:
+
+```bash
+log show --predicate 'subsystem == "org.kenarnold.audio-feeder"' --last 30m --style compact
+```
+
+Useful variations:
+
+```bash
+# Just one category: controller | capture | publisher | devices
+log stream --predicate 'subsystem == "org.kenarnold.audio-feeder" AND category == "publisher"'
+
+# Errors only, across the whole app
+log show --predicate 'subsystem == "org.kenarnold.audio-feeder" AND messageType == "error"' --last 1h
+
+# Include the LiveKit SDK's own chatter alongside ours (noisy, but this is where
+# ICE/WebSocket failures show up)
+log stream --predicate 'subsystem == "org.kenarnold.audio-feeder" OR process == "Audio Feeder"'
+
+# Hand a whole session to someone else
+log show --predicate 'process == "Audio Feeder"' --last 1h --style compact > feeder.log
+```
+
+`--style compact` is the readable one; `--style syslog` adds full timestamps, and
+`--style json`/`ndjson` are there if you want to post-process. Add `--info --debug` to
+include lower-priority levels (we log at `notice` and `error`, which are captured by default
+and persisted to disk — `info` and `debug` messages are memory-only and need the flags).
+
+> **Gotcha:** `log` is a builtin in some shells (fish among them), which will swallow these
+> arguments and report something unhelpful like `too many arguments`. If that happens, spell
+> it `/usr/bin/log`.
+
+Console.app is the GUI equivalent if you prefer clicking: paste the same predicate into its
+search field. The system log is a ring buffer that is always recording every process on the
+machine, so `log show` works retroactively even for a run you didn't plan to observe — which
+is exactly the situation the on-site failure created.
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Status cycles `Connecting…` → `Error` → repeat, ~60s per attempt | Room connect is timing out at every LiveKit Cloud region. Check the `publisher` category for the real error. If the app is sandboxed without `com.apple.security.network.server`, WebRTC can't bind UDP ports and ICE never completes — see `NOTEBOOK.md`. |
+| `input format is empty (0.0 Hz, 0 ch)` | Microphone permission denied. Check System Settings → Privacy & Security → Microphone. Ad-hoc-signed builds get a new code identity on every rebuild, so the grant doesn't stick — build the `.app` once and stop rebuilding it. |
+| `token endpoint returned HTTP 503` | The server has no `LIVEKIT_*` configuration. |
+| Publishes, but the browser broadcast page stops working | Expected. Both join as `organizer-host`, and LiveKit allows one participant per identity — use one or the other. |
+
 ## Building a distributable `.app`
 
 `Packaging/build-app.sh` wraps the above plus `xcodebuild archive`/`-exportArchive`; it

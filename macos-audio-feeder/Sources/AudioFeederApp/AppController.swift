@@ -28,7 +28,12 @@ final class AppController: ObservableObject {
         }
     }
 
-    @Published private(set) var status: Status = .idle
+    @Published private(set) var status: Status = .idle {
+        didSet {
+            guard status != oldValue else { return }
+            Log.controller.notice("status: \(self.status.label, privacy: .public)")
+        }
+    }
     @Published private(set) var level: Float = 0          // 0...1 for the meter
     @Published private(set) var devices: [AudioInputDevice] = []
     @Published var config: FeederConfig {
@@ -48,9 +53,20 @@ final class AppController: ObservableObject {
         self.config = store.load()
         refreshDevices()
 
+        Log.controller.notice("""
+            launched; server \(self.config.serverURL, privacy: .public), \
+            room \(self.config.resolvedDocID(), privacy: .public), \
+            \(self.devices.count, privacy: .public) input device(s)
+            """)
+
         deviceMonitor.onDevicesChanged = { [weak self] in
-            self?.refreshDevices()
-            self?.evaluate()
+            guard let self else { return }
+            self.refreshDevices()
+            Log.devices.notice("""
+                hot-plug: now \(self.devices.count, privacy: .public) input device(s) — \
+                \(self.devices.map(\.name).joined(separator: ", "), privacy: .public)
+                """)
+            self.evaluate()
         }
         deviceMonitor.startMonitoring()
 
@@ -110,6 +126,11 @@ final class AppController: ObservableObject {
 
     private func startPipeline(device: AudioInputDevice) {
         let docID = config.resolvedDocID()
+        Log.controller.notice("""
+            starting pipeline: device \(device.name, privacy: .public) \
+            (\(device.inputChannelCount, privacy: .public) ch, uid \(device.uid, privacy: .public)), \
+            channel \(self.config.channelIndex + 1, privacy: .public), room \(docID, privacy: .public)
+            """)
 
         let publisher = Publisher(serverURL: config.serverURL)
         publisher.onStateChange = { [weak self] pubState in
@@ -131,6 +152,7 @@ final class AppController: ObservableObject {
             publisher.start(room: docID)
             status = .connecting
         } catch {
+            Log.controller.error("capture start failed: \(String(describing: error), privacy: .public)")
             status = .error("\(error)")
             scheduleRetry()
         }
@@ -155,6 +177,7 @@ final class AppController: ObservableObject {
 
     private func scheduleRetry() {
         retryAfter = Date().addingTimeInterval(retryBackoff)
+        Log.controller.notice("retrying in \(self.retryBackoff, privacy: .public)s")
         retryBackoff = min(retryBackoff * 2, 30)
     }
 

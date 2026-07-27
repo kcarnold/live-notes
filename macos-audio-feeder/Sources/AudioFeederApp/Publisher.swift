@@ -23,7 +23,11 @@ final class Publisher {
     }
 
     private(set) var state: State = .disconnected {
-        didSet { if state != oldValue { onStateChange?(state) } }
+        didSet {
+            guard state != oldValue else { return }
+            Log.publisher.notice("state \(String(describing: oldValue), privacy: .public) -> \(String(describing: self.state), privacy: .public)")
+            onStateChange?(state)
+        }
     }
     var onStateChange: ((State) -> Void)?
 
@@ -64,19 +68,27 @@ final class Publisher {
 
     private func connect(docID: String) async {
         do {
+            Log.publisher.notice("fetching token from \(self.serverURL, privacy: .public) for room \(docID, privacy: .public)")
             let token = try await LiveKitTokenClient(serverURL: serverURL).fetchToken(room: docID)
             if Task.isCancelled { return }
+            Log.publisher.notice("token OK; connecting to \(token.serverUrl, privacy: .public)")
 
             let room = Room()
             try await room.connect(url: token.serverUrl, token: token.token)
             if Task.isCancelled { try? await room.disconnect(); return }
+            Log.publisher.notice("room connected")
 
             try AudioManager.shared.setManualRenderingMode(true)
             try await room.localParticipant.setMicrophone(enabled: true)
+            Log.publisher.notice("publishing as \(LiveKitTokenClient.organizerIdentity, privacy: .public)")
 
             self.room = room
             state = .connected
         } catch {
+            // The full error, not just the UI summary. A `Room.connect` failure here is the
+            // difference between "no network", "token endpoint 503", and "ICE never
+            // completed" — and only this line can tell them apart after the fact.
+            Log.publisher.error("connect failed: \(String(describing: error), privacy: .public)")
             state = .failed("\(error)")
         }
     }

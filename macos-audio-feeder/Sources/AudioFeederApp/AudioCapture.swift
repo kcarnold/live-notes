@@ -6,12 +6,19 @@ import AudioFeederCore
 enum AudioCaptureError: Error, CustomStringConvertible {
     case couldNotSetDevice(OSStatus)
     case noInputAudioUnit
+    case emptyInputFormat(sampleRate: Double, channels: UInt32)
+    case channelOutOfRange(requested: Int, available: UInt32)
     case engineStartFailed(Error)
 
     var description: String {
         switch self {
         case let .couldNotSetDevice(status): return "could not bind input device (OSStatus \(status))"
         case .noInputAudioUnit: return "input node has no audio unit"
+        case let .emptyInputFormat(rate, channels):
+            return "input format is empty (\(rate) Hz, \(channels) ch) — microphone permission "
+                + "denied, or the device exposes no input stream"
+        case let .channelOutOfRange(requested, available):
+            return "channel \(requested + 1) requested but the device has only \(available)"
         case let .engineStartFailed(error): return "audio engine failed to start: \(error)"
         }
     }
@@ -50,6 +57,25 @@ final class AudioCapture {
 
         // Tap the input in its native (multichannel) format; extract our channel per buffer.
         let format = inputNode.inputFormat(forBus: 0)
+        Log.capture.notice("""
+            device \(deviceID, privacy: .public) input format: \
+            \(format.sampleRate, privacy: .public) Hz, \(format.channelCount, privacy: .public) ch; \
+            requested channel \(self.channelIndex + 1, privacy: .public)
+            """)
+
+        // A 0 Hz / 0 ch format is what a denied microphone TCC grant looks like from here.
+        // Installing a tap with it is what produces the bare `throwing -10877`
+        // (kAudioUnitErr_InvalidElement) in the console, with nothing to explain it. Fail
+        // loudly instead — the message reaches both the log and the menu-bar status.
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            throw AudioCaptureError.emptyInputFormat(sampleRate: format.sampleRate,
+                                                     channels: format.channelCount)
+        }
+        guard channelIndex < Int(format.channelCount) else {
+            throw AudioCaptureError.channelOutOfRange(requested: channelIndex,
+                                                      available: format.channelCount)
+        }
+
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
             guard let self else { return }
             guard let mono = ChannelExtractor.extractMono(from: buffer, channel: self.channelIndex) else {
@@ -64,8 +90,10 @@ final class AudioCapture {
             try engine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
+            Log.capture.error("engine start failed: \(String(describing: error), privacy: .public)")
             throw AudioCaptureError.engineStartFailed(error)
         }
+        Log.capture.notice("capture started")
         running = true
     }
 
@@ -74,6 +102,7 @@ final class AudioCapture {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         running = false
+        Log.capture.notice("capture stopped")
     }
 
     var isRunning: Bool { running }
