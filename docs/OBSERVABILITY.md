@@ -13,12 +13,15 @@ most of these signals.
    sink, captured with `distinctId = sessionId` and every property also tagged with `sessionId`,
    `targetLanguage`, and `identity` (`translator-<code>`), so a talk's whole history groups by
    session. Best for *history and rates* ("how often do sessions drop", "how long are the gaps").
-   Off when telemetry is unconfigured (dev/tests); logs still print each event.
+   Off when telemetry is unconfigured (dev/tests); logs still print each event. Every event
+   also carries `provider` (`gemini`/`openai`) and `model`, so a query can span both backends
+   even though the provider-leg event *names* are per-provider (see below).
 2. **In-process manager/bridge state** — live, authoritative for "what is running right now",
    but in-memory only (single server instance; rebuilt from presence after a restart by the
    supervisor). Exposed by `GET /api/livekit/translate/status?sessionId=…` →
    `getActiveTranslations()` (`{ language, translatorIdentity, status, subscriberCount,
-   health }[]`, where `health` is the bridge's composite snapshot: per-leg Gemini state,
+   health }[]`, where `health` is the bridge's composite snapshot: `providerName`, the
+   provider leg's state (`provider` — the field was called `gemini` before there were two),
    last input/output frame ages, reconnect count, gap-buffer depth).
 3. **LiveKit RoomService** — source of truth for *room/participant presence* (who's actually
    connected: `organizer-*`, `translator-*`, listeners; their track publications, and each
@@ -35,6 +38,19 @@ supervisor start/stop decision.
 
 ## PostHog events (from `translation-bridge.ts`)
 
+**Provider-leg events are prefixed with the provider name.** The table below lists the Gemini
+names; an OpenAI bridge (Haitian Creole) emits the identical set as `openai_session_closed`,
+`openai_reconnect_attempt`, and so on. That's deliberate rather than tidy: every existing
+dashboard and saved insight is written against the `gemini_*` names, and observability is worth
+least at the moment it changes meaning — so the incumbent's history is left alone and the second
+provider gets a parallel series. Break down or filter by the `provider` property to see both at
+once. Room/input-side events (`livekit_*`, `organizer_*`, `supervisor_*`) are provider-independent
+and are **not** prefixed.
+
+Two Gemini-shaped rows do not apply to OpenAI: it sends no `goAway` (a session hits its limit and
+the socket simply closes, which lands in `*_session_closed` and the backoff path) and offers no
+resumption handle. `openai_session_error` is the one row Gemini doesn't have.
+
 | Event | Meaning | Key properties |
 |---|---|---|
 | `gemini_session_setup_complete` | A Gemini socket finished setup and is serving. | `isReconnect`, `trigger`, `setupLatencyMs`, `totalReconnects` |
@@ -48,6 +64,7 @@ supervisor start/stop decision.
 | `gemini_suspended_silence` | Cost path: socket torn down after sustained silence. | `silentMs`, `framesSent/Received` |
 | `gemini_resumed_voice` | Cost path: socket reopened on returning speech. | `silentMs` |
 | `gemini_session_resumption_update` | Whether the translate model offered a resume handle (not yet used). | `resumable`, `hasHandle` |
+| `<provider>_session_error` | The server reported an error on the session. `fatal` means the session is over and a replacement socket is opening; non-fatal is per-response (e.g. OpenAI rejecting a response while one is still speaking) and the socket keeps working. | `code`, `message`, `fatal` |
 
 Server-level exceptions go through `phClient.captureException(...)` in
 [server.ts](../server.ts) (token issue, translate start, unsubscribe, etc.).
@@ -70,19 +87,26 @@ Server-level exceptions go through `phClient.captureException(...)` in
 - **Is the supervisor converging?** `supervisor_bridge_started` / `supervisor_bridge_stopped` /
   `supervisor_bridge_start_failed` events (distinctId = sessionId). A start/stop cycle repeating
   for one language means demand is flapping or a bridge can't hold; `start_failed` repeating
-  means LiveKit/Gemini won't accept the bridge at all.
+  means LiveKit or the provider won't accept the bridge at all. One specific cause worth
+  recognizing: `start_failed` for `ht` with "No realtime provider configured that can translate
+  into..." means `OPENAI_API_KEY` is unset — Haitian Creole has no Gemini fallback, so it fails
+  rather than quietly translating into something else. The server logs which providers it has at
+  boot (`[server] Live-audio providers: …`).
+- **Which backend is a language on?** `health.providerName` from the status endpoint, or the
+  `provider` property on any bridge event. Expect `gemini` everywhere except `ht`, unless
+  `LIVE_AUDIO_OPENAI_LANGUAGES` has been set.
 
 ## Gaps worth filling (not yet exposed)
 
-The status endpoint now returns each bridge's `health` snapshot (`status`, per-leg `gemini`
-state, `lastInputFrameAt`/`lastOutputFrameAt`, `reconnects`, `bufferedFrames`). Still cheap and
-worth surfacing:
+The status endpoint now returns each bridge's `health` snapshot (`status`, `providerName`,
+per-leg `provider` state, `lastInputFrameAt`/`lastOutputFrameAt`, `reconnects`,
+`bufferedFrames`). Still cheap and worth surfacing:
 
-- Per bridge: `framesSentToGemini` / `framesReceivedFromGemini`, `lastVoiceAt` /
+- Per bridge: `framesSentToProvider` / `framesReceivedFromProvider`, `lastVoiceAt` /
   `sessionConnectedAt` ages, `framesDroppedWhileDown`.
 - Server: whether the cost path is enabled and whether LiveKit is configured, so a dashboard can
   explain why behavior differs between environments.
-- A cheap **liveness heartbeat**: "frames received from Gemini in the last N s" per active bridge
+- A cheap **liveness heartbeat**: "frames received from the provider in the last N s" per active bridge
   distinguishes "active" from "active but silent/stuck" without waiting for the 2 s `gemini_audio_gap`
   threshold. Consider a periodic gauge rather than only edge events.
 

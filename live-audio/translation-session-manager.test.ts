@@ -129,7 +129,8 @@ class FakeBridge {
   health() {
     return {
       status: this.status,
-      gemini: "ready" as const,
+      providerName: "gemini" as const,
+      provider: "ready" as const,
       lastInputFrameAt: 0,
       lastOutputFrameAt: 0,
       reconnects: 0,
@@ -155,6 +156,10 @@ function makeManager(rooms: Map<string, PresentParticipant[]>) {
     // only constructed lazily per session and these tests never await its sync.
     documentManager: null as unknown as DocumentManager,
     livekit: { url: "ws://fake", apiKey: "k", apiSecret: "s" },
+    // Provider selection is a real decision now (Gemini for most languages, OpenAI for
+    // Haitian Creole), and it needs to know which keys exist. Injecting both keeps these
+    // supervisor tests about *demand* rather than about credentials.
+    providerKeys: { gemini: "fake-gemini-key", openai: "fake-openai-key" },
     directory,
     bridgeFactory: (sessionId, targetLanguage) => {
       const bridge = new FakeBridge(sessionId, targetLanguage);

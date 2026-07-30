@@ -71,14 +71,37 @@ an incident happens that this list would not have caught, add a line.
 - [ ] With **no listener yet**, the English transcript still flows — the default translator
       runs whenever the broadcaster is present, whatever the cost path is set to.
 
+Haitian Creole (the OpenAI provider). Creole is the one language not served by Gemini Live
+Translate, so it runs on a different backend — the general OpenAI speech-to-speech model told
+by prompt to interpret. **That path is unvalidated by ear and cannot be validated by CI**, so
+this block is a listening test, not a plumbing test, and it wants someone who speaks Creole:
+
+- [ ] Join Listen as `ht` while the speaker is talking. A `translator-ht` participant appears
+      and the transcript flows. Server log: `Starting bridge … via openai/gpt-realtime-2.1`.
+      (If the bridge won't start, check the boot line `[server] Live-audio providers: …` —
+      Creole has no Gemini fallback, so a missing `OPENAI_API_KEY` fails outright.)
+- [ ] **It is actually Creole**, not French and not English. This is the whole feature.
+- [ ] **It interprets, it doesn't converse.** Ask a rhetorical question from the podium
+      ("So what does Paul mean here?") and confirm the bot *translates the question* instead of
+      answering it. Also listen for added greetings, preambles, or commentary. Any of these
+      means the prompt lost — note it in the PR/issue rather than silently retuning.
+- [ ] **Lag under continuous speech.** This model waits for an end-of-turn before it speaks,
+      and is configured not to let new speech cut off a translation in progress, so lag can
+      grow behind a speaker who never pauses. Talk steadily for ~60 s and judge whether the
+      delay is usable for the room. Compare a French listener (Gemini, continuous) side by side.
+- [ ] Check the server log for `openai_session_error` lines — particularly a rejected response
+      while another is still speaking, the expected cost of the no-interruption setting.
+
 Cost path (only when `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level — off by default; the
 startup log line reports which):
 
-- [ ] **Silence suspend/resume**: stay silent >30 s (server logs "Suspending Gemini after…");
-      then speak — the first words resume translation ("resuming Gemini after…") without the
+- [ ] **Silence suspend/resume**: stay silent >30 s (server logs "Suspending gemini after…");
+      then speak — the first words resume translation ("resuming gemini after…") without the
       listener resubscribing.
 - [ ] With the threshold **unset**, the opposite: stay silent >30 s and confirm no
-      "Suspending Gemini" line appears, with the mic both open-but-quiet and fully muted.
+      "Suspending" line appears, with the mic both open-but-quiet and fully muted.
+- [ ] If a Creole listener is connected, the same two checks on its bridge (logs name the
+      provider, so look for `openai`) — silence gating is shared code, not per-provider.
 
 ## 5. TTS (text-to-speech on translated notes)
 
@@ -89,6 +112,7 @@ startup log line reports which):
 
 - [ ] Close all listener tabs; confirm the supervisor winds the translator bots down within
       ~2 minutes (60 s demand grace + a reconcile tick; watch for `[SessionManager] Supervisor
-      stopping …` in server logs) — no orphaned Gemini sessions burning quota. (With the cost
+      stopping …` in server logs) — no orphaned provider sessions burning quota (check both
+      Gemini and, if Creole ran, OpenAI). (With the cost
       path enabled, closing listeners is not enough: the default translator stays up for the
       transcript until the broadcaster also leaves.)

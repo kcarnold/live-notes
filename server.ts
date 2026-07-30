@@ -188,13 +188,19 @@ app.post('/api/ys-auth', async (req, res) => {
 
 
 // ---------------------------------------------------------------------------
-// Live speech-to-speech translation (Gemini Live + LiveKit)
+// Live speech-to-speech translation (LiveKit + a realtime translation provider)
 //
 // Self-contained, opt-in feature. If the LIVEKIT_* env vars are unset these
 // routes return 503 and the rest of the app is unaffected. The LiveKit room
 // name is the Y-Sweet doc id, so audio rooms line up 1:1 with outline sessions.
 // The speaker (editor) always joins as ORGANIZER_IDENTITY; per-language
 // translator bots subscribe to that identity.
+//
+// Each bot runs on whichever provider can speak its language: Gemini Live
+// Translate for nearly everything, OpenAI Realtime for Haitian Creole (which
+// Gemini cannot produce). That routing lives in
+// live-audio/provider-selection.ts; nothing here has to know about it beyond
+// providing the keys via the environment.
 // ---------------------------------------------------------------------------
 const ORGANIZER_IDENTITY = 'organizer-host';
 
@@ -207,7 +213,7 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
 }
 
 // The cost path's only knob: the dBFS level below which the organizer's mic counts as
-// silence, at which point a bridge suspends its Gemini socket. Unset (the default)
+// silence, at which point a bridge suspends its provider socket. Unset (the default)
 // means bridges never suspend. The goaway/reconnect buffering is independent of this
 // and always on, as is the default translator — silence gating no longer decides
 // which bridges exist, only what an existing one does while nobody is speaking.
@@ -228,6 +234,13 @@ const SILENCE_THRESHOLD_DBFS = parseSilenceThresholdDbfs(process.env.LIVE_AUDIO_
       `[server] Live-audio silence gating (cost path): ${
         Number.isFinite(SILENCE_THRESHOLD_DBFS) ? `${SILENCE_THRESHOLD_DBFS} dBFS` : 'disabled'
       }`
+    );
+    // Which realtime backends this deployment can actually reach. Worth one line at
+    // boot: without OPENAI_API_KEY, a listener asking for Haitian Creole gets a bridge
+    // that refuses to start, and this is the log that explains why.
+    console.log(
+      `[server] Live-audio providers: Gemini ${process.env.GEMINI_API_KEY ? 'configured' : 'MISSING'}, ` +
+        `OpenAI ${process.env.OPENAI_API_KEY ? 'configured (Haitian Creole available)' : 'not configured (no Haitian Creole)'}`
     );
   }
 }
