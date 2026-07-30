@@ -10,6 +10,17 @@ outages in services that run for ninety. **The notes here are written so they ca
 each fix is stated as a failure mode, an invariant, and a minimal remedy, not as a diff against
 our code.
 
+> **Naming note (since the OpenAI provider landed).** Everything below still holds, but the
+> bridge's model-side leg is no longer Gemini-specific: it talks to a `RealtimeProvider`
+> (Gemini Live Translate for most languages, OpenAI Realtime for Haitian Creole). Where this
+> document says "Gemini" about the *incidents*, it means Gemini — that's what was running.
+> Where it says "Gemini" about the *mechanism*, read "the provider": the fields, methods, and
+> tests were renamed accordingly (`geminiWs` → `providerWs`, `connectGemini` →
+> `connectProvider`, `sendAudioToGemini` → `sendAudioToProvider`, `health().gemini` →
+> `health().provider`). The defenses are shared by both providers, which is the point of the
+> seam. Telemetry event names stay per-provider (`gemini_*`, `openai_*`) so this history keeps
+> its dashboards — see [OBSERVABILITY.md](OBSERVABILITY.md).
+
 ## The invariant
 
 > A bridge whose `status` is `"active"` is receiving organizer audio.

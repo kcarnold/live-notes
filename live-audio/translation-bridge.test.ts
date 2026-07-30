@@ -4,7 +4,6 @@ import {
   frameRmsDbfs,
   isSilentFrame,
   nextBackoffMs,
-  parseGoAwayTimeLeftMs,
   parseSilenceThresholdDbfs,
   SILENCE_FLOOR_DBFS,
   SILENCE_GATING_OFF_DBFS,
@@ -119,37 +118,10 @@ describe("silence thresholds", () => {
   });
 });
 
-// The Gemini Live session is periodically terminated; the bridge reconnects with
-// backoff and reads the goAway `timeLeft` to reconnect proactively. These pure
-// helpers back that logic and are the testable seams (the socket plumbing is not).
-describe("parseGoAwayTimeLeftMs", () => {
-  it("parses protobuf Duration strings (seconds)", () => {
-    expect(parseGoAwayTimeLeftMs("10s")).toBe(10_000);
-    expect(parseGoAwayTimeLeftMs("10.5s")).toBe(10_500);
-    expect(parseGoAwayTimeLeftMs(" 2s ")).toBe(2_000);
-  });
-
-  it("parses a bare numeric string as seconds", () => {
-    expect(parseGoAwayTimeLeftMs("10")).toBe(10_000);
-  });
-
-  it("parses a number as seconds", () => {
-    expect(parseGoAwayTimeLeftMs(7)).toBe(7_000);
-  });
-
-  it("parses an expanded { seconds, nanos } Duration object", () => {
-    expect(parseGoAwayTimeLeftMs({ seconds: 8 })).toBe(8_000);
-    expect(parseGoAwayTimeLeftMs({ seconds: "8", nanos: 500_000_000 })).toBe(8_500);
-  });
-
-  it("returns null for missing or unparseable values", () => {
-    expect(parseGoAwayTimeLeftMs(null)).toBeNull();
-    expect(parseGoAwayTimeLeftMs(undefined)).toBeNull();
-    expect(parseGoAwayTimeLeftMs("soon")).toBeNull();
-    expect(parseGoAwayTimeLeftMs({})).toBeNull();
-  });
-});
-
+// Realtime sessions are periodically terminated by the provider, so the bridge
+// reconnects with backoff. This is the testable seam of that path; the socket plumbing
+// around it is covered end-to-end instead (translation-bridge.e2e.test.ts), and reading
+// a provider's own "I'm about to hang up" message belongs to the provider tests.
 describe("nextBackoffMs", () => {
   const opts = { initialMs: 1_000, maxMs: 30_000 };
 

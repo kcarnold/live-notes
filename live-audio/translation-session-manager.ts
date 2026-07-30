@@ -21,6 +21,7 @@ import type { SimulateScenarioKind } from "@livekit/rtc-node";
 import type { DocumentManager } from "@y-sweet/sdk";
 import { RoomServiceClient } from "livekit-server-sdk";
 
+import { parseLanguageList, providerForLanguage, type ProviderKeys } from "./provider-selection.ts";
 import { TranscriptWriter } from "./transcript-writer.ts";
 import { SILENCE_GATING_OFF_DBFS, TranslationBridge } from "./translation-bridge.ts";
 import type { BridgeHealth, BridgeStatus } from "./translation-bridge.ts";
@@ -204,6 +205,14 @@ export class TranslationSessionManager {
   // say in which bridges exist (see computeDesiredLanguages).
   private silenceThresholdDbfs: number = SILENCE_GATING_OFF_DBFS;
 
+  // Languages an operator has pushed onto the OpenAI provider by hand
+  // (`LIVE_AUDIO_OPENAI_LANGUAGES`), for comparing the two backends on a language both
+  // can serve. Empty in the normal case, where routing is decided by capability alone.
+  private openaiLanguages: ReadonlySet<string> = new Set();
+
+  // Set by init() to bypass the environment; null means "read process.env".
+  private injectedProviderKeys: ProviderKeys | null = null;
+
   static getInstance(): TranslationSessionManager {
     if (!TranslationSessionManager.instance) {
       TranslationSessionManager.instance = new TranslationSessionManager();
@@ -221,6 +230,10 @@ export class TranslationSessionManager {
     livekit: LiveKitConfig;
     telemetry?: TelemetryClient;
     silenceThresholdDbfs?: number;
+    /** Override the `LIVE_AUDIO_OPENAI_LANGUAGES` routing list (tests). */
+    openaiLanguages?: Iterable<string>;
+    /** Override the provider API keys read from the environment (tests). */
+    providerKeys?: ProviderKeys;
     directory?: RoomDirectory;
     bridgeFactory?: typeof defaultBridgeFactory;
   }): void {
@@ -228,6 +241,10 @@ export class TranslationSessionManager {
     this.livekitConfig = opts.livekit;
     this.telemetry = opts.telemetry ?? null;
     this.silenceThresholdDbfs = opts.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
+    this.openaiLanguages = opts.openaiLanguages
+      ? new Set(opts.openaiLanguages)
+      : parseLanguageList(process.env.LIVE_AUDIO_OPENAI_LANGUAGES);
+    this.injectedProviderKeys = opts.providerKeys ?? null;
     this.directory = opts.directory ?? roomServiceDirectory(opts.livekit);
     if (opts.bridgeFactory) this.bridgeFactory = opts.bridgeFactory;
     this.startSupervisor();
@@ -275,6 +292,20 @@ export class TranslationSessionManager {
       return defaultBridge;
     }
     return this.ensureBridge(sessionId, targetLanguage, organizerIdentity, writer);
+  }
+
+  /**
+   * The API keys available for realtime translation, read fresh so a key added to the
+   * environment doesn't require a manager rebuild. Which languages each key unlocks is
+   * provider-selection.ts's business, not the manager's.
+   */
+  private providerKeys(): ProviderKeys {
+    return (
+      this.injectedProviderKeys ?? {
+        gemini: process.env.GEMINI_API_KEY,
+        openai: process.env.OPENAI_API_KEY,
+      }
+    );
   }
 
   private getStamps(sessionId: string): Map<string, number> {
@@ -335,18 +366,39 @@ export class TranslationSessionManager {
           telemetry.capture({ distinctId: sessionId, event, properties: { ...properties, sessionId } })
       : null;
 
+    const writesSourceTranscript = targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE;
+
+    // Which realtime backend can speak this language (Gemini for nearly everything,
+    // OpenAI for Haitian Creole). Resolved here, once, so the bridge never has to know
+    // there was a choice — and so an unserveable language fails loudly at start rather
+    // than quietly translating into nothing.
+    const provider = providerForLanguage({
+      language: targetLanguage,
+      keys: this.providerKeys(),
+      openaiLanguages: this.openaiLanguages,
+      transcribeInput: writesSourceTranscript,
+    });
+    if (!provider) {
+      throw new Error(
+        `No realtime provider configured that can translate into "${targetLanguage}"`
+      );
+    }
+
     const config = {
       geminiApiKey: process.env.GEMINI_API_KEY!,
+      provider,
       livekitUrl: this.livekitConfig?.url ?? process.env.LIVEKIT_URL ?? process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "ws://localhost:7880",
       livekitApiKey: this.livekitConfig?.apiKey ?? process.env.LIVEKIT_API_KEY!,
       livekitApiSecret: this.livekitConfig?.apiSecret ?? process.env.LIVEKIT_API_SECRET!,
       writer,
-      writesSourceTranscript: targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE,
+      writesSourceTranscript,
       recordEvent,
       silenceThresholdDbfs: this.silenceThresholdDbfs,
     };
 
-    console.log(`[SessionManager] Creating new bridge for ${targetLanguage} in session ${sessionId}`);
+    console.log(
+      `[SessionManager] Creating new bridge for ${targetLanguage} in session ${sessionId} on ${provider.name}/${provider.model}`
+    );
 
     const MAX_START_ATTEMPTS = 3;
     let lastError: unknown;

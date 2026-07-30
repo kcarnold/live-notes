@@ -10,8 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * suite that only exercises pure functions would have passed, green, through both.
  *
  * So these tests drive the real TranslationBridge against fakes of the only two things it
- * talks to — a LiveKit room and a Gemini websocket — and assert on the one thing that
- * actually matters to a listener: **is audio still reaching Gemini?** Nothing here inspects
+ * talks to — a LiveKit room and a provider websocket — and assert on the one thing that
+ * actually matters to a listener: **is audio still reaching the provider?** Nothing here inspects
  * internal state; each test breaks the input the way production broke it and checks that
  * frames resume.
  *
@@ -86,9 +86,21 @@ class FakeAudioFrame {
   ) {}
 }
 
-/** `new AudioStream(track)` in the bridge resolves to a reader over that track. */
+/**
+ * `new AudioStream(track, opts)` in the bridge resolves to a reader over that track. The
+ * `opts` are recorded because the sample rate in them is how the bridge asks LiveKit to
+ * resample organizer audio to whatever its provider expects — 16 kHz for Gemini, 24 kHz
+ * for OpenAI. Get that wrong and the audio still flows, still reports healthy, and is
+ * pitched and paced wrong on arrival: a failure you can only hear.
+ */
 class FakeAudioStream {
-  constructor(private readonly track: FakeRemoteTrack) {}
+  static instances: FakeAudioStream[] = [];
+  constructor(
+    private readonly track: FakeRemoteTrack,
+    readonly opts?: { sampleRate?: number; numChannels?: number; frameSizeMs?: number }
+  ) {
+    FakeAudioStream.instances.push(this);
+  }
   getReader() {
     return { read: () => this.track.read() };
   }
@@ -209,12 +221,23 @@ class FakeRoom extends EventEmitter {
   }
 }
 
+/**
+ * The bridge's *output* leg: translated audio it publishes into the room. Recorded here
+ * (rather than dropped, as it used to be) so a test can assert the last hop — provider
+ * audio actually reaching a LiveKit track — instead of stopping at "we sent input".
+ */
 class FakeAudioSource {
+  static instances: FakeAudioSource[] = [];
+  readonly captured: unknown[] = [];
   constructor(
     readonly sampleRate: number,
     readonly channels: number
-  ) {}
-  async captureFrame(): Promise<void> {}
+  ) {
+    FakeAudioSource.instances.push(this);
+  }
+  async captureFrame(frame: unknown): Promise<void> {
+    this.captured.push(frame);
+  }
 }
 
 vi.mock("@livekit/rtc-node", () => ({
@@ -246,32 +269,73 @@ vi.mock("livekit-server-sdk", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Fake Gemini socket
+// Fake provider socket
+//
+// Speaks both wire protocols, because both are now in production: Gemini Live for most
+// languages and OpenAI Realtime for Haitian Creole. One fake rather than two, so every
+// resilience test below is provider-agnostic by construction — if a reconnect path only
+// worked for Gemini, pointing these tests at the other provider would say so.
+//
+// The load-bearing asymmetry is the handshake. Gemini answers `setup` with
+// `setupComplete` and nothing before it. OpenAI sends `session.created` the moment you
+// connect — *before* our `session.update` is applied, when the session is still a plain
+// chatbot — and only `session.updated` means "configured as an interpreter". A bridge
+// that mistook the first for the second would stream the opening of the talk into an
+// unconfigured model, so the fake reproduces that order faithfully.
 // ---------------------------------------------------------------------------
 
 /** Records every audio frame the bridge sends us — the assertion surface of these tests. */
-class FakeGeminiSocket extends EventEmitter {
+class FakeProviderSocket extends EventEmitter {
   static OPEN = 1;
-  static instances: FakeGeminiSocket[] = [];
+  static instances: FakeProviderSocket[] = [];
 
-  readyState = FakeGeminiSocket.OPEN;
+  readyState = FakeProviderSocket.OPEN;
   readonly audioFramesReceived: string[] = [];
 
-  constructor(readonly url: string) {
+  /**
+   * "createdOnly" answers `session.update` with `session.created` and then goes quiet —
+   * a session that connected but was never configured. See the handshake note above.
+   */
+  static openaiHandshake: "full" | "createdOnly" = "full";
+
+  constructor(
+    readonly url: string,
+    readonly options?: unknown
+  ) {
     super();
-    FakeGeminiSocket.instances.push(this);
+    FakeProviderSocket.instances.push(this);
     setTimeout(() => this.emit("open"), 0);
+  }
+
+  private reply(message: unknown): void {
+    setTimeout(() => this.emit("message", Buffer.from(JSON.stringify(message))), 0);
   }
 
   send(raw: string): void {
     const msg = JSON.parse(raw);
+
+    // --- Gemini ---
     if (msg.setup) {
       // Gemini answers setup with setupComplete; until it does, the bridge won't send audio.
-      setTimeout(() => this.emit("message", Buffer.from(JSON.stringify({ setupComplete: {} }))), 0);
+      this.reply({ setupComplete: {} });
       return;
     }
     if (msg.realtimeInput?.audio?.data) {
       this.audioFramesReceived.push(msg.realtimeInput.audio.data);
+      return;
+    }
+
+    // --- OpenAI ---
+    if (msg.type === "session.update") {
+      this.reply({ type: "session.created", session: {} }); // NOT ready yet
+      if (FakeProviderSocket.openaiHandshake === "full") {
+        this.reply({ type: "session.updated", session: {} }); // now configured
+      }
+      return;
+    }
+    if (msg.type === "input_audio_buffer.append") {
+      this.audioFramesReceived.push(msg.audio);
+      return;
     }
   }
 
@@ -281,22 +345,24 @@ class FakeGeminiSocket extends EventEmitter {
   }
 }
 
-vi.mock("ws", () => ({ default: FakeGeminiSocket }));
+vi.mock("ws", () => ({ default: FakeProviderSocket }));
 
 // ---------------------------------------------------------------------------
 
 const { TranslationBridge, SILENCE_THRESHOLD_DBFS, SILENCE_GATING_OFF_DBFS } = await import(
   "./translation-bridge.ts"
 );
+const { OpenAIProvider } = await import("./openai-provider.ts");
+const { GeminiProvider } = await import("./gemini-provider.ts");
 
 const ORGANIZER = "organizer-host";
 
 /**
- * Frames Gemini has received, across every socket it opened — a Gemini `goAway` reconnect
+ * Frames the provider has received, across every socket it opened — a `goAway` reconnect
  * makes a new one, and we don't care which socket the audio landed on, only that it landed.
  */
-const framesToGemini = () =>
-  FakeGeminiSocket.instances.reduce((n, s) => n + s.audioFramesReceived.length, 0);
+const framesToProvider = () =>
+  FakeProviderSocket.instances.reduce((n, s) => n + s.audioFramesReceived.length, 0);
 
 /** Speak `count` 100ms frames into a mic track and let them propagate. */
 async function speak(track: FakeRemoteTrack, count = 3): Promise<void> {
@@ -339,19 +405,20 @@ async function holdSilence(track: FakeRemoteTrack, ms: number): Promise<void> {
 }
 
 /**
- * Start a bridge. `seat` runs once the bridge has a Room but before its Gemini handshake
+ * Start a bridge. `seat` runs once the bridge has a Room but before its provider handshake
  * completes, which is where the room's starting state gets decided (and where outage 1's
  * race lives). Whatever `seat` returns is handed back to the test.
  */
 async function boot<T>(
   seat: (room: FakeRoom) => T,
-  configOverrides: Partial<ConstructorParameters<typeof TranslationBridge>[3]> = {}
+  configOverrides: Partial<ConstructorParameters<typeof TranslationBridge>[3]> = {},
+  language = "fr"
 ): Promise<{
   bridge: InstanceType<typeof TranslationBridge>;
   room: FakeRoom;
   seated: T;
 }> {
-  const bridge = new TranslationBridge("doc-test", "fr", ORGANIZER, {
+  const bridge = new TranslationBridge("doc-test", language, ORGANIZER, {
     geminiApiKey: "fake-key",
     livekitUrl: "wss://fake.livekit",
     livekitApiKey: "fake",
@@ -362,16 +429,19 @@ async function boot<T>(
   await vi.advanceTimersByTimeAsync(10); // the bridge has constructed its Room
   const room = lastRoom as FakeRoom;
   const seated = seat(room);
-  await vi.advanceTimersByTimeAsync(300); // connectGemini polls for setupComplete every 100ms
+  await vi.advanceTimersByTimeAsync(300); // connectProvider polls for readiness every 100ms
   await started;
   await vi.advanceTimersByTimeAsync(10); // deliver the pending TrackSubscribed
   return { bridge, room, seated };
 }
 
-describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
+describe("TranslationBridge (end-to-end, faked LiveKit + provider)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    FakeGeminiSocket.instances = [];
+    FakeProviderSocket.instances = [];
+    FakeProviderSocket.openaiHandshake = "full";
+    FakeAudioSource.instances = [];
+    FakeAudioStream.instances = [];
     lastRoom = null;
   });
 
@@ -385,7 +455,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
 
     await speak(mic, 3);
 
-    expect(framesToGemini()).toBe(3);
+    expect(framesToProvider()).toBe(3);
     expect(bridge.status).toBe("active");
     await bridge.stop();
   });
@@ -401,7 +471,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await vi.advanceTimersByTimeAsync(10);
     await speak(mic, 2);
 
-    expect(framesToGemini()).toBe(2);
+    expect(framesToProvider()).toBe(2);
     await bridge.stop();
   });
 
@@ -411,7 +481,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
 
     await speak(mic, 3);
-    expect(framesToGemini()).toBe(3);
+    expect(framesToProvider()).toBe(3);
 
     // LiveKit rebuilds the session. The bridge is handed nothing but ParticipantConnected
     // and a dead AudioStream: no TrackPublished, no Disconnected, no error.
@@ -421,7 +491,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     // The speaker keeps talking, now into the new track object.
     await speak(newMic, 4);
 
-    expect(framesToGemini()).toBe(7); // audio resumed — we are not deaf
+    expect(framesToProvider()).toBe(7); // audio resumed — we are not deaf
     expect(bridge.status).toBe("active");
     await bridge.stop();
   });
@@ -433,7 +503,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
 
     await speak(mic, 2);
-    expect(framesToGemini()).toBe(2);
+    expect(framesToProvider()).toBe(2);
 
     // Swap the organizer's publication behind the bridge's back and kill the old stream.
     mic.end();
@@ -446,7 +516,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await vi.advanceTimersByTimeAsync(25_000);
     await speak(newMic, 3);
 
-    expect(framesToGemini()).toBe(5);
+    expect(framesToProvider()).toBe(5);
     await bridge.stop();
   });
 
@@ -469,7 +539,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await vi.advanceTimersByTimeAsync(50);
     await speak(newMic, 3);
 
-    expect(framesToGemini()).toBe(4);
+    expect(framesToProvider()).toBe(4);
     await bridge.stop();
   });
 
@@ -485,7 +555,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
       recordEvent: (event: string) => events.push(event),
     });
     await speak(mic, 2);
-    expect(framesToGemini()).toBe(2);
+    expect(framesToProvider()).toBe(2);
 
     room.emit(RoomEvent.Disconnected, 0);
     await vi.advanceTimersByTimeAsync(10);
@@ -493,8 +563,8 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     expect(bridge.status).toBe("error");
     expect(events).toContain("livekit_disconnected");
     // No paid-for zombie: every Gemini socket is closed.
-    for (const socket of FakeGeminiSocket.instances) {
-      expect(socket.readyState).not.toBe(FakeGeminiSocket.OPEN);
+    for (const socket of FakeProviderSocket.instances) {
+      expect(socket.readyState).not.toBe(FakeProviderSocket.OPEN);
     }
 
     // A deliberate stop stays "closed" — the disconnect its room.disconnect() emits
@@ -515,7 +585,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
       recordEvent: (event: string) => events.push(event),
     });
     await speak(mic, 2);
-    expect(framesToGemini()).toBe(2);
+    expect(framesToProvider()).toBe(2);
 
     // The stream dies; the publication stays, already-subscribed, so reconcile is a no-op.
     mic.end();
@@ -539,7 +609,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await speak(mic, 1);
 
     // Gemini warns it will terminate → the bridge opens a pending replacement...
-    FakeGeminiSocket.instances[0].emit(
+    FakeProviderSocket.instances[0].emit(
       "message",
       Buffer.from(JSON.stringify({ goAway: { timeLeft: "5s" } }))
     );
@@ -577,7 +647,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
   // Silence gating × stall watchdog — the seam the merge created.
   //
   // These two subsystems arrived on different branches and now coexist in
-  // sendAudioToGemini: the watchdog treats "no organizer frames" as a dead input to
+  // sendAudioToProvider: the watchdog treats "no organizer frames" as a dead input to
   // rebuild, while silence gating treats "no *voice*" as a cue to suspend Gemini to save
   // cost. They read the same frames and must not fight. The load-bearing decision in the
   // merge is that liveness is stamped on *every* organizer frame, silence included —
@@ -597,7 +667,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     });
 
     await speakVoice(mic, 3);
-    expect(framesToGemini()).toBeGreaterThanOrEqual(3);
+    expect(framesToProvider()).toBeGreaterThanOrEqual(3);
 
     // 29s of open-mic room tone: past the 15s stall threshold, short of the 30s suspend.
     await holdSilence(mic, 29_000);
@@ -615,11 +685,11 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
 
     // Speech returns → Gemini resumes and audio reaches it again (buffered pre-roll +
     // fresh frames flushed into the new session).
-    const before = framesToGemini();
+    const before = framesToProvider();
     await speakVoice(mic, 4);
     await vi.advanceTimersByTimeAsync(300); // let the replacement socket set up and flush
     expect(events).toContain("gemini_resumed_voice");
-    expect(framesToGemini()).toBeGreaterThan(before);
+    expect(framesToProvider()).toBeGreaterThan(before);
     await bridge.stop();
   });
 
@@ -635,7 +705,7 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     });
 
     await speakVoice(mic, 2);
-    expect(framesToGemini()).toBeGreaterThanOrEqual(2);
+    expect(framesToProvider()).toBeGreaterThanOrEqual(2);
 
     // Swap the publication behind the bridge's back and kill the old stream — no frames
     // arrive on the new one until we resubscribe.
@@ -652,9 +722,9 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     expect(events).not.toContain("gemini_suspended_silence");
 
     // Audio flows again through the resubscribed track.
-    const before = framesToGemini();
+    const before = framesToProvider();
     await speakVoice(newMic, 3);
-    expect(framesToGemini()).toBeGreaterThan(before);
+    expect(framesToProvider()).toBeGreaterThan(before);
     await bridge.stop();
   });
 
@@ -694,6 +764,126 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
 
     await vi.advanceTimersByTimeAsync(45_000); // past the 30s suspend window, no frames at all
     expect(events).not.toContain("gemini_suspended_silence");
+    await bridge.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // The second provider.
+  //
+  // Haitian Creole runs on OpenAI Realtime because Gemini Live Translate has no voice
+  // for it. The bridge around it is the *same* bridge — that's the point of the provider
+  // seam — so these tests deliberately don't re-test reconnects or the watchdog. They
+  // test the two things a new provider can get wrong on its own: the handshake (when is
+  // it safe to send audio) and the full audio round trip in both directions.
+  // -------------------------------------------------------------------------
+
+  /** A bridge translating into Haitian Creole over the OpenAI protocol. */
+  const bootOpenAI = (
+    seat: (room: FakeRoom) => FakeRemoteTrack,
+    overrides: Partial<ConstructorParameters<typeof TranslationBridge>[3]> = {}
+  ) =>
+    boot(
+      seat,
+      {
+        provider: new OpenAIProvider(
+          { apiKey: "fake-openai-key", targetLanguage: "ht", transcribeInput: false },
+          {}
+        ),
+        ...overrides,
+      },
+      "ht"
+    );
+
+  it("carries Haitian Creole end-to-end over the OpenAI protocol", async () => {
+    // Organizer mic → input_audio_buffer.append → (translation) → output audio delta →
+    // published LiveKit frame, plus the Creole transcript into Yjs. The whole product,
+    // on the provider that exists solely to make this language possible.
+    const transcript: Array<[string, string]> = [];
+    const writer = {
+      appendDelta: (code: string, text: string) => transcript.push([code, text]),
+    };
+    const { bridge, seated: mic } = await bootOpenAI((room) => room.seatOrganizer(ORGANIZER), {
+      writer: writer as unknown as ConstructorParameters<typeof TranslationBridge>[3]["writer"],
+    });
+
+    await speak(mic, 3);
+    expect(framesToProvider()).toBe(3);
+    expect(bridge.status).toBe("active");
+
+    // The model answers with Creole audio and its transcript.
+    const socket = FakeProviderSocket.instances[0];
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "response.output_audio.delta", delta: Buffer.alloc(480).toString("base64") })
+      )
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "response.output_audio_transcript.delta", delta: "Bonjou tout moun" })
+      )
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Translated audio reached a LiveKit track, and the transcript reached Yjs under the
+    // Creole code (not the source code — that would overwrite the English transcript).
+    expect(FakeAudioSource.instances[0].captured).toHaveLength(1);
+    expect(transcript).toEqual([["ht", "Bonjou tout moun"]]);
+
+    await bridge.stop();
+  });
+
+  it("asks LiveKit for each provider's own input sample rate", async () => {
+    // Gemini wants 16 kHz, OpenAI 24 kHz, and the bridge declares that rate to the
+    // provider — so a mismatch isn't an error anywhere, just audio that arrives at the
+    // wrong speed and pitch and translates badly. Nothing but this pins it.
+    const { bridge } = await bootOpenAI((room) => room.seatOrganizer(ORGANIZER));
+    expect(FakeAudioStream.instances[0].opts?.sampleRate).toBe(24_000);
+    await bridge.stop();
+
+    FakeAudioStream.instances = [];
+    const gemini = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      provider: new GeminiProvider({
+        apiKey: "fake-gemini-key",
+        targetLanguage: "fr",
+        transcribeInput: false,
+      }),
+    });
+    expect(FakeAudioStream.instances[0].opts?.sampleRate).toBe(16_000);
+    await gemini.bridge.stop();
+  });
+
+  it("sends no audio to an OpenAI session that never got configured", async () => {
+    // `session.created` arrives before our `session.update` is applied — at that moment
+    // the model is a plain chatbot with no interpreter instructions. If the bridge read
+    // that as ready it would stream the opening of the talk into it and publish whatever
+    // came back. So a session stuck at `created` must fail to start, loudly, and leave
+    // the supervisor to retry rather than go live half-configured.
+    FakeProviderSocket.openaiHandshake = "createdOnly";
+
+    const bridge = new TranslationBridge("doc-test", "ht", ORGANIZER, {
+      geminiApiKey: "unused",
+      provider: new OpenAIProvider(
+        { apiKey: "fake-openai-key", targetLanguage: "ht", transcribeInput: false },
+        {}
+      ),
+      livekitUrl: "wss://fake.livekit",
+      livekitApiKey: "fake",
+      livekitApiSecret: "fake",
+    });
+    const started = bridge.start();
+    // Claim the rejection before advancing time — the timeout fires inside the tick
+    // below, and an unclaimed rejection there is an unhandled one.
+    const rejects = expect(started).rejects.toThrow(/setup timeout/);
+    await vi.advanceTimersByTimeAsync(10);
+    (lastRoom as FakeRoom).seatOrganizer(ORGANIZER);
+    // The setup timeout is 15s; nothing but session.created ever arrives.
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    await rejects;
+    expect(bridge.status).toBe("error");
+    expect(framesToProvider()).toBe(0);
     await bridge.stop();
   });
 });

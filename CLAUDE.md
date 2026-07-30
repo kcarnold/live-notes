@@ -12,7 +12,7 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Proclaim integration**: Python service syncing Proclaim presentation slides to Yjs
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
-- **Live speech translation**: LiveKit rooms + Gemini Live ([live-audio/](live-audio/)) — a broadcaster publishes mic audio; per-language translator bots stream it through Gemini Live and publish translated audio + live transcripts
+- **Live speech translation**: LiveKit rooms + a realtime translation provider ([live-audio/](live-audio/)) — a broadcaster publishes mic audio; per-language translator bots stream it through **Gemini Live** (most languages) or **OpenAI Realtime** (Haitian Creole, which Gemini Live Translate cannot speak) and publish translated audio + live transcripts
 
 **Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the component map (what runs where, who writes what into the shared Yjs doc). [docs/README.md](docs/README.md) is the docs index; [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) is the manual pre-service smoke checklist — PR descriptions should declare which of its sections they touch.
 
@@ -32,10 +32,23 @@ Required environment variables (`.env`):
 - `GEMINI_API_KEY` - Google Gemini API key
 - `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
 
+Optional but required for **Haitian Creole live audio**:
+- `OPENAI_API_KEY` - OpenAI API key. Gemini Live Translate has no Creole voice, so `ht`
+  is served by the OpenAI Realtime provider; without this key the listen picker still
+  offers Creole but its bridge refuses to start. See [live-audio/openai-provider.ts](live-audio/openai-provider.ts)
+  for what that path does and does not guarantee.
+
 Optional environment variables:
 - `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
-- `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+- `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its provider session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+- `LIVE_AUDIO_OPENAI_MODEL` / `LIVE_AUDIO_OPENAI_VOICE` - override the OpenAI Realtime model
+  (default `gpt-realtime-2.1`, the general speech-to-speech model — deliberately *not*
+  `gpt-realtime-translate`, whose 13 output languages exclude Haitian Creole) and voice
+  (default `marin`)
+- `LIVE_AUDIO_OPENAI_LANGUAGES` - comma-separated BCP-47 codes to route to OpenAI instead of
+  Gemini. Only for comparing the two backends on a language both support; `ht` is routed by
+  capability and needs no entry.
 - `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
 - `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
 - `POSTHOG_CLI_TOKEN` - PostHog CLI token (for sourcemap uploads during Docker build)
@@ -122,6 +135,22 @@ so loops run in milliseconds — no real Proclaim or Y-Sweet needed. Async tests
 asyncio backend via the `anyio_backend` fixture in [tests/conftest.py](tests/conftest.py),
 which also sets `YSWEET_URL` and puts the repo root on `sys.path`. The new library modules are
 import-clean (no `YSWEET_URL` needed to import them).
+
+### Spikes
+
+```bash
+# Which TTS engine can actually speak Haitian Creole? (see the script header)
+node creole-voice-spike.ts --help
+node creole-voice-spike.ts --file notes-ht.txt
+```
+
+[creole-voice-spike.ts](creole-voice-spike.ts) synthesizes one passage through the OpenAI
+speech endpoint, OpenAI Realtime (text in → audio out), and ElevenLabs as a control, then
+writes an `index.html` that plays them side by side. It exists because **no vendor
+documents a Haitian Creole voice** — `VOICE_CONFIG` in [server.ts](server.ts) has only
+French and Spanish, so `/api/tts` returns 400 for Creole even though Creole *is* a notes
+translation language in [configAtoms.ts](src/configAtoms.ts). Whether any engine sounds
+acceptable is a listening question, not a testable one. Output is gitignored.
 
 ### Deployment
 ```bash
@@ -395,6 +424,21 @@ The app has two modes determined by URL hash (`#editor`):
 ### Backend
 - [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
 - [nlp.ts](nlp.ts) - Gemini API integration for translation
+- Live speech translation (`live-audio/`), split at a provider seam so the resilience work
+  is written once and every backend inherits it:
+  - [translation-bridge.ts](live-audio/translation-bridge.ts) - one bridge per (session, language):
+    LiveKit membership, subscription reconcile, stall watchdog, reconnect/gap buffering, silence gating
+  - [translation-session-manager.ts](live-audio/translation-session-manager.ts) - the supervisor loop
+    that reconciles running bridges against LiveKit room presence
+  - [realtime-provider.ts](live-audio/realtime-provider.ts) - the seam: `RealtimeProvider` (connect,
+    configure, interpret, wrap a frame, sample rates) and the `ProviderEvent` vocabulary
+  - [gemini-provider.ts](live-audio/gemini-provider.ts) - Gemini Live Translate (the default; a
+    purpose-built translate model, so "interpret, don't converse" is a model property)
+  - [openai-provider.ts](live-audio/openai-provider.ts) - OpenAI Realtime for Haitian Creole, via the
+    general speech-to-speech model + an interpreter prompt. **Read its header before touching it**:
+    it explains why not `gpt-realtime-translate`, and what a prompt guarantees that a model doesn't
+  - [provider-selection.ts](live-audio/provider-selection.ts) - which backend serves a language
+  - [transcript-writer.ts](live-audio/transcript-writer.ts) - persists transcript deltas into Yjs
 - Proclaim → Yjs sync (Python), decoupled into a slide feed + consumers:
   - [proclaim_service.py](proclaim_service.py) - thin entrypoint: env/config, telemetry, and wiring
   - [slide_feed.py](slide_feed.py) - the seam: `FeedSnapshot` (serializable), `SlideFeed` Protocol, `SnapshotBus`

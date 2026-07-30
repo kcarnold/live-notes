@@ -94,7 +94,8 @@ function HomePage() {
 
   // The listen pane is keyed by BCP-47 code (a larger set than our text-translation
   // languages). Map the selected language to its code, falling back to the default
-  // listen language if Gemini Live doesn't support it (e.g. Haitian Creole).
+  // listen language if no realtime provider can speak it. (Haitian Creole used to fall
+  // back here — it is now served by the OpenAI provider; see listenLanguages.ts.)
   const listenCode =
     LISTEN_LANGUAGE_CODES.includes(LANGUAGE_BCP47[selectedLang])
       ? LANGUAGE_BCP47[selectedLang]
@@ -222,9 +223,11 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
     </select>
   );
 
-  // The listen picker offers the full Gemini-supported language set (keyed by
-  // BCP-47 code), with "Original / English" and favorites pinned on top. Names are
-  // localized via Intl.DisplayNames; the long list is sorted by localized name.
+  // The listen picker offers every language some realtime provider can speak (keyed by
+  // BCP-47 code), with "Original / English" and favorites pinned on top. Which backend
+  // serves which language is listenLanguages.ts's business, not the picker's — so this
+  // list needs no change when a language moves between providers. Names are localized
+  // via Intl.DisplayNames; the long list is sorted by localized name.
   const sortedListenLangs = LISTEN_LANGUAGE_CODES
     .filter((c) => c !== LISTEN_ORIGINAL_CODE && !LISTEN_FAVORITES.includes(c))
     .sort((a, b) =>

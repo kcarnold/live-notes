@@ -14,9 +14,9 @@ derived data) drives the testing/replay strategy.
 │  future macOS      │                  │   │ translated │ source  │
 │  ingest service)   │                  │   │ audio      ▼ audio   │
 └────────────────────┘                  │ translation-bridge ──────┼──▶ Gemini Live
-┌────────────────────┐                  │  (per language, spawned  │    (translate speech)
-│ Proclaim Mac       │                  │   on listener demand by  │
-│ proclaim_service.py│─┐                │   translation-session-   │
+┌────────────────────┐                  │  (per language, spawned  │    (most languages)
+│ Proclaim Mac       │                  │   on listener demand by  │──▶ OpenAI Realtime
+│ proclaim_service.py│─┐                │   translation-session-   │    (Haitian Creole)
 └────────────────────┘ │                │   manager)               │
                        │ Y-Sweet WS     ├──────────────────────────┤
 ┌────────────────────┐ │                │ Express server           │──▶ Gemini (block +
@@ -38,13 +38,23 @@ derived data) drives the testing/replay strategy.
   reconciles running `translation-bridge`s against LiveKit room presence — listeners carry a
   `listen=<lang>` participant attribute in their token, and the loop starts, recreates, or
   winds down one bridge per (session, language) to match (no refcounts or beacons). Each
-  bridge subscribes to the organizer's LiveKit track (16 kHz in), streams to Gemini Live,
+  bridge subscribes to the organizer's LiveKit track, streams it to its **provider**,
   publishes translated audio (24 kHz out), and writes the transcript into Yjs via
-  `transcript-writer`. When a Gemini session is swapped (goaway/reconnect), input frames are
+  `transcript-writer`. Which provider is a per-language decision (`provider-selection.ts`):
+  **Gemini Live Translate** (16 kHz in) for everything it supports, **OpenAI Realtime**
+  (24 kHz in) for Haitian Creole, which Gemini Live Translate has no voice for. The seam is
+  `RealtimeProvider` — connect, configure, interpret a message, wrap an input frame, and the
+  two sample rates — and it is deliberately narrow: everything below (reconnects, the gap
+  buffer, subscription reconcile, the stall watchdog, silence gating) is one implementation
+  shared by both, so a new provider inherits the incident history in `live-audio-resilience.md`
+  instead of re-earning it. Two consequences worth knowing: for OpenAI the "only translate,
+  never converse" rule is a *prompt*, not a model property, and that path is turn-based
+  rather than continuous — see `openai-provider.ts`'s header. When a provider session is
+  swapped (goaway/reconnect), input frames are
   buffered across the gap and flushed into the fresh session, so a swap costs a little
   latency rather than dropped words (always on). A **cost path** — off unless
   `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level (−30 is a guess) — additionally
-  suspends a bridge's Gemini socket after ~30 s below that level, reopening on the first
+  suspends a bridge's provider socket after ~30 s below that level, reopening on the first
   non-silent frame; the LiveKit participant/track stay live so listeners never resubscribe.
   That threshold is the feature's only switch: unset, it is −Infinity, every frame reads as
   voice, and nothing can suspend. It affects only what a bridge does while nobody speaks —
@@ -69,7 +79,7 @@ doc is *derived* data that the system under test will regenerate.
 |---|---|---|
 | Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
 | `proclaim_service.py` (slide feed → Yjs publisher + translator) | `proclaimServiceOrder`, `proclaimPresentations`, `proclaimStatus`, `slideTranslations`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
-| translation-bridge / transcript-writer | live transcript | Organizer audio track + Gemini Live responses |
+| translation-bridge / transcript-writer | live transcript | Organizer audio track + provider (Gemini Live / OpenAI Realtime) responses |
 | Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |
 

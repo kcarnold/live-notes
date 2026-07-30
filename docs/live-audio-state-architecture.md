@@ -9,6 +9,15 @@ Companion to [live-audio-resilience.md](live-audio-resilience.md), which covers 
 "active but deaf" outages on the bridge's *input* side. This document zooms out: the same
 disease exists at every other layer, and the fixes so far have treated one organ.
 
+> **Naming note (since the OpenAI provider landed).** The "Gemini socket leg" audited below
+> is now the *provider* leg: a `RealtimeProvider` behind the same five fields (Gemini Live
+> Translate for most languages, OpenAI Realtime for Haitian Creole). The analysis and the
+> edge-case catalog are unchanged — extracting the provider seam deliberately did not touch
+> the lifecycle it describes — but the identifiers were renamed (`connectGemini` →
+> `connectProvider`, and so on; see [live-audio-resilience.md](live-audio-resilience.md)).
+> One line item does change: the leg now has one more way to be told it is finished, a fatal
+> `error` event from the provider, which routes into the existing reconnect path.
+
 ## The thesis
 
 The bridge's input side was fixed with a principle: **don't store a decision made from an
