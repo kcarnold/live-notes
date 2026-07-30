@@ -27,6 +27,7 @@
     "slideLibrary.ts",
     "slideConversationStore.ts",
     "dump-docs.ts",
+    "creole-voice-spike.ts",
     "*.test.ts"
   ]
 }

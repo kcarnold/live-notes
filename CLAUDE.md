@@ -136,6 +136,22 @@ asyncio backend via the `anyio_backend` fixture in [tests/conftest.py](tests/con
 which also sets `YSWEET_URL` and puts the repo root on `sys.path`. The new library modules are
 import-clean (no `YSWEET_URL` needed to import them).
 
+### Spikes
+
+```bash
+# Which TTS engine can actually speak Haitian Creole? (see the script header)
+node creole-voice-spike.ts --help
+node creole-voice-spike.ts --file notes-ht.txt
+```
+
+[creole-voice-spike.ts](creole-voice-spike.ts) synthesizes one passage through the OpenAI
+speech endpoint, OpenAI Realtime (text in → audio out), and ElevenLabs as a control, then
+writes an `index.html` that plays them side by side. It exists because **no vendor
+documents a Haitian Creole voice** — `VOICE_CONFIG` in [server.ts](server.ts) has only
+French and Spanish, so `/api/tts` returns 400 for Creole even though Creole *is* a notes
+translation language in [configAtoms.ts](src/configAtoms.ts). Whether any engine sounds
+acceptable is a listening question, not a testable one. Output is gitignored.
+
 ### Deployment
 ```bash
 # Build and run with Docker Compose

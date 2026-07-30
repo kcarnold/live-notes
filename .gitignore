@@ -19,6 +19,9 @@ dist-ssr
 log*.txt
 audio-cache
 
+# Output of creole-voice-spike.ts (generated audio for a listening comparison)
+creole-voice-spike/
+
 *.pyc
 presentation.json
 
