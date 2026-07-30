@@ -47,6 +47,23 @@ struct MenuContentView: View {
             }
             .font(.callout)
 
+            // A stand-down waits for a person, so it needs a person-shaped way out. "Start
+            // now" can't serve: it's disabled whenever the override is already .forceOn,
+            // which is exactly the state an always-on install stands down from.
+            // The status line above already says *why* we're stopped; this says what the
+            // button does, because it isn't harmless.
+            if controller.standDown != nil {
+                HStack(spacing: 8) {
+                    Text("Takes the room back from whoever has it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Reconnect") { controller.reconnectNow() }
+                        .font(.callout)
+                }
+            }
+
             if controller.isPublishing {
                 Label("Live as organizer-host — this takes over the broadcast.",
                       systemImage: "exclamationmark.triangle")
@@ -91,8 +108,10 @@ struct MenuContentView: View {
     private var statusColor: Color {
         switch controller.status {
         case .publishing: return .green
-        case .connecting: return .yellow
-        case .waitingForDevice: return .orange
+        case .connecting, .reconnecting: return .yellow
+        // Standing down is deliberate, not broken — but it is the one state nothing will
+        // resolve on its own, so it gets a colour that asks to be looked at.
+        case .waitingForDevice, .standby: return .orange
         case .error: return .red
         case .idle: return .gray
         }

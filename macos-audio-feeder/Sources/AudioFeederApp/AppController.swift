@@ -15,6 +15,8 @@ final class AppController: ObservableObject {
         case waitingForDevice(String)
         case connecting
         case publishing
+        case reconnecting            // was publishing; the room dropped and we're coming back
+        case standby(String)         // stopped on purpose and *not* retrying — see standDown
         case error(String)
 
         var label: String {
@@ -23,6 +25,8 @@ final class AppController: ObservableObject {
             case let .waitingForDevice(name): return "Waiting for device: \(name)"
             case .connecting: return "Connecting…"
             case .publishing: return "Publishing"
+            case .reconnecting: return "Reconnecting…"
+            case let .standby(reason): return "Stopped — \(reason)"
             case let .error(msg): return "Error: \(msg)"
             }
         }
@@ -36,6 +40,12 @@ final class AppController: ObservableObject {
     }
     @Published private(set) var level: Float = 0          // 0...1 for the meter
     @Published private(set) var devices: [AudioInputDevice] = []
+
+    /// Non-nil while we are deliberately staying down after a disconnect that retrying would
+    /// only make worse (`DisconnectPolicy`). Cleared by an explicit human action or by the
+    /// end of the run window — never by the retry timer, which is the whole point.
+    @Published private(set) var standDown: String?
+
     @Published var config: FeederConfig {
         didSet { configChanged() }
     }
@@ -46,6 +56,7 @@ final class AppController: ObservableObject {
     private var publisher: Publisher?
 
     private var tick: Timer?
+    private var retryTimer: Timer?
     private var retryAfter: Date?
     private var retryBackoff: TimeInterval = 2
 
@@ -79,9 +90,34 @@ final class AppController: ObservableObject {
 
     // MARK: - Manual override (UI buttons)
 
-    func startNow() { config.manualOverride = .forceOn }   // didSet → save + evaluate
+    func startNow() {
+        clearStandDown()
+        config.manualOverride = .forceOn                   // didSet → save + evaluate
+    }
+
     func stopNow() { config.manualOverride = .forceOff }
-    func followSchedule() { config.manualOverride = .off }
+
+    func followSchedule() {
+        clearStandDown()
+        config.manualOverride = .off
+    }
+
+    /// Take the room back after standing down. Separate from "Start now" because standing
+    /// down is a decision to leave someone else broadcasting: undoing it means evicting them,
+    /// so it should take a deliberate click rather than happening on a timer.
+    func reconnectNow() {
+        Log.controller.notice("stand-down cleared by user; reconnecting")
+        clearStandDown()
+        evaluate()
+    }
+
+    private func clearStandDown() {
+        standDown = nil
+        retryTimer?.invalidate()
+        retryTimer = nil
+        retryAfter = nil
+        retryBackoff = 2
+    }
 
     func refreshDevices() {
         devices = DeviceMonitor.inputDevices()
@@ -107,7 +143,18 @@ final class AppController: ObservableObject {
                                           manualOverride: config.manualOverride)
         if !wantRun {
             teardown()
+            // A stand-down lasts for the run it happened in, no longer: next Sunday starts
+            // clean, without anyone having to remember to clear it.
+            clearStandDown()
             status = .idle
+            return
+        }
+
+        // Evicted or kicked. Coming back would fight whoever holds the room now, so wait for
+        // a person — checked before the device and backoff branches, which would otherwise
+        // overwrite the one status that explains why nothing is happening.
+        if let standDown {
+            status = .standby(standDown)
             return
         }
 
@@ -121,7 +168,25 @@ final class AppController: ObservableObject {
         // Honor backoff after a failure before retrying.
         if let retryAfter, Date() < retryAfter { return }
 
-        if capture == nil { startPipeline(device: device) }
+        // Reconcile the pipeline rather than only starting one. The old guard was
+        // `capture == nil`, which meant a *half*-alive pipeline — capture still running, room
+        // dead — was indistinguishable from a healthy one and wedged here forever. Checking
+        // both halves makes this tick self-healing even if a publisher callback is missed
+        // entirely (issue #97).
+        if !isPipelineRunning {
+            teardown()
+            startPipeline(device: device)
+        }
+    }
+
+    /// True only while *both* halves of the capture→publish pipeline are alive. Anything else
+    /// has to be torn down and rebuilt — a `Publisher` cannot be restarted in place.
+    private var isPipelineRunning: Bool {
+        guard capture != nil, let publisher else { return false }
+        switch publisher.state {
+        case .connecting, .connected, .reconnecting: return true
+        case .disconnected, .dropped, .failed: return false
+        }
     }
 
     private func startPipeline(device: AudioInputDevice) {
@@ -164,10 +229,30 @@ final class AppController: ObservableObject {
             status = .connecting
         case .connected:
             status = .publishing
-            retryBackoff = 2               // reset backoff on success
+            retryTimer?.invalidate()       // reset backoff on success
+            retryTimer = nil
+            retryBackoff = 2
             retryAfter = nil
+        case .reconnecting:
+            // The SDK recovers transient drops itself. Surface it rather than keep claiming
+            // "Publishing" — no audio is reaching the room while this lasts.
+            status = .reconnecting
         case .disconnected:
-            if case .publishing = status { status = .idle }
+            // Only `teardown()` produces this, and it already knows what happens next.
+            break
+        case let .dropped(cause):
+            switch DisconnectPolicy.response(to: cause) {
+            case .retry:
+                Log.controller.error("lost the room: \(cause.description, privacy: .public); reconnecting")
+                status = .error("Disconnected: \(cause.description)")
+                teardown()
+                scheduleRetry()
+            case let .standDown(message):
+                Log.controller.error("lost the room: \(cause.description, privacy: .public); staying down")
+                teardown()
+                standDown = message
+                status = .standby(message)
+            }
         case let .failed(msg):
             status = .error(msg)
             teardown()
@@ -178,6 +263,14 @@ final class AppController: ObservableObject {
     private func scheduleRetry() {
         retryAfter = Date().addingTimeInterval(retryBackoff)
         Log.controller.notice("retrying in \(self.retryBackoff, privacy: .public)s")
+
+        // The 15s tick would eventually re-evaluate, but it would round every backoff shorter
+        // than itself up to 15s. Wake up when the backoff actually expires as well.
+        retryTimer?.invalidate()
+        retryTimer = Timer.scheduledTimer(withTimeInterval: retryBackoff, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.evaluate() }
+        }
+
         retryBackoff = min(retryBackoff * 2, 30)
     }
 

@@ -10,6 +10,103 @@ cause, the fix.
 
 ---
 
+## 2026-07-30 — the feeder now notices when it stops publishing (#97)
+
+**Symptom.** The app could stop publishing and never find out. The menu bar kept saying
+"Publishing", `AudioCapture` kept pushing buffers into a room that wasn't there, and nothing
+recovered or complained. For a program whose whole purpose is running unattended, that is the
+worst failure shape available: it looks fine and does nothing.
+
+**Three independent things had to be true for that to happen**, which is why it survived so
+long — fixing any one of them alone would not have helped.
+
+1. **`Publisher` never observed the room.** It registered no `RoomDelegate`, so `state` was
+   only ever written by our own `connect()`/`stop()`. Once it reached `.connected` it stayed
+   there for the lifetime of the object no matter what the room did.
+2. **`AppController` couldn't act on it even in principle.** `.disconnected` did
+   `if case .publishing = status { status = .idle }` — no teardown, no retry — and only
+   `.failed` (which nothing could produce after a successful connect) led to recovery.
+3. **The restart guard in `evaluate()` was `capture == nil`.** After a drop the pipeline is
+   *half* alive — capture running, room dead — so `capture` was still non-nil and the guard
+   skipped the restart forever. A half-alive pipeline was indistinguishable from a healthy one.
+
+**The SDK deliberately won't save us.** It does handle transient network trouble itself
+(resume / full reconnect). But on a terminal leave it calls `cleanUp(withError:)` and stays
+down — correctly, since retrying an eviction just gets you evicted again
+(`Room+SignalClientDelegate.swift`).
+
+**What actually triggers it.** Duplicate identity is the likely one: the app and
+`src/BroadcastControl.tsx` both join as the literal identity `organizer-host`, and LiveKit
+permits one participant per identity, so anyone opening the broadcast page silently evicts the
+app. Then token expiry — tokens are issued with `ttl: '4h'` (`server.ts`), which an always-on
+install is guaranteed to hit. Then terminal server-side disconnects.
+
+**Fix, in three parts.**
+
+- `Publisher` registers a `RoomDelegate` and maps `roomIsReconnecting` / `roomDidReconnect` /
+  `room(_:didDisconnectWithError:)` onto two new states, `.reconnecting` and
+  `.dropped(DisconnectCause)`.
+- `AppController` treats `.dropped` as actionable: consult `DisconnectPolicy`, then either
+  teardown + backoff retry, or stand down.
+- `evaluate()`'s guard became `isPipelineRunning` — both halves alive, publisher in a live
+  state — so the 15s tick *reconciles* the pipeline instead of only ever starting one. This is
+  the belt-and-braces half: even if a delegate callback were missed entirely, the tick repairs
+  a half-dead pipeline within 15s.
+
+**The policy question, and why it isn't "always reconnect".** Reconnecting is right for token
+expiry, server restarts and lost connections — and it re-fetches a token, which is what makes
+the 4h TTL survivable. It is wrong in exactly the cases where a *second actor* deliberately
+took our place, because then retrying starts a fight:
+
+| Cause | Response | Why |
+|---|---|---|
+| `duplicateIdentity` | stand down | The shared `organizer-host` identity is what *enforces* "only one broadcaster". Reconnecting would evict whoever just evicted us, who would evict us straight back. |
+| `participantRemoved` | stand down | Nothing in live-notes removes participants, so this is a human with the dashboard or CLI kicking the feeder. Retrying takes away the only remote stop button there is. |
+| everything else | retry, backed off | For an unattended feeder the expensive failure is silence. Anything unclassified — including a new `LiveKitErrorType` from an SDK bump — retries. |
+
+`participantRemoved` goes beyond what #97 asked for (it named only duplicate identity). It is
+one line and one test in `DisconnectPolicy` if that turns out to be the wrong call.
+
+A stand-down is visible ("Stopped — Taken over by the broadcast page", orange dot), is logged,
+and ends only two ways: a person clicks **Reconnect** in the popover, or the run window ends,
+so next Sunday starts clean with nobody having to remember. It deliberately needs a click —
+undoing a stand-down means evicting whoever is broadcasting now, which is a decision, not a
+timer.
+
+**Where the decision lives.** `DisconnectPolicy` is in `AudioFeederCore`, not next to the
+LiveKit code, so the one judgement call in this fix is covered by `swift test` with no Xcode,
+no SDK and no room. `Publisher` only maps `LiveKitErrorType` → `DisconnectCause`; everything
+downstream is pure.
+
+**Two lifecycle races closed on the way past**, both pre-existing:
+
+- A superseded connect task could still write `state`. `stop()` during a token fetch made the
+  attempt throw, and the `catch` reported `.failed` — a deliberate stop showing up as a
+  connection failure, and earning a retry nobody asked for. Every state write in `connect()`
+  is now gated on a session counter that `start()`/`stop()` bump.
+- A connect that failed *after* `Room()` was created left the room dangling, still holding the
+  `organizer-host` identity against the retry about to follow. The `catch` now disconnects it.
+
+The same session counter is what stops our own `stop()` from being mistaken for an eviction:
+`Room.disconnect()` fires `didDisconnectWithError(nil)`, which would otherwise arrive looking
+like an unexplained drop.
+
+> **Not verified on a machine.** This was written without a Swift toolchain — no build, no
+> `swift test`, no run. Every SDK API used was read out of `client-sdk-swift` at both 2.0.7
+> (the `from:` floor) and 2.15.3 (the current 2.x head), and the delegate signatures,
+> `LiveKitErrorType` cases, `Room.add(delegate:)` and the weak `MulticastDelegate` are
+> identical in both — but "the API exists" is not "it compiles", and by this notebook's own
+> rule the first run that matters must not be the one at the venue. Run `swift test`, then
+> exercise it against a real room: publish, open the broadcast page, and watch for
+> `room dropped` → `staying down` in the `publisher`/`controller` log categories.
+
+**Known limit, deliberately not fixed.** If the SDK were to sit in `.reconnecting` forever we
+would wait forever with it — `isPipelineRunning` counts `.reconnecting` as alive on purpose,
+so the tick doesn't tear down a recovery in progress. Bounding it needs a timeout longer than
+the SDK's own full-reconnect budget, and that is a number to measure, not to guess.
+
+---
+
 ## 2026-07-27 — App Sandbox blocked WebRTC's UDP sockets (the venue failure)
 
 **Symptom.** First run on the tech booth Mac (Intel Mac mini 8,1, macOS 15.7.7) never

@@ -38,7 +38,7 @@ macos-audio-feeder/
   project.yml            # XcodeGen spec for the app; AudioFeeder.xcodeproj is generated
   Sources/
     AudioFeederCore/     # pure, tested: Config, Scheduler, LevelMeter, ChannelExtractor,
-                         #               ToneGenerator, LiveKitTokenClient
+                         #               ToneGenerator, LiveKitTokenClient, DisconnectPolicy
     AudioFeederApp/      # the menu-bar app (capture + publish + UI)
   Tests/
     AudioFeederCoreTests/
@@ -56,7 +56,8 @@ real 2 MB framework, and `codesign` rejected the result.)
 ## Tests
 
 ```bash
-swift test    # AudioFeederCore: scheduler, level/RMS, channel extraction, config, token contract
+swift test    # AudioFeederCore: scheduler, level/RMS, channel extraction, config,
+              # token contract, disconnect policy
 ```
 
 ## Building and running the app
@@ -135,6 +136,12 @@ is exactly the situation the on-site failure created.
 | `input format is empty (0.0 Hz, 0 ch)` | Microphone permission denied. Check System Settings → Privacy & Security → Microphone. Ad-hoc-signed builds get a new code identity on every rebuild, so the grant doesn't stick — build the `.app` once and stop rebuilding it. |
 | `token endpoint returned HTTP 503` | The server has no `LIVEKIT_*` configuration. |
 | Publishes, but the browser broadcast page stops working | Expected. Both join as `organizer-host`, and LiveKit allows one participant per identity — use one or the other. |
+| `Stopped — Taken over by the broadcast page` | The reverse of the row above: someone opened the broadcast page and it evicted the app. The app stays down on purpose rather than fight for the room. Close the page, then click **Reconnect** in the popover. |
+| `Stopped — Removed from the room` | Someone removed this participant server-side (LiveKit dashboard or CLI). Same deal: **Reconnect** to come back. |
+| `Reconnecting…` for a while, then `Disconnected: …` and a retry | Normal recovery. The SDK handles brief network trouble itself; anything it can't recover — including a token hitting its 4h TTL — tears the pipeline down and reconnects with backoff (2s doubling to 30s). |
+
+Recovery behaviour is decided by `DisconnectPolicy` in `AudioFeederCore` and is unit-tested;
+`NOTEBOOK.md` (2026-07-30) has the reasoning.
 
 ## Building a distributable `.app`
 
@@ -175,7 +182,10 @@ permission prompt.
 - [x] LiveKit publisher (`Publisher`: token fetch, manual rendering + mixer.capture,
       retry/backoff, identity release on stop) — custom-audio publishing verified end-to-end
       on real hardware
-- [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device)
+- [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device,
+      pipeline reconciliation)
+- [x] Losing the room is noticed and recovered from (`RoomDelegate` → `DisconnectPolicy`) —
+      **written but not yet built or run against a real room**, see `NOTEBOOK.md` 2026-07-30
 - [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
 - [x] Build a real `.app` bundle (Xcode target generated from `project.yml`; frameworks
       embedded automatically)
