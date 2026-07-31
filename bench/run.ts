@@ -18,6 +18,12 @@
  *   --repeat   run each task/model pair N times (models are non-deterministic); default 1
  *   --max-steps  cap on agent rounds per run; default 12 (the production MAX_AGENT_ROUNDS)
  *   --concurrency  how many runs in flight at once; default 2
+ *   --telemetry  emit OpenTelemetry spans to PostHog, tagged with ids derived from
+ *                --trace-label. This is the smoke test for whether PostHog honours our
+ *                conversation/person grouping — procedure in docs/llm-providers.md.
+ *   --trace-label  label those ids are built from; default `bench-<ISO timestamp>`
+ *   --telemetry-debug  with --telemetry, also print every span to stdout, so a missing
+ *                attribute in PostHog can be blamed on the right side of the wire
  */
 import 'dotenv/config';
 import fs from 'fs/promises';
@@ -25,6 +31,7 @@ import path from 'path';
 import pLimit from 'p-limit';
 import { MAX_AGENT_ROUNDS } from '../nlp.ts';
 import { apiKeyFor, parseModelSpec, resolveModel } from '../llm/modelSpec.ts';
+import { registerLlmTelemetry } from '../llm/telemetry.ts';
 import { selectTasks, type TaskRun } from './tasks.ts';
 
 export interface BenchResults {
@@ -33,6 +40,8 @@ export interface BenchResults {
   models: string[];
   taskIds: string[];
   repeat: number;
+  /** Present when --telemetry was on: the label the emitted trace ids were built from. */
+  traceLabel?: string;
   runs: TaskRun[];
 }
 
@@ -93,6 +102,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const maxSteps = Number(args['max-steps'] ?? String(MAX_AGENT_ROUNDS));
   const limit = pLimit(Number(args.concurrency ?? '2'));
   const startedAt = new Date();
+
+  // Telemetry is opt-in for the bench: a comparison sweep is not something anyone wants in
+  // their production LLM dashboards by default. When it is on, every run is tagged with ids
+  // derived from one label so the whole sweep can be found — and, crucially, so it can be
+  // checked whether PostHog grouped it by conversation and person at all.
+  const traceLabel = args['trace-label'] ?? `bench-${startedAt.toISOString()}`;
+  const telemetryOn = args.telemetry === 'true' && registerLlmTelemetry({ debug: args['telemetry-debug'] === 'true' });
+  if (args.telemetry === 'true' && !telemetryOn) {
+    console.warn('--telemetry requested but VITE_PUBLIC_POSTHOG_KEY is not set; running untraced.');
+  }
+  if (telemetryOn) console.log(`Telemetry on. Trace label: ${traceLabel}`);
+
   const outPath =
     args.out ?? path.join('bench', 'results', `${startedAt.toISOString().replace(/[:.]/g, '-')}.json`);
 
@@ -107,7 +128,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
           limit(async () => {
             const label = `${modelSpec} · ${task.id}${repeat > 1 ? ` #${attempt + 1}` : ''}`;
             console.log(`→ ${label}`);
-            const run = await task.run({ model, modelSpec, maxSteps });
+            const run = await task.run({
+              model,
+              modelSpec,
+              maxSteps,
+              trace: telemetryOn
+                ? {
+                    // One person per sweep, one trace per model+task — the same shape the
+                    // real app uses (docId as person, conversation id as trace).
+                    distinctId: traceLabel,
+                    traceId: `${traceLabel}:${modelSpec}:${task.id}`,
+                    properties: { benchTask: task.id, benchModel: modelSpec },
+                  }
+                : undefined,
+            });
             const status = run.ok ? `${run.durationMs}ms, ${run.steps} step(s)` : `FAILED: ${run.error}`;
             console.log(`← ${label} — ${status}`);
             return run;
@@ -123,6 +157,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     models,
     taskIds: tasks.map((task) => task.id),
     repeat,
+    traceLabel: telemetryOn ? traceLabel : undefined,
     runs,
   };
 
@@ -132,6 +167,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const failed = runs.filter((run) => !run.ok).length;
   console.log(`\nWrote ${runs.length} run(s) to ${outPath}${failed > 0 ? ` (${failed} failed)` : ''}`);
   console.log(`Report with:  node bench/report.ts --in ${outPath}`);
+  if (telemetryOn) {
+    // Spans are batched; without a beat the process can exit before the exporter flushes.
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    console.log(`Traces sent under distinct id "${traceLabel}" — verify per docs/llm-providers.md.`);
+  }
 }
 
 // Only run when invoked directly, so the module stays importable from tests.

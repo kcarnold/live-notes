@@ -37,6 +37,7 @@ import {
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from '../bible.ts';
 import { geminiToolToNeutral } from './schema.ts';
 import { toGeminiContents, toModelMessages } from './messages.ts';
+import { telemetryFor, type TraceAttributes } from './telemetry.ts';
 
 /** Result of one agent run, mirroring `SlideAgentRunResult` on the Gemini path. */
 export interface SlideAgentRunResult {
@@ -65,6 +66,11 @@ export interface SlideAgentRunParams {
   onToolCall?: (call: BibleToolCall) => void;
   /** Cap on model round-trips. Defaults to the Gemini path's `MAX_AGENT_ROUNDS`. */
   maxSteps?: number;
+  /**
+   * Conversation/person ids for tracing. Only reach a backend when telemetry is registered
+   * (see [telemetry.ts](./telemetry.ts)); harmless to pass either way.
+   */
+  trace?: TraceAttributes;
 }
 
 /**
@@ -205,6 +211,7 @@ export async function runSlideTranslationAgent(params: SlideAgentRunParams): Pro
     messages: inputMessages,
     tools,
     stopWhen: ({ steps }) => steps.length >= maxSteps,
+    ...telemetryFor('slide-translation-agent', params.trace ?? {}),
   });
 
   let usage = emptyUsage();
@@ -230,6 +237,7 @@ export interface DraftItemParams {
   itemTitle?: string;
   maxSteps?: number;
   onToolCall?: (call: BibleToolCall) => void;
+  trace?: TraceAttributes;
 }
 
 /**
@@ -265,5 +273,6 @@ export async function draftItemTranslations(params: DraftItemParams): Promise<Sl
     bibleLanguages,
     maxSteps,
     onToolCall,
+    trace: params.trace,
   });
 }

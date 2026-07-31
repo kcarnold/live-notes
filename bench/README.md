@@ -33,6 +33,8 @@ Useful flags:
 | `--concurrency 4` | runs in flight at once (default 2) |
 | `--max-steps 12` | cap on agent rounds, so one confused model can't spend the budget |
 | `--out path.json` | where to write results |
+| `--telemetry` | emit OpenTelemetry spans to PostHog, tagged from `--trace-label`. Off by default — a comparison sweep is not something you want in production LLM dashboards |
+| `--telemetry-debug` | also print every span to stdout, to tell "we never sent it" from "PostHog dropped it" |
 
 Running and reporting are separate programs on purpose: a run costs money and takes minutes,
 so the raw results are written once and can be re-reported as often as you like. Keep the
@@ -75,6 +77,14 @@ is all committable and re-runnable.
 None of that says whether the French is any good. That is a human judgement, and it is why
 the HTML report puts every model's rendering of the same slide in one row: the tables narrow
 the field, then you read.
+
+## Doubling as the tracing smoke test
+
+`--telemetry` exists because the bench is the only thing in the repo that makes real AI SDK
+calls, which makes it the natural vehicle for checking whether PostHog actually honours our
+conversation/person grouping over OpenTelemetry. That question is open and it gates moving the
+slide agent — the exact procedure is in
+[docs/llm-providers.md](../docs/llm-providers.md#the-check--exact-steps).
 
 ## Trusting the harness
 

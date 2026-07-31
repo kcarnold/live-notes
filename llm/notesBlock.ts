@@ -19,6 +19,7 @@ import {
 } from '../nlp.ts';
 import { geminiSchemaToJsonSchema } from './schema.ts';
 import { toTokenUsage } from './slideAgent.ts';
+import { telemetryFor, type TraceAttributes } from './telemetry.ts';
 import type { TokenUsage } from '../nlp.ts';
 
 /** Shape the model is asked for; validated by the AI SDK against the schema below. */
@@ -47,6 +48,7 @@ export async function translateBlock(
   model: LanguageModel,
   todo: TranslationTodo,
   language: string,
+  trace: TraceAttributes = {},
 ): Promise<NotesBlockResult> {
   const result = await generateText({
     model,
@@ -54,6 +56,7 @@ export async function translateBlock(
     output: Output.object({
       schema: jsonSchema<NotesBlockOutput>(geminiSchemaToJsonSchema(NOTES_BLOCK_RESPONSE_SCHEMA)),
     }),
+    ...telemetryFor('notes-block-translation', trace),
   });
 
   const segments = result.output?.segments ?? [];

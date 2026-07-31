@@ -13,6 +13,7 @@ import { translateItem } from '../src/slideItemTranslation.ts';
 import type { SlideTranslationLookup } from '../src/slideTranslation.ts';
 import { draftItemTranslations, runSlideTranslationAgent } from '../llm/slideAgent.ts';
 import { translateBlock } from '../llm/notesBlock.ts';
+import type { TraceAttributes } from '../llm/telemetry.ts';
 import {
   BENCH_ITEMS,
   FOLLOW_UP,
@@ -68,6 +69,12 @@ export interface TaskContext {
   modelSpec: string;
   /** Cap on agent rounds, so one confused model can't spend the whole budget. */
   maxSteps: number;
+  /**
+   * Trace/person ids for this run. Only leave the process when telemetry is registered
+   * (`--telemetry`), which is what makes the bench double as the smoke test for whether
+   * PostHog actually honours them — see docs/llm-providers.md.
+   */
+  trace?: TraceAttributes;
 }
 
 export interface BenchTask {
@@ -134,7 +141,7 @@ function draftTask(item: BenchItem): BenchTask {
       item.expectedLookups.length > 0
         ? 'Tool protocol, coverage, and whether the model grounds Scripture via lookup_bible_passage instead of translating it from scratch.'
         : 'Tool protocol, coverage, and line-break discipline (verse keeps its lines, prose loses the English hard wraps).',
-    run: async ({ model, modelSpec, maxSteps }) => {
+    run: async ({ model, modelSpec, maxSteps, trace }) => {
       const slides = slideTexts(item);
       const started = Date.now();
       let capturedTargets: DraftItemTarget[] = [];
@@ -159,6 +166,7 @@ function draftTask(item: BenchItem): BenchTask {
               generalContext: BENCH_GENERAL_CONTEXT,
               itemTitle: item.title,
               maxSteps,
+              trace,
             });
             messages = result.messages;
             setTranslationsCalled = result.setTranslationsCalled;
@@ -223,7 +231,7 @@ const followUpTask: BenchTask = {
   probe:
     'Blast radius. Asked to change one word on one slide, does the model make a targeted ' +
     'revise_translation edit, or re-send whole slides (silently reworking already-approved text)?',
-  run: async ({ model, modelSpec, maxSteps }) => {
+  run: async ({ model, modelSpec, maxSteps, trace }) => {
     const item = FOLLOW_UP.item;
     const slides = slideTexts(item);
     const seedPrompt = buildSeedConversationPrompt({
@@ -248,6 +256,7 @@ const followUpTask: BenchTask = {
         bibleLanguages,
         currentTranslations: { [FOLLOW_UP.language]: FOLLOW_UP.seedTranslations },
         maxSteps,
+        trace,
       });
 
       return {
@@ -298,10 +307,10 @@ const notesTask: BenchTask = {
   probe:
     'Structured-output reliability and latency on the hot path: return exactly the segments ' +
     'marked "T", skip the "C" context segments, keep the ids.',
-  run: async ({ model, modelSpec }) => {
+  run: async ({ model, modelSpec, trace }) => {
     const started = Date.now();
     try {
-      const result = await translateBlock(model, NOTES_TODO, NOTES_LANGUAGE);
+      const result = await translateBlock(model, NOTES_TODO, NOTES_LANGUAGE, trace);
       return {
         taskId: 'notes-block',
         model: modelSpec,

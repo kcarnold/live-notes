@@ -14,7 +14,8 @@ than assert it.
 
 Nothing in the running app has been switched over yet. The provider layer, the ported agent,
 and the bench all exist; `server.ts` still calls the Gemini path in `nlp.ts`. See
-[Migration](#migration) for why that order, and the one blocker.
+[Migration](#migration) for why that order, and the one thing that needs measuring first
+([does conversation and person grouping survive?](#open-question-does-conversation-and-person-grouping-survive)).
 
 ## What we actually need it to do
 
@@ -108,30 +109,137 @@ already hides thought parts, so nothing visible changes — but it is a real dif
 the model has to work with, and the honest place to record it is here rather than in a
 comment nobody reads.
 
-### PostHog tracing — the one actual blocker
+### Tracing: OpenTelemetry, with PostHog as the exporter
 
-`@posthog/ai`'s Vercel integration (`withTracing`, up to and including 8.6.0 as of this
-writing) accepts AI SDK language models at spec version **v2 or v3**. AI SDK 7's providers —
-OpenRouter's and Google's alike — are **v4**. So `withTracing` cannot be used as-is:
+Not a blocker, and not a PostHog-vs-OTel choice — PostHog's own supported path for current AI
+SDK versions *is* OpenTelemetry. `PostHogSpanProcessor` (`@posthog/ai/otel`) is an ordinary
+OTel `SpanProcessor` that batches to PostHog's OTLP endpoint, where AI spans become
+`$ai_generation` events.
 
+So we instrument vendor-neutrally. AI SDK 7 emits spans for every call once an integration is
+registered (opt-*out*, not opt-in), which makes this a startup concern:
+
+```ts
+registerLlmTelemetry();   // llm/telemetry.ts — the only file that names PostHog
 ```
-$ node -e "..."   # @posthog/ai 8.6.0
-declare const wrapVercelLanguageModel: <T extends LanguageModelV2 | LanguageModelV3>(...)
+
+No PostHog types touch any call site. Changing where traces go is a change to that one file.
+
+The alternative — `@posthog/ai`'s `withTracing` wrapper — is version-gated on the AI SDK's
+language-model spec (v2/v3 as of @posthog/ai 8.6.0; AI SDK 7's providers are v4). Wrapping
+every model would have tied our ability to upgrade the AI SDK to PostHog's release cadence for
+no benefit, so that wrapper is not used.
+
+**PostHog stays the destination**, and the reasons are about co-location rather than
+instrumentation: `$ai_generation` events land in the same project as `bible_lookup` (tagged
+with the same conversation id in `server.ts`), the live-audio lifecycle events that all of
+[OBSERVABILITY.md](OBSERVABILITY.md) is built on, server exceptions, frontend analytics, and
+Proclaim service errors. PostHog also computes cost from model + tokens server-side, and needs
+no collector or tracing backend to run — which matters for something deployed with
+`docker compose` onto one box.
+
+#### Open question: does conversation and person grouping survive?
+
+**This is unproven and needs the check below before the slide agent moves.**
+
+On the Gemini path, `@posthog/ai` takes `posthogTraceId` (the conversation id) and
+`posthogDistinctId` (the day's docId) as first-class arguments. Every generation from one
+conversation groups into one trace, under one "person".
+
+The OTel path has no such argument. Custom values reach spans via `runtimeContext`, and
+`@ai-sdk/otel` writes them **namespaced** — `ai.settings.context.<key>`, e.g.
+`ai.settings.context.$ai_trace_id`. We cannot emit a bare `$ai_trace_id` attribute even if we
+wanted to. Whether PostHog's ingestion reads those namespaced attributes back into a trace id
+and a distinct id is server-side behaviour, not determinable from the client package.
+
+It matters because a conversation spans several `generateText` calls — the initial draft, then
+each reviewer follow-up, sometimes days apart — and **each is a separate OTel trace**. OTel's
+own trace id does not group a conversation; only an attribute can. If PostHog ignores these,
+we get orphaned per-call generations with no conversation thread and no per-service person.
+That is a real regression from today, not a cosmetic one.
+
+`llm/telemetry.ts` currently sends both spellings of each id (`$ai_trace_id` + `session.id`,
+`distinct_id` + `user.id`) so the test has the best chance of passing on one of them.
+`TRACE_ATTRIBUTE_KEYS` is the single place to change afterwards.
+
+#### The check — exact steps
+
+Roughly ten minutes and a few cents. Do it against a **throwaway or dev PostHog project** if
+you have one; the events are tagged distinctly enough to be harmless in production, but a
+scratch project makes the "did anything arrive at all" question unambiguous.
+
+**1. Set up.** In `.env`:
+
+```bash
+VITE_PUBLIC_POSTHOG_KEY=phc_...          # the project you'll inspect
+VITE_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+OPENROUTER_API_KEY=sk-or-...             # or GEMINI_API_KEY for google:
 ```
 
-[`llm/modelSpec.ts`](../llm/modelSpec.ts) checks `specificationVersion` and passes the model
-through untraced with a one-time warning rather than casting and hoping — a wrapper handed a
-model shape it doesn't claim to understand produces *wrong* telemetry, which is worse than
-none.
+**2. Emit a known conversation.** One model, one cheap task, one label you can search for:
 
-The supported route for v4 is the AI SDK's own OpenTelemetry output
-(`experimental_telemetry`) fed to `PostHogSpanProcessor` from `@posthog/ai/otel`, which
-converts `gen_ai.*` spans into `$ai_generation` events server-side. That needs the
-OpenTelemetry packages added and the trace/distinct-id tagging re-expressed as span
-attributes. It is a contained piece of work, but it is work, and it is a prerequisite for
-moving the slide agent — that agent is debugged through its traces.
+```bash
+LABEL="tracecheck-$(date +%s)"
+echo "$LABEL"
+node bench/run.ts   --models openrouter:google/gemini-3-flash   --tasks notes-block,follow-up   --telemetry --trace-label "$LABEL"
+```
 
-The notes path has no such dependency and can move first.
+Two tasks, deliberately: `notes-block` is a single call and `follow-up` is a multi-step agent
+run, so you can tell "several spans in one trace" apart from "several traces that should be
+one conversation". The run prints the label again at the end and waits 5s for the exporter to
+flush.
+
+The ids emitted are:
+- distinct id — `<LABEL>` (one per sweep; stands in for the day's docId)
+- trace id — `<LABEL>:<model>:<task>` (one per task; stands in for the conversation id)
+
+**3. Confirm we sent what we think we sent.** Re-run with `--telemetry-debug` and read the
+spans on stdout:
+
+```bash
+node bench/run.ts --models openrouter:google/gemini-3-flash --tasks notes-block   --telemetry --telemetry-debug --trace-label "$LABEL-debug" 2>&1 | grep -A2 'ai.settings.context'
+```
+
+Expect `ai.settings.context.$ai_trace_id`, `ai.settings.context.distinct_id`,
+`ai.settings.context.session.id`, `ai.settings.context.user.id` on the `ai.generateText` spans.
+If they are absent, the problem is ours (`telemetryFor` / `includeRuntimeContext`), not
+PostHog's — stop here and fix that first.
+
+**4. Did anything arrive?** PostHog → **Activity** (or Data management → Events). Filter
+`Event = $ai_generation`, last 1 hour.
+
+- ✅ Events appear → ingestion works.
+- ❌ Nothing after ~2 minutes → check the project token is for the project you're looking at,
+  and that `VITE_PUBLIC_POSTHOG_HOST` matches the region (`us.` vs `eu.`). PostHog's OTLP
+  endpoint silently drops spans that are not `gen_ai.*` / `ai.*` / `llm.*`; step 3 having
+  passed rules that out.
+
+**5. Person grouping — the actual question.** Open one of those events and read its
+**distinct ID** column, then go to PostHog → **People** and search `<LABEL>`.
+
+- ✅ **Pass** — a person exists whose distinct id is exactly `<LABEL>`, and all the sweep's
+  generations sit under it. Grouping survives; use whichever key worked and drop the other
+  from `TRACE_ATTRIBUTE_KEYS`.
+- ❌ **Fail** — the events carry a random/anonymous distinct id and no such person exists.
+  Then person-level grouping does not survive the OTel path. Before accepting that, open one
+  event's properties and look for the attributes from step 3: if `distinct_id` or `user.id`
+  is present *as a property* but not used as the distinct id, it is a mapping question, and
+  worth one support question to PostHog before designing around it.
+
+**6. Conversation grouping.** Filter `$ai_generation` where `$ai_trace_id = <LABEL>:<model>:follow-up`.
+
+- ✅ **Pass** — every generation from the follow-up run comes back under that one trace id, and
+  PostHog's **LLM analytics → Traces** view shows them as one conversation.
+- ❌ **Fail** — each call sits in its own trace keyed by an OTel trace id. Check whether
+  `ai.settings.context.$ai_trace_id` survived as a plain event property; if it did, the review
+  workflow is still recoverable with a PostHog insight grouped on that property, just not with
+  the built-in trace view.
+
+**7. Record the answer.** Write the outcome into this section and narrow
+`TRACE_ATTRIBUTE_KEYS` to what actually worked. If both 5 and 6 fail, the fallback is a small
+custom `Telemetry` integration (AI SDK supports `telemetry.integrations`) that calls
+`phClient.capture()` with `$ai_trace_id`/`distinctId` directly — the same shape the Gemini path
+produces today, without the version-gated wrapper.
 
 ## Recommendation
 
@@ -154,9 +262,11 @@ Staged, so nothing rides on an unverified assumption:
    a model for the slide agent; they need not be the same one, and the cheap/fast tradeoff is
    genuinely different.
 3. **Move the notes path** (`/api/requestTranslatedBlocks`) to `llm/notesBlock.ts` behind an
-   env var. Lowest risk: one call, no stored conversation, no tools, and a bad result is one
-   stale line in the viewer.
-4. **Resolve PostHog tracing** for AI SDK v4 via the OTel path.
+   env var, calling `registerLlmTelemetry()` at startup. Lowest risk: one call, no stored
+   conversation, no tools, and a bad result is one stale line in the viewer.
+4. **Run the grouping check above** and record the answer. Tracing itself already works via
+   OTel; what is unproven is per-conversation and per-person grouping, and that is what the
+   review workflow depends on.
 5. **Move the slide agent**, keeping `Content[]` as the stored format via
    [`llm/messages.ts`](../llm/messages.ts) so old conversations and the review screen are
    untouched. Watch the cached-token figures in the review UI for a service or two.

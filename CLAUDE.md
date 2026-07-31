@@ -417,6 +417,7 @@ The app has two modes determined by URL hash (`#editor`):
   - [llm/schema.ts](llm/schema.ts) - Gemini `FunctionDeclaration` → JSON Schema, so one tool definition serves every provider
   - [llm/slideAgent.ts](llm/slideAgent.ts) - the slide-translation agent loop on `generateText`
   - [llm/notesBlock.ts](llm/notesBlock.ts) - the incremental notes path on `Output.object`
+  - [llm/telemetry.ts](llm/telemetry.ts) - LLM tracing as OpenTelemetry, exported to PostHog. The only file that names a telemetry vendor; whether PostHog honours our conversation/person grouping over this path is an open question with a documented check in [docs/llm-providers.md](docs/llm-providers.md)
   - [llm/testing.ts](llm/testing.ts) - scripted fake models, so all of the above is testable offline
 - [bench/](bench/README.md) - offline side-by-side comparison of models on the real workloads (see [bench/README.md](bench/README.md))
 - Proclaim → Yjs sync (Python), decoupled into a slide feed + consumers:

@@ -6,15 +6,17 @@
  * selects Gemini-direct, or the same Gemini through OpenRouter, or Claude, or GPT, with no
  * change to the agent loop. This module is the only place that knows about provider SDKs.
  *
+ * Observability is deliberately absent from this module. AI SDK 7 emits OpenTelemetry spans
+ * for every call once a telemetry integration is registered, so tracing is a startup concern
+ * rather than a per-model wrapper — see [telemetry.ts](./telemetry.ts).
+ *
  * Realtime speech translation ([live-audio/](../live-audio/)) is deliberately NOT covered —
  * it uses the Gemini Live bidirectional websocket API, which has no AI SDK equivalent and no
  * OpenRouter equivalent. See [docs/llm-providers.md](../docs/llm-providers.md).
  */
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { withTracing } from '@posthog/ai/vercel';
 import type { LanguageModel } from 'ai';
-import type { PostHog } from 'posthog-node';
 
 /** Providers this app can dispatch to. `openrouter` is the multi-provider router. */
 export type ProviderId = 'openrouter' | 'google';
@@ -82,16 +84,6 @@ export function apiKeyEnvNames(provider: ProviderId): string[] {
 export interface ResolveOptions {
   /** Overrides `process.env`, so the bench and tests can resolve without touching globals. */
   env?: NodeJS.ProcessEnv;
-  /** When given (with `observability`), the model is wrapped with PostHog LLM tracing. */
-  posthog?: PostHog;
-  observability?: PostHogTags;
-}
-
-/** PostHog LLM-observability tags — the same fields `nlp.ts` passes on the Gemini path. */
-export interface PostHogTags {
-  distinctId?: string;
-  traceId?: string;
-  properties?: Record<string, unknown>;
 }
 
 /**
@@ -131,47 +123,5 @@ export function resolveModel(spec: string | ModelSpec, options: ResolveOptions =
     }
   }
 
-  if (options.posthog && options.observability) {
-    model = wrapWithPostHog(model, options.posthog, options.observability);
-  }
   return model;
-}
-
-/** Warn at most once per process, so a bench sweep doesn't print the same line per call. */
-let warnedAboutTracing = false;
-
-/**
- * Wrap a model with PostHog LLM tracing, when the installed `@posthog/ai` supports it.
- *
- * `@posthog/ai`'s Vercel integration (through 8.6.0) is typed and version-gated for AI SDK
- * language models at spec `v2`/`v3`. AI SDK 7's providers are `v4`, so the wrapper would be
- * handed a model it does not claim to understand. Rather than cast and hope, we check the
- * spec version and pass the model through untraced when it is newer, warning once.
- *
- * The supported route for v4 is the AI SDK's own OpenTelemetry output
- * (`experimental_telemetry`) fed to `PostHogSpanProcessor` from `@posthog/ai/otel`; that
- * needs the OpenTelemetry packages added, which is a bigger decision than this module should
- * take on its own. Tracked in [docs/llm-providers.md](../docs/llm-providers.md).
- */
-export function wrapWithPostHog(model: LanguageModel, posthog: PostHog, tags: PostHogTags): LanguageModel {
-  if (typeof model === 'string') return model;
-  const specificationVersion = (model as { specificationVersion?: string }).specificationVersion;
-  if (specificationVersion !== 'v2' && specificationVersion !== 'v3') {
-    if (!warnedAboutTracing) {
-      warnedAboutTracing = true;
-      console.warn(
-        `[llm] PostHog LLM tracing skipped: @posthog/ai supports AI SDK model spec v2/v3, ` +
-          `this model reports "${specificationVersion}". See docs/llm-providers.md.`,
-      );
-    }
-    return model;
-  }
-  // The cast is safe behind the version check above: `withTracing` is generic over
-  // `LanguageModelV2 | LanguageModelV3` and we've just established the model is one of those,
-  // but TypeScript can't narrow the wider `LanguageModel` union from a runtime string compare.
-  return withTracing(model as Parameters<typeof withTracing>[0], posthog, {
-    posthogDistinctId: tags.distinctId,
-    posthogTraceId: tags.traceId,
-    posthogProperties: tags.properties,
-  });
 }
