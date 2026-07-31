@@ -26,6 +26,10 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
   live-translation subsystem (client + server state machines, edge-case catalog), a proposed
   supervisor/reconciler architecture, and the hot-fix ladder to apply before it.
 - [slide-translations-plan.md](slide-translations-plan.md) — slide translation agent design.
+- [llm-providers.md](llm-providers.md) — which provider for the text/agent work. Why
+  OpenRouter and the AI SDK are not alternatives, what routing costs us (prompt caching on
+  resumed conversations, PostHog tracing on AI SDK v4), and the staged migration. Run the
+  side-by-side comparison with [bench/](../bench/README.md).
 - Replay harness design: [#70](https://github.com/kcarnold/live-notes/issues/70) —
   record-at-the-boundary replay of full services for testing and accountability.
 

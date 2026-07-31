@@ -1,4 +1,4 @@
-import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration, type Part } from '@google/genai'; // for types
+import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration, type Part, type Schema } from '@google/genai'; // for types
 import { Gemini as GoogleGenAI } from '@posthog/ai/gemini';
 import { PostHog } from 'posthog-node';
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
@@ -135,52 +135,49 @@ const renderTargetBlocks = (targets: DraftItemTarget[], slideCount: number): str
         })
         .join('\n');
 
-export const translateBlock = async (provider: GeminiProvider, todo: TranslationTodo, language: string): Promise<TranslationBlockResult[]> => {
-    const config = {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        required: ["segments"],
-        properties: {
-          segments: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              required: ["segmentId", "translation"],
-              properties: {
-                segmentId: {
-                  type: Type.INTEGER,
-                },
-                translation: {
-                  type: Type.STRING,
-                },
-              },
+/**
+ * Response schema for the incremental notes path: `{ segments: [{ segmentId, translation }] }`.
+ *
+ * Exported (like the prompt builder below) so the provider-neutral implementation in
+ * [llm/notesBlock.ts](./llm/notesBlock.ts) asks every model for the exact same shape — the
+ * bench is comparing models, so the schema must not be a variable between them.
+ */
+export const NOTES_BLOCK_RESPONSE_SCHEMA: Schema = {
+    type: Type.OBJECT,
+    required: ["segments"],
+    properties: {
+      segments: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          required: ["segmentId", "translation"],
+          properties: {
+            segmentId: {
+              type: Type.INTEGER,
+            },
+            translation: {
+              type: Type.STRING,
             },
           },
         },
       },
-    };
+    },
+};
 
-    type OutputSegment = {
-        segmentId: number;
-        translation: string;
-    };
-
-    const inputDocument = JSON.stringify(
+/** Serialize a todo's chunks into the `T`/`C` (translate/context) input document. */
+export const buildNotesBlockInputDocument = (todo: TranslationTodo): string =>
+    JSON.stringify(
         todo.chunks.map((chunk, index) => ({
             segmentId: index,
             status: todo.isTranslationNeeded[index] ? 'T' : 'C',
             text: chunk.trim()
         }))
     );
-    console.log('Input document:', inputDocument);
-        
-    const contents = [
-      {
-        role: 'user',
-        parts: [
-          {
-            text: `
+
+/** The single user prompt for the incremental notes translation path. */
+export const buildNotesBlockPrompt = (todo: TranslationTodo, language: string): string => {
+    const inputDocument = buildNotesBlockInputDocument(todo);
+    return `
 We are translating text into ${language}.
 
 Here is some text that has already been translated, provided for reference for style and terminology. The instructions and text to be translated will follow after this context.
@@ -209,12 +206,29 @@ Segment ids must match those in the input document.
 <input_document>
 ${inputDocument}
 </input_document>
-  `,
-          },
-        ],
+  `;
+};
+
+export const translateBlock = async (provider: GeminiProvider, todo: TranslationTodo, language: string): Promise<TranslationBlockResult[]> => {
+    const config = {
+      responseMimeType: 'application/json',
+      responseSchema: NOTES_BLOCK_RESPONSE_SCHEMA,
+    };
+
+    type OutputSegment = {
+        segmentId: number;
+        translation: string;
+    };
+
+    console.log('Input document:', buildNotesBlockInputDocument(todo));
+
+    const contents = [
+      {
+        role: 'user',
+        parts: [{ text: buildNotesBlockPrompt(todo, language) }],
       },
     ];
-  
+
     const response = await provider.apiClient.models.generateContent({
       model: provider.defaultModel,
       config,
@@ -242,7 +256,7 @@ export type DraftItemTarget = {
 };
 
 /** Function declaration the model uses to fetch canonical Scripture wording. */
-const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
+export const BIBLE_LOOKUP_TOOL: FunctionDeclaration = {
     name: 'lookup_bible_passage',
     description:
         'Look up the canonical wording of a Bible passage in the target languages. Call this ' +
@@ -308,7 +322,7 @@ const LINE_BREAK_FIELD_NOTE =
     'line-break guidance in the conversation.';
 
 /** Function declaration the model uses to record the finished translations. */
-const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
+export const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
     name: 'set_translations',
     description:
         'Record the finished translations. Call this once the translations are ready, with ' +
@@ -364,7 +378,7 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
  * through `set_translations`, which costs output tokens and risks the model quietly
  * rewriting the parts the reviewer already approved.
  */
-const REVISE_TRANSLATION_TOOL: FunctionDeclaration = {
+export const REVISE_TRANSLATION_TOOL: FunctionDeclaration = {
     name: 'revise_translation',
     description:
         'Make a targeted edit to one slide\'s translation in one language: replace an exact ' +
@@ -404,7 +418,7 @@ const REVISE_TRANSLATION_TOOL: FunctionDeclaration = {
  * closing note). Each `revise_translation` costs a round, so this allows a handful of
  * targeted fixes on top of the lookups and the initial draft.
  */
-const MAX_AGENT_ROUNDS = 12;
+export const MAX_AGENT_ROUNDS = 12;
 
 /**
  * The agent's working copy of the translations: language → slide id → current text.
@@ -414,9 +428,9 @@ const MAX_AGENT_ROUNDS = 12;
  * coherent result. Seeded from `currentTranslations` on a resumed conversation so a targeted
  * edit works without the model re-sending everything first.
  */
-type WorkingTranslations = Map<string, Map<number, string>>;
+export type WorkingTranslations = Map<string, Map<number, string>>;
 
-const workingFor = (working: WorkingTranslations, language: string): Map<number, string> => {
+export const workingFor = (working: WorkingTranslations, language: string): Map<number, string> => {
     let perSlide = working.get(language);
     if (!perSlide) {
         perSlide = new Map<number, string>();
@@ -426,7 +440,7 @@ const workingFor = (working: WorkingTranslations, language: string): Map<number,
 };
 
 /** Apply a `set_translations` call to the working copy; returns the ids it touched. */
-const applySetTranslations = (
+export const applySetTranslations = (
     args: Record<string, unknown> | undefined,
     sourceSlides: string[],
     working: WorkingTranslations,
@@ -456,7 +470,7 @@ const applySetTranslations = (
  * absent or ambiguous changes nothing and reports why, so the model retries with more
  * context instead of silently editing the wrong line.
  */
-const applyReviseTranslation = (
+export const applyReviseTranslation = (
     args: Record<string, unknown> | undefined,
     sourceSlides: string[],
     working: WorkingTranslations,
@@ -504,7 +518,7 @@ const applyReviseTranslation = (
 };
 
 /** Collect the slides the run changed, per language, from the working copy. */
-const collectChanged = (
+export const collectChanged = (
     working: WorkingTranslations,
     changed: Map<string, Set<number>>,
     sourceSlides: string[],
@@ -686,7 +700,7 @@ export const runSlideTranslationAgent = async (
  * Bible-grounding instructions when any target language has a canonical translation, and the
  * instruction to record results via the `set_translations` tool.
  */
-const buildSlideTranslationPrompt = (params: {
+export const buildSlideTranslationPrompt = (params: {
     sourceSlides: string[];
     targets: DraftItemTarget[];
     referenceText?: string;
