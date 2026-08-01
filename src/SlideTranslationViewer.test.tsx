@@ -68,6 +68,18 @@ describe('SlideTranslationViewer', () => {
     expect(screen.getByText('(not translated)')).toBeInTheDocument();
   });
 
+  it('renders a blank slide blank, not as untranslated', () => {
+    render(
+      <SlideTranslationViewer
+        slides={['Praise the Lord', '   ']}
+        currentIndex={1}
+        language="French"
+        resolvedBySlide={[resolved('Louez le Seigneur', 'reviewed', 'French', 'French'), undefined]}
+      />,
+    );
+    expect(screen.queryByText('(not translated)')).not.toBeInTheDocument();
+  });
+
   it('renders a placeholder when there are no slides', () => {
     render(
       <SlideTranslationViewer

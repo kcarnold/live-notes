@@ -62,6 +62,15 @@ export function normalizeSlideText(text: string): string {
     .trim();
 }
 
+/**
+ * Whether a slide has no text at all. Blank slides are real slides (Proclaim emits
+ * them for image slideshows and spacer screens), but there is nothing to translate —
+ * so they render blank rather than as an untranslated slide.
+ */
+export function isBlankSlide(slideText: string): boolean {
+  return slideText.trim() === '';
+}
+
 /** Content-addressed key combining language and normalized slide text. */
 export function slideTranslationKey(language: string, slideText: string): string {
   return `${language}:${normalizeSlideText(slideText)}`;

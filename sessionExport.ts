@@ -20,6 +20,7 @@
  */
 import * as Y from 'yjs';
 import {
+  isBlankSlide,
   resolveSlideTranslation,
   slideTranslationKey,
   type SlideTranslationEntry,
@@ -174,7 +175,7 @@ function extractPresentations(ydoc: Y.Doc): { presentations: ExportedPresentatio
 
     const exportedSlides: ExportedSlide[] = slides.map((text, index) => {
       const translations: Record<string, ResolvedSlideTranslation> = {};
-      if (text.trim() !== '') {
+      if (!isBlankSlide(text)) {
         for (const lang of languages) {
           const resolved = resolveSlideTranslation(lang, text, lookup);
           if (resolved) translations[lang] = resolved;
