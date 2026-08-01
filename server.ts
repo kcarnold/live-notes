@@ -33,6 +33,7 @@ import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
 import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
 import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
+import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -224,37 +225,19 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-// Y-Sweet
-//
-// Read-only tokens are unconditional — anyone may watch a session. A *full* token is
-// the app's real write boundary (the browser talks to Y-Sweet directly with it), so
-// asking for one is what requires a key.
-//
-// An unauthorized editor request is downgraded to read-only rather than refused: a
-// device with a stale key then shows the session as a viewer instead of a blank page,
-// which is the failure anyone would rather have mid-service. The granted level comes
-// back in a header so the UI can say so plainly instead of offering edit controls that
-// silently do nothing.
-app.post('/api/ys-auth', async (req, res) => {
-  const docId = req.body?.docId ?? null;
-  const wantsEditor = req.body?.isEditor ?? false;
-  // Only editor requests are evaluated, and so only they are audited: a viewer needs no
-  // key, and checking one anyway would put an audit record on every page load of every
-  // screen in the session.
-  const check = wantsEditor ? writeAuth.check(req, '/api/ys-auth') : null;
-  const authorization = check?.allowed ? 'full' : 'read-only';
-  console.log(`Auth request: doc=${docId} isEditor=${wantsEditor} granted=${authorization}`);
-  const clientToken = await documentManager.getOrCreateDocAndToken(docId, {
-    authorization
-  })
-  res.setHeader('X-Granted-Authorization', authorization);
-  // Why the key was or wasn't accepted, which is not the same question as what was
-  // granted. In observe mode nothing is refused, so `granted` is always `full` and this
-  // header is the only way a device can discover it is holding a stale key — during the
-  // observe window, which is exactly when that is still cheap to fix.
-  if (check) res.setHeader('X-Write-Key-Status', check.result.status);
-  res.send(clientToken)
-})
+// Y-Sweet token issuance. The decision lives in writeAuthRoutes.ts so it can be tested
+// without standing up Y-Sweet, LiveKit and PostHog.
+app.post(
+  '/api/ys-auth',
+  makeYsAuthHandler({
+    writeAuth,
+    // The SDK takes `docId?`, and treats a falsy one as "make me a new doc" — so an
+    // absent id has always meant the same thing here whether it arrived as null or not.
+    issueToken: (docId, authorization) =>
+      documentManager.getOrCreateDocAndToken(docId ?? undefined, { authorization }),
+    log: (message) => console.log(message),
+  }),
+);
 
 
 // ---------------------------------------------------------------------------
@@ -304,7 +287,7 @@ const SILENCE_THRESHOLD_DBFS = parseSilenceThresholdDbfs(process.env.LIVE_AUDIO_
 
 // Issue a LiveKit access token. role 'organizer' => can publish (the speaker);
 // anything else => subscribe-only attendee (a listener).
-app.post('/api/livekit/token', async (req, res) => {
+app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) => {
   try {
     const lk = getLiveKitConfig();
     if (!lk) return res.status(503).json({ error: 'LiveKit not configured' });
@@ -321,12 +304,9 @@ app.post('/api/livekit/token', async (req, res) => {
       return res.status(400).json({ error: 'Missing room or identity' });
     }
 
+    // Organizer requests were already gated by makeOrganizerGate above; anything that
+    // reaches here either presented a valid key or didn't ask for the microphone.
     const isOrganizer = role === 'organizer';
-    // An organizer token is the microphone. Its holder can speak into the room and —
-    // because every broadcaster joins under the same `organizer-host` identity, which
-    // LiveKit resolves by evicting the incumbent — can silently cut off whoever is
-    // currently speaking. Listeners ask for no such thing and need no key.
-    if (isOrganizer && !writeAuth.gate(req, res, '/api/livekit/token')) return;
 
     const at = new AccessToken(lk.apiKey, lk.apiSecret, {
       identity,
