@@ -22,11 +22,11 @@ struct ConfigView: View {
                                 set: { controller.config.docIDOverride = $0.isEmpty ? nil : $0 }))
                     Text("Will publish to room: \(controller.config.resolvedDocID())")
                         .font(.caption).foregroundStyle(.secondary)
-                    SecureField("Write key (from the server's WRITE_KEYS)",
+                    SecureField("Write key (must match the server)",
                                 text: Binding(
                                     get: { controller.config.writeKey ?? "" },
                                     set: { controller.config.writeKey = $0.isEmpty ? nil : $0 }))
-                    Text("Required to take the microphone once the server enforces keys.")
+                    Text("Required to take the microphone.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
