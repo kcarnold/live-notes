@@ -3,6 +3,12 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { PostHogProvider } from 'posthog-js/react'
+import { initWriteKey } from './writeKey.ts'
+
+// Claim any write key from the URL before the app renders: App's first act is to ask
+// /api/ys-auth for a token, and that request needs the key already in hand. This also
+// scrubs the key out of the address bar (see writeKey.ts).
+initWriteKey()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

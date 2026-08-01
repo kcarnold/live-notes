@@ -82,6 +82,18 @@ export interface AppStrings {
   goHome: string;
   downloadSession: string;
 
+  // Write authorization (shared device keys)
+  editorAccessDenied: string;
+  dismiss: string;
+  enterWriteKey: string;
+  statusWriteKeyTitle: string;
+  statusWriteKeyDescription: string;
+  statusWriteKeyInstalled: string;
+  statusWriteKeyMissing: string;
+  statusWriteKeyPlaceholder: string;
+  statusWriteKeySave: string;
+  statusWriteKeyClear: string;
+
   // Status / admin page (skeleton for #72)
   statusTitle: string;
   statusHealthTitle: string;
@@ -183,6 +195,18 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Next',
     untitledPresentation: 'Untitled Presentation',
     goHome: 'Go home',
+    editorAccessDenied: 'This device is not set up to edit. Showing the session read-only.',
+    dismiss: 'Dismiss',
+    enterWriteKey:
+      'This device needs a write key to edit. Paste it here, or cancel to continue read-only.',
+    statusWriteKeyTitle: "This device's write key",
+    statusWriteKeyDescription:
+      'Authorizes editing, the microphone, and translation from this device. Keys are per device, not per person.',
+    statusWriteKeyInstalled: 'Key installed',
+    statusWriteKeyMissing: 'No key on this device',
+    statusWriteKeyPlaceholder: 'Paste a write key',
+    statusWriteKeySave: 'Save',
+    statusWriteKeyClear: 'Clear',
     downloadSession: 'Download session',
     statusTitle: 'Session status',
     statusHealthTitle: 'Component health',
@@ -278,6 +302,18 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Suivant',
     untitledPresentation: 'Pr\u00e9sentation sans titre',
     goHome: 'Accueil',
+    editorAccessDenied: "Cet appareil n'est pas autorisé à modifier. Session affichée en lecture seule.",
+    dismiss: 'Fermer',
+    enterWriteKey:
+      "Cet appareil a besoin d'une clé d'écriture pour modifier. Collez-la ici, ou annulez pour rester en lecture seule.",
+    statusWriteKeyTitle: "Clé d'écriture de cet appareil",
+    statusWriteKeyDescription:
+      "Autorise la modification, le microphone et la traduction depuis cet appareil. Une clé par appareil, pas par personne.",
+    statusWriteKeyInstalled: 'Clé installée',
+    statusWriteKeyMissing: 'Aucune clé sur cet appareil',
+    statusWriteKeyPlaceholder: "Collez une clé d'écriture",
+    statusWriteKeySave: 'Enregistrer',
+    statusWriteKeyClear: 'Effacer',
     downloadSession: 'Télécharger la session',
     statusTitle: 'État de la session',
     statusHealthTitle: 'État des composants',
@@ -373,6 +409,18 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Siguiente',
     untitledPresentation: 'Presentaci\u00f3n sin t\u00edtulo',
     goHome: 'Ir al inicio',
+    editorAccessDenied: 'Este dispositivo no está autorizado para editar. Sesión en solo lectura.',
+    dismiss: 'Cerrar',
+    enterWriteKey:
+      'Este dispositivo necesita una clave de escritura para editar. Péguela aquí o cancele para continuar en solo lectura.',
+    statusWriteKeyTitle: 'Clave de escritura de este dispositivo',
+    statusWriteKeyDescription:
+      'Autoriza la edición, el micrófono y la traducción desde este dispositivo. Una clave por dispositivo, no por persona.',
+    statusWriteKeyInstalled: 'Clave instalada',
+    statusWriteKeyMissing: 'Sin clave en este dispositivo',
+    statusWriteKeyPlaceholder: 'Pegue una clave de escritura',
+    statusWriteKeySave: 'Guardar',
+    statusWriteKeyClear: 'Borrar',
     downloadSession: 'Descargar sesión',
     statusTitle: 'Estado de la sesión',
     statusHealthTitle: 'Estado de los componentes',
@@ -468,6 +516,18 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Apr\u00e8',
     untitledPresentation: 'Prezantasyon San Tit',
     goHome: 'Retounen lakay',
+    editorAccessDenied: 'Aparèy sa a pa otorize pou modifye. N ap montre sesyon an an lekti sèlman.',
+    dismiss: 'Fèmen',
+    enterWriteKey:
+      'Aparèy sa a bezwen yon kle ekriti pou l ka modifye. Kole l isit la, oswa anile pou w rete an lekti sèlman.',
+    statusWriteKeyTitle: 'Kle ekriti aparèy sa a',
+    statusWriteKeyDescription:
+      'Li otorize modifikasyon, mikwofòn nan, ak tradiksyon depi aparèy sa a. Yon kle pou chak aparèy, pa pou chak moun.',
+    statusWriteKeyInstalled: 'Kle enstale',
+    statusWriteKeyMissing: 'Pa gen kle sou aparèy sa a',
+    statusWriteKeyPlaceholder: 'Kole yon kle ekriti',
+    statusWriteKeySave: 'Anrejistre',
+    statusWriteKeyClear: 'Efase',
     downloadSession: 'Telechaje sesyon an',
     statusTitle: 'Estati sesyon an',
     statusHealthTitle: 'Estati konpozan yo',

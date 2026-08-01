@@ -23,6 +23,7 @@ import { LANGUAGE_BCP47, useStrings } from "./useLocale";
 import { LISTEN_ORIGINAL_CODE } from "./listenLanguages";
 import { LiveTranscript } from "./LiveTranscript";
 import { getDocId } from "./getDocId";
+import { apiFetch } from "./writeKey";
 
 const ORGANIZER_PREFIX = "organizer-";
 const TRANSLATOR_PREFIX = "translator-";
@@ -106,7 +107,7 @@ function ListenAudio({
       const now = Date.now();
       if (now - lastEnsureRef.current < ENSURE_TRANSLATOR_INTERVAL_MS) return;
       lastEnsureRef.current = now;
-      void fetch("/api/livekit/translate", {
+      void apiFetch("/api/livekit/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: docId, targetLanguage: translatorLanguage }),
@@ -219,7 +220,7 @@ export function ListenViewer({ language }: { language: string }) {
         // to run.
         let translatorIdentity: string | null = null;
         if (translatorLanguage) {
-          const tr = (await fetch("/api/livekit/translate", {
+          const tr = (await apiFetch("/api/livekit/translate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ sessionId: docId, targetLanguage: translatorLanguage }),
@@ -235,7 +236,7 @@ export function ListenViewer({ language }: { language: string }) {
         // presence, so our bridge survives as long as we're in the room — no
         // refcounts, no unload beacon. Sent only when we actually want a bot, so
         // "demand" stays a true statement about what someone is listening to.
-        const tk = (await fetch("/api/livekit/token", {
+        const tk = (await apiFetch("/api/livekit/token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

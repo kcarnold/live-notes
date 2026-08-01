@@ -1,4 +1,6 @@
 
+import { apiFetch } from './writeKey.ts';
+
 export function findContiguousBlocks(arr: unknown[]) {
     const blocks = [];
     let start = -1;
@@ -188,7 +190,7 @@ export async function fetchAndCacheTranslations(
     const translationTodos = buildBlockTranslationRequests(language, blocks, translationCache);
 
     if (translationTodos.length > 0) {
-        const response = await fetch('/api/requestTranslatedBlocks', {
+        const response = await apiFetch('/api/requestTranslatedBlocks', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ translationTodos, language }),

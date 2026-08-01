@@ -1,8 +1,9 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMap, useYDoc } from '@y-sweet/react';
 import { useStrings } from './useLocale';
 import { getDocId } from './getDocId';
 import { TranscriptHealth } from './TranscriptHealth';
+import { getWriteKey, maskWriteKey, setWriteKey } from './writeKey';
 
 /**
  * Session status / admin page.
@@ -48,6 +49,89 @@ function readProclaimServiceStatus(entries: Record<string, unknown>): ProclaimSe
   };
 }
 
+const SECTION_CLASS = 'bg-white/80 dark:bg-gray-800/80 rounded shadow p-4 flex flex-col gap-3';
+const SECTION_TITLE_CLASS = 'font-semibold text-lg';
+const PLACEHOLDER_CLASS = 'text-sm text-gray-500 dark:text-gray-400';
+
+/**
+ * This device's write key: whether it has one, and a way to change it that doesn't
+ * involve typing `#editor&key=…` into a tablet's address bar.
+ *
+ * The masked tail is the point of the display. During a rotation the question is never
+ * "is there a key" but "is this device on the new one yet", and four characters answer
+ * that without putting the secret on a screen that may well be projected.
+ */
+function WriteKeySection({
+  writeKey,
+  onWriteKeyChange,
+}: {
+  writeKey: string | null;
+  onWriteKeyChange: (key: string | null) => void;
+}) {
+  const s = useStrings();
+  const [typed, setTyped] = useState('');
+  const pending = typed.trim();
+
+  return (
+    <section className={SECTION_CLASS}>
+      <h2 className={SECTION_TITLE_CLASS}>{s.statusWriteKeyTitle}</h2>
+      <p className={PLACEHOLDER_CLASS}>{s.statusWriteKeyDescription}</p>
+      <div className="flex items-center gap-2 text-sm">
+        <span
+          className={`inline-block w-2.5 h-2.5 rounded-full ${
+            writeKey ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+          }`}
+        />
+        {writeKey ? (
+          <>
+            <span>{s.statusWriteKeyInstalled}</span>
+            <code className="text-xs text-gray-500 dark:text-gray-400">
+              {maskWriteKey(writeKey)}
+            </code>
+          </>
+        ) : (
+          <span>{s.statusWriteKeyMissing}</span>
+        )}
+      </div>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!pending) return;
+          onWriteKeyChange(pending);
+          setTyped('');
+        }}
+      >
+        <input
+          type="password"
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          placeholder={s.statusWriteKeyPlaceholder}
+          autoComplete="off"
+          aria-label={s.statusWriteKeyPlaceholder}
+          className="flex-1 min-w-40 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={!pending}
+          className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:hover:bg-blue-500 text-sm"
+        >
+          {s.statusWriteKeySave}
+        </button>
+        {writeKey && (
+          <button
+            type="button"
+            onClick={() => onWriteKeyChange(null)}
+            className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm"
+          >
+            {s.statusWriteKeyClear}
+          </button>
+        )}
+      </form>
+    </section>
+  );
+}
+
 export interface StatusViewProps {
   /** The session's doc id (drives the export link). */
   docId: string;
@@ -61,18 +145,30 @@ export interface StatusViewProps {
    * observers). Kept as a slot so the pure component stays testable without Yjs.
    */
   liveTranscripts?: ReactNode;
+  /** This device's stored write key, or null when it has none. */
+  writeKey?: string | null;
+  /**
+   * Store a key typed here, or clear it with null. Omitting this hides the write-key
+   * section entirely, which is what keeps the section out of tests that don't care.
+   */
+  onWriteKeyChange?: (key: string | null) => void;
 }
 
-export function StatusView({ docId, statusEntries, liveTranscripts }: StatusViewProps) {
+export function StatusView({
+  docId,
+  statusEntries,
+  liveTranscripts,
+  writeKey = null,
+  onWriteKeyChange,
+}: StatusViewProps) {
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
   const reportingCount = Object.keys(statusEntries).length;
   const proclaim = readProclaimServiceStatus(statusEntries);
 
-  const sectionClass =
-    'bg-white/80 dark:bg-gray-800/80 rounded shadow p-4 flex flex-col gap-3';
-  const sectionTitleClass = 'font-semibold text-lg';
-  const placeholderClass = 'text-sm text-gray-500 dark:text-gray-400';
+  const sectionClass = SECTION_CLASS;
+  const sectionTitleClass = SECTION_TITLE_CLASS;
+  const placeholderClass = PLACEHOLDER_CLASS;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-950 dark:to-gray-900 text-black dark:text-gray-200 overflow-auto">
@@ -137,6 +233,11 @@ export function StatusView({ docId, statusEntries, liveTranscripts }: StatusView
           )}
         </section>
 
+        {/* This device's write key — provisioning and rotation, off the viewer screens. */}
+        {onWriteKeyChange && (
+          <WriteKeySection writeKey={writeKey} onWriteKeyChange={onWriteKeyChange} />
+        )}
+
         {/* Preflight canary — placeholder until #72. */}
         <section className={sectionClass}>
           <h2 className={sectionTitleClass}>{s.statusCanaryTitle}</h2>
@@ -175,11 +276,18 @@ export function StatusViewContainer() {
   statusMap.forEach((value, key) => {
     statusEntries[key] = value;
   });
+  // The stored key isn't reactive, so mirror it into state to re-render on a change.
+  const [writeKey, setWriteKeyState] = useState<string | null>(() => getWriteKey());
   return (
     <StatusView
       docId={getDocId()}
       statusEntries={statusEntries}
       liveTranscripts={<TranscriptHealth />}
+      writeKey={writeKey}
+      onWriteKeyChange={(key) => {
+        setWriteKey(key);
+        setWriteKeyState(key);
+      }}
     />
   );
 }

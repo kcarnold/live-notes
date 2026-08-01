@@ -53,6 +53,14 @@ public struct FeederConfig: Codable, Equatable, Sendable {
     public var serverURL: String
     /// Optional explicit Y-Sweet/LiveKit doc id. When nil, defaults to `doc-YYYY-MM-DD` (local).
     public var docIDOverride: String?
+    /// Shared key authorizing this machine to take the microphone (server side: writeAuth.ts).
+    /// Publishing evicts whoever is currently broadcasting, so the server gates it on a key.
+    /// Optional: while the server runs in observe mode a keyless request is still served.
+    ///
+    /// Persisted in the same plaintext JSON as the rest of the config, not the Keychain —
+    /// adequate for a key that only grants the room's microphone, and rotated by editing
+    /// the server's WRITE_KEYS.
+    public var writeKey: String?
     /// CoreAudio device UID of the sound board (stable across hotplug, unlike device index).
     public var deviceUID: String?
     /// 0-based channel index to pull from the multichannel device.
@@ -62,12 +70,14 @@ public struct FeederConfig: Codable, Equatable, Sendable {
 
     public init(serverURL: String = "https://notelate.com",
                 docIDOverride: String? = nil,
+                writeKey: String? = nil,
                 deviceUID: String? = nil,
                 channelIndex: Int = 0,
                 schedule: Schedule = Schedule(),
                 manualOverride: ManualOverride = .off) {
         self.serverURL = serverURL
         self.docIDOverride = docIDOverride
+        self.writeKey = writeKey
         self.deviceUID = deviceUID
         self.channelIndex = channelIndex
         self.schedule = schedule

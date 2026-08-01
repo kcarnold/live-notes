@@ -197,7 +197,7 @@ final class AppController: ObservableObject {
             channel \(self.config.channelIndex + 1, privacy: .public), room \(docID, privacy: .public)
             """)
 
-        let publisher = Publisher(serverURL: config.serverURL)
+        let publisher = Publisher(serverURL: config.serverURL, writeKey: config.writeKey)
         publisher.onStateChange = { [weak self] pubState in
             Task { @MainActor in self?.handlePublisherState(pubState) }
         }

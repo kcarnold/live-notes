@@ -1,7 +1,12 @@
 #!/bin/bash
 # Install proclaim_service as a macOS LaunchAgent
 # Usage: bash install_proclaim_service.sh [--server-url=<url>] [--branch=<branch>]
-#                                         [--no-auto-update] [--uninstall]
+#                                         [--write-key=<key>] [--no-auto-update]
+#                                         [--uninstall]
+#
+# --write-key is the shared key this machine presents to the server's privileged
+# endpoints (see docs/WRITE_KEYS.md). It is NOT fetched from the server — /api/config is
+# public. Omitting it on a reinstall keeps whatever key is already installed.
 #
 # The LaunchAgent runs proclaim_service_launch.sh, which updates this checkout
 # from the release branch on every launch before starting the service. See
@@ -47,6 +52,19 @@ fetch_posthog_config() {
     POSTHOG_HOST=$(echo "$config" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('posthogHost',''))")
 }
 
+# Escape a value for use as a sed replacement with | as the delimiter.
+sed_escape() {
+    printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
+# The write key already installed, if any. Lets a reinstall (or an --server-url change)
+# keep the machine's key instead of silently dropping it.
+read_existing_write_key() {
+    [ -f "$PLIST_DEST" ] || return 1
+    /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PROCLAIM_WRITE_KEY" \
+        "$PLIST_DEST" 2>/dev/null
+}
+
 generate_plist() {
     # Generate plist from template with variable substitution
     sed "s|{{SERVICE_SCRIPT}}|$SERVICE_SCRIPT|g" "$PLIST_TEMPLATE" | \
@@ -60,6 +78,7 @@ generate_plist() {
     sed "s|{{AUTO_UPDATE}}|$AUTO_UPDATE|g" | \
     sed "s|{{POSTHOG_KEY}}|$POSTHOG_KEY|g" | \
     sed "s|{{POSTHOG_HOST}}|$POSTHOG_HOST|g" | \
+    sed "s|{{WRITE_KEY}}|$(sed_escape "$WRITE_KEY")|g" | \
     sed "s|{{YSWEET_URL}}|$SERVER_URL|g"
 }
 
@@ -90,15 +109,24 @@ POSTHOG_HOST=""
 # `git push origin main:proclaim-stable`.
 UPDATE_BRANCH="proclaim-stable"
 AUTO_UPDATE="1"
+WRITE_KEY=""
+WRITE_KEY_GIVEN="0"
 
 for arg in "$@"; do
     case "$arg" in
         --uninstall) uninstall ;;
         --server-url=*) SERVER_URL="${arg#--server-url=}" ;;
         --branch=*) UPDATE_BRANCH="${arg#--branch=}" ;;
+        --write-key=*) WRITE_KEY="${arg#--write-key=}"; WRITE_KEY_GIVEN="1" ;;
         --no-auto-update) AUTO_UPDATE="0" ;;
     esac
 done
+
+# Carry the installed key forward when this run didn't supply one, so routine
+# reinstalls and server-url changes don't quietly de-authorize the machine.
+if [ "$WRITE_KEY_GIVEN" = "0" ]; then
+    WRITE_KEY="$(read_existing_write_key || true)"
+fi
 
 if [ -z "$SERVER_URL" ]; then
     log_error "--server-url is required"
@@ -168,6 +196,15 @@ log_info "  Repo:   $SCRIPT_DIR"
 log_info "  Logs:   $LOG_DIR"
 log_info "  uv:     $UV_PATH"
 log_info "  Server: $SERVER_URL"
+if [ -n "$WRITE_KEY" ]; then
+    if [ "$WRITE_KEY_GIVEN" = "1" ]; then
+        log_info "  Key:    installed"
+    else
+        log_info "  Key:    kept from the previous install"
+    fi
+else
+    log_warn "  Key:    none — pass --write-key=<key> once the server enforces write keys"
+fi
 if [ "$AUTO_UPDATE" = "1" ]; then
     log_info "  Update: on every launch, from origin/$UPDATE_BRANCH"
 else

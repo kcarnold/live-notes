@@ -37,7 +37,33 @@ Options:
 |---|---|
 | `--server-url=<url>` | Y-Sweet / API server (default `https://notelate.com`) |
 | `--branch=<branch>` | Release branch to track (default `proclaim-stable`) |
+| `--write-key=<key>` | Shared key authorizing this machine's writes (see below). Omit on a reinstall to keep the installed key |
 | `--no-auto-update` | Install without the pull-on-launch update; runs whatever is checked out |
+
+### Write key
+
+The server gates writes — full Y-Sweet tokens and `/api/translateItem` — on a shared
+per-device key ([docs/WRITE_KEYS.md](docs/WRITE_KEYS.md)). Give this machine its key at
+install time:
+
+```bash
+bash install_proclaim_service.sh --server-url=https://notelate.com --write-key=THEKEY
+```
+
+It is stored in the plist as `PROCLAIM_WRITE_KEY`, and is never fetched from the server
+(`/api/config` is public). A reinstall without `--write-key=` carries the existing key
+forward, so routine reinstalls don't de-authorize the machine.
+
+To check that it took, look for this line at startup — it reports whether a key is
+configured, never what it is:
+
+```
+Write key: configured
+```
+
+While the server runs in `observe` mode a missing key is recorded and still served, so
+`NOT configured` is a warning rather than an outage — until the server switches to
+`enforce`, at which point this machine stops being able to write.
 
 ## Automatic updates
 
@@ -266,6 +292,8 @@ Find the `EnvironmentVariables` section and uncomment/update the URLs you need:
     <string>http://your-ysweet-url.com</string>
     <key>PROCLAIM_BASE_URL</key>
     <string>http://your-proclaim-url:52195</string>
+    <key>PROCLAIM_WRITE_KEY</key>
+    <string>the-shared-write-key</string>
 </dict>
 ```
 
