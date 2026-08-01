@@ -31,7 +31,12 @@ most of these signals.
    Each segment is one utterance, stamped with `startedAt` and `endedAt` — the write side is
    the only place that knows when a delta arrived, so timing recorded there is the only timing
    anything downstream can ever see. Only those observations are stored; the silence between
-   utterances is *derived* at read time as `startedAt − previous.endedAt`. That keeps the two
+   utterances is *derived* at read time as `startedAt − previous.endedAt`. `endedAt` is written
+   coarsely on purpose (see `TRANSCRIPT_ENDED_AT_RESOLUTION_MS`): Yjs merges consecutive
+   same-client appends to a Y.Text into one item only while their clocks stay adjacent, so a
+   timestamp write between two deltas splits the run — stamping every delta measured at ~2x the
+   live traffic and ~2x the stored doc. Gaps are therefore accurate to ~1s, and only ever
+   over-reported. That keeps the two
    from disagreeing, and lets the writer recover its own state from the doc instead of holding
    it in memory — so a server restart mid-session neither loses the utterance boundary nor
    hides the gap the restart itself caused. Sessions from before this existed hold a flat

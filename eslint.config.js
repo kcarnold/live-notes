@@ -52,4 +52,18 @@ export default tseslint.config(
       },
     },
   },
+  {
+    // These same backend files are executed by `node server.ts` (see package.json), which
+    // runs TypeScript in *strip-only* mode: it erases types but never generates code. A
+    // constructor parameter property needs desugaring, not erasure, so Node rejects the
+    // file outright and the server dies at import with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX.
+    // Nothing else catches this — tsc, vitest (esbuild) and eslint all accept it happily —
+    // so a green CI can still ship a server that won't boot. Hence a lint rule.
+    // Test files are exempt: they only ever run under vitest, which transpiles fully.
+    files: ['*.ts', 'live-audio/**/*.ts'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/parameter-properties': ['error', { prefer: 'class-property' }],
+    },
+  },
 )

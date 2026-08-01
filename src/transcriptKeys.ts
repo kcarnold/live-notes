@@ -32,6 +32,25 @@ export function transcriptSegmentsKey(code: string): string {
 export const TRANSCRIPT_PAUSE_MS = 10_000;
 
 /**
+ * How coarsely a segment's `endedAt` tracks its last delta, and therefore the accuracy
+ * of a derived gap. Not a display choice — a wire-size one.
+ *
+ * Yjs merges consecutive same-client appends to a Y.Text into one item, but only while
+ * their clocks stay adjacent. Any other write from the same client in between — including
+ * a timestamp on the enclosing Y.Map — splits the run. Stamping `endedAt` on every delta
+ * therefore cost far more than the timestamps themselves: measured over an hour-long
+ * transcript it left 5400 text items instead of 600, and roughly doubled both the live
+ * update traffic and the stored doc (222 KB vs 97 KB, for 53 KB of actual text).
+ *
+ * So `endedAt` is only rewritten once the stored value is this stale — except on a delta
+ * that ends a sentence, which is the segment's last delta in the ordinary case and is
+ * always stamped exactly. That leaves the error only on pause-split boundaries, where the
+ * gap is at least TRANSCRIPT_PAUSE_MS anyway, so a gap may be *over*-reported by up to
+ * this much and never under-reported.
+ */
+export const TRANSCRIPT_ENDED_AT_RESOLUTION_MS = 1_000;
+
+/**
  * One utterance of a transcript. The writer opens a segment on the first delta
  * after a sentence ends or after a long silence, so segment boundaries are exactly
  * where a pause can be reported.
@@ -51,7 +70,8 @@ export interface TranscriptSegment {
    * DERIVED, not stored: silence (ms) between the previous segment's last delta and
    * this one's first. Undefined for the first segment of a transcript and for legacy
    * ones. Measured from the previous segment's *end* rather than its start, so a long
-   * utterance is never mistaken for a pause.
+   * utterance is never mistaken for a pause. Accurate to
+   * TRANSCRIPT_ENDED_AT_RESOLUTION_MS, and only ever in the over-reporting direction.
    */
   gapMs?: number;
 }

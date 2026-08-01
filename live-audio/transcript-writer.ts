@@ -29,6 +29,7 @@ import { createYjsProvider, type YSweetProvider } from "@y-sweet/client";
 import type { DocumentManager } from "@y-sweet/sdk";
 
 import {
+  TRANSCRIPT_ENDED_AT_RESOLUTION_MS,
   TRANSCRIPT_PAUSE_MS,
   readSegmentFields,
   segmentLastActivityAt,
@@ -52,7 +53,14 @@ export function endsSentence(text: string): boolean {
  * nothing to do with being connected to anything.
  */
 export class TranscriptSegmentLog {
-  constructor(private readonly doc: Y.Doc) {}
+  // Explicit field, not a constructor parameter property: the server runs as
+  // `node server.ts` (strip-only TypeScript), which rejects parameter properties
+  // outright because desugaring them needs code generation, not just type removal.
+  private readonly doc: Y.Doc;
+
+  constructor(doc: Y.Doc) {
+    this.doc = doc;
+  }
 
   /**
    * Append a streamed transcription delta for a language. The delta goes verbatim into
@@ -102,8 +110,15 @@ export class TranscriptSegmentLog {
       } else {
         const openText = open!.get("text") as Y.Text;
         openText.insert(openText.length, body);
-        // Same transaction as the insert, so this costs one update, not two.
-        open!.set("endedAt", now);
+        // Rewriting endedAt on every delta splits the Y.Text's merged item run and
+        // roughly doubles the doc — see TRANSCRIPT_ENDED_AT_RESOLUTION_MS. Stamp it
+        // exactly when this delta ends a sentence (the segment's last delta, ordinarily),
+        // otherwise only once the stored value has gone stale.
+        const storedEndedAt = segmentLastActivityAt(open!) ?? now;
+        if (endsSentence(text) || now - storedEndedAt >= TRANSCRIPT_ENDED_AT_RESOLUTION_MS) {
+          // Same transaction as the insert, so this costs one update, not two.
+          open!.set("endedAt", now);
+        }
       }
     });
   }

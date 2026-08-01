@@ -191,6 +191,55 @@ describe("TranscriptSegmentLog", () => {
     expect(segments[1].endedAt).toBe(T0 + 3000);
   });
 
+  // endedAt is written coarsely on purpose: a Y.Map write between two Y.Text appends
+  // splits the merged item run, so stamping every delta roughly doubles the doc.
+  describe("endedAt resolution", () => {
+    it("is exact on a delta that ends a sentence, however soon it arrives", () => {
+      const segments = run([
+        [0, "Short"],
+        [120, " one."], // well inside the resolution window, but it closes the sentence
+      ]);
+
+      expect(segments[0].endedAt).toBe(T0 + 120);
+    });
+
+    it("skips the rewrite for rapid mid-sentence deltas", () => {
+      const segments = run([
+        [0, "We"],
+        [200, " were"],
+        [400, " saying"],
+      ]);
+
+      // Still the segment's opening stamp — the two cheap deltas didn't rewrite it.
+      expect(segments[0].endedAt).toBe(T0);
+    });
+
+    it("catches up once the stored value goes stale", () => {
+      const segments = run([
+        [0, "We"],
+        [200, " were"],
+        [1500, " saying"],
+      ]);
+
+      expect(segments[0].endedAt).toBe(T0 + 1500);
+    });
+
+    // The coarseness must only ever make a pause look longer. Under-reporting could
+    // hide a real pause below the threshold; over-reporting at most pads a gap that
+    // already cleared it by a second.
+    it("over-reports a gap rather than under-reporting it", () => {
+      const segments = run([
+        [0, "Trailing off"],
+        [900, " mid thought"], // within the window, so endedAt stays at T0
+        [40_000, " and back."],
+      ]);
+
+      // True silence is 39.1s; reported as 40s because the last delta wasn't stamped.
+      expect(segments[1].gapMs).toBe(40_000);
+      expect(segments[1].gapMs!).toBeGreaterThanOrEqual(40_000 - 900);
+    });
+  });
+
   // The writer keeps nothing between calls, so a restarted server picks up from the doc.
   // Before this, `breakPending`/`lastDeltaAt` lived in memory and the first delta after a
   // restart glued onto the pre-restart utterance — hiding the boundary and the gap.
