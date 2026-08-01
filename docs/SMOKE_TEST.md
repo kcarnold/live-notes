@@ -46,6 +46,10 @@ an incident happens that this list would not have caught, add a line.
       waits); within ~10 s of the organizer joining, the translator appears and the
       transcript flows. The listener's amber "Restarting translation…" state may flash
       briefly — it must go green without a reload.
+- [ ] **Pause indicator**: stop speaking for ~15 s, then resume. A dashed "Pause · Ns" rule
+      appears between the two utterances, with a plausible duration. Normal gaps between
+      sentences must *not* produce one. (A bridge outage also shows up here — that's intended,
+      but it means a divider isn't proof the speaker was silent.)
 - [ ] Stop and restart the broadcaster mid-session; transcript resumes without a reload.
 - [ ] **Server-restart recovery**: with a listener connected and the speaker talking,
       restart the Node server. Within ~15 s the supervisor rebuilds the bridges from room

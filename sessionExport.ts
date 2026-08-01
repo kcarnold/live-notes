@@ -11,7 +11,8 @@
  *   - `proclaimPresentations` Y.Map itemId -> { title, slides: string[] }
  *   - `proclaimServiceOrder`  Y.Map `order` -> itemId[]
  *   - `slideTranslations`     Y.Map slideTranslationKey(lang, text) -> entry
- *   - `liveTranscript-{code}` Y.Text per language (live speech translation)
+ *   - `liveTranscriptSegments-{code}` Y.Array of utterances per language (live speech
+ *     translation); `liveTranscript-{code}` Y.Text in pre-segments sessions
  *   - `transcriptDoc`         Y.XmlFragment (legacy Web Speech API transcript)
  *
  * Languages are never hard-coded: each section discovers the languages actually
@@ -26,9 +27,14 @@ import {
   type ResolvedSlideTranslation,
 } from './src/slideTranslation.ts';
 import {
-  LIVE_TRANSCRIPT_PREFIX,
   LIVE_TRANSCRIPT_SOURCE_CODE,
+  formatPauseGap,
+  isLongPause,
+  liveTranscriptCodes,
   liveTranscriptLabel,
+  readTranscriptSegments,
+  transcriptPlainText,
+  type TranscriptSegment,
 } from './src/transcriptKeys.ts';
 
 // --- Structured, render-agnostic representation -------------------------------
@@ -61,6 +67,9 @@ export interface ExportedLiveTranscript {
   label: string;
   /** True for the English source transcript produced by the primary bridge. */
   isSource: boolean;
+  /** Utterances in order, each with the silence that preceded it (when recorded). */
+  segments: TranscriptSegment[];
+  /** The same content flattened, blank line between utterances. */
   text: string;
 }
 
@@ -217,27 +226,28 @@ function extractTranscript(ydoc: Y.Doc): string {
 }
 
 /**
- * Collect the live speech-translation transcripts. The pipeline creates a
- * `liveTranscript-{code}` Y.Text per language on demand, so which codes exist
- * varies by session — enumerate the doc's root types rather than guessing. The
- * English source is listed first; the rest are sorted by localized label.
+ * Collect the live speech-translation transcripts. The pipeline creates a transcript
+ * per language on demand, so which codes exist varies by session — enumerate the
+ * doc's root types rather than guessing. `liveTranscriptCodes` already orders them
+ * (English source first, then by localized label) and covers pre-segments sessions,
+ * whose transcripts `readTranscriptSegments` reads from the legacy Y.Text.
  */
 function extractLiveTranscripts(ydoc: Y.Doc): ExportedLiveTranscript[] {
   const transcripts: ExportedLiveTranscript[] = [];
 
-  for (const key of ydoc.share.keys()) {
-    if (!key.startsWith(LIVE_TRANSCRIPT_PREFIX)) continue;
-    const text = ydoc.getText(key).toString().trim();
-    if (text === '') continue;
-    const code = key.slice(LIVE_TRANSCRIPT_PREFIX.length);
-    const isSource = code === LIVE_TRANSCRIPT_SOURCE_CODE;
-    transcripts.push({ code, label: liveTranscriptLabel(code), isSource, text });
+  for (const code of liveTranscriptCodes(ydoc)) {
+    const segments = readTranscriptSegments(ydoc, code);
+    if (segments.length === 0) continue;
+    transcripts.push({
+      code,
+      label: liveTranscriptLabel(code),
+      isSource: code === LIVE_TRANSCRIPT_SOURCE_CODE,
+      segments,
+      text: transcriptPlainText(segments),
+    });
   }
 
-  return transcripts.sort((a, b) => {
-    if (a.isSource !== b.isSource) return a.isSource ? -1 : 1;
-    return a.label.localeCompare(b.label);
-  });
+  return transcripts;
 }
 
 /** Parse `doc-YYYY-MM-DD` into a friendly date; undefined for other id shapes. */
@@ -358,13 +368,29 @@ function renderTranscriptParagraphs(text: string): string {
     .join('\n');
 }
 
+/**
+ * Render transcript segments, marking each long silence with a labelled rule so the
+ * export shows the same breaks the live view does. Pre-segments sessions carry no
+ * gaps, so they render as plain paragraphs exactly as before.
+ */
+function renderTranscriptSegments(segments: TranscriptSegment[]): string {
+  return segments
+    .map((segment) => {
+      const paragraph = `<p>${escapeHtml(segment.text)}</p>`;
+      if (!isLongPause(segment)) return paragraph;
+      const pause = formatPauseGap(segment.gapMs ?? 0, 'en-US');
+      return `<div class="pause"><span>Pause &middot; ${escapeHtml(pause)}</span></div>\n${paragraph}`;
+    })
+    .join('\n');
+}
+
 function renderLiveTranscripts(transcripts: ExportedLiveTranscript[]): string {
   if (transcripts.length === 0) return '';
   const blocks = transcripts
     .map((t) => {
       const heading = t.isSource ? `${escapeHtml(t.label)} (source)` : escapeHtml(t.label);
-      return `<div class="presentation"><h3>${heading}</h3><div class="transcript">${renderTranscriptParagraphs(
-        t.text,
+      return `<div class="presentation"><h3>${heading}</h3><div class="transcript">${renderTranscriptSegments(
+        t.segments,
       )}</div></div>`;
     })
     .join('\n');
@@ -425,12 +451,17 @@ export function renderSessionHtml(data: SessionExport): string {
     border-radius: 0.25rem; padding: 0 0.35rem; }
   .badge-auto { background: #fef3c7; color: #92400e; }
   .transcript p { margin: 0.4rem 0; }
+  .pause { display: flex; align-items: center; gap: 0.75rem; margin: 1.1rem 0; }
+  .pause::before, .pause::after { content: ""; flex: 1; border-top: 1px dashed #d1d5db; }
+  .pause span { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #9ca3af; }
   .empty { color: #6b7280; font-style: italic; }
   @media (prefers-color-scheme: dark) {
     body { color: #e5e7eb; background: #0b0f19; }
     header, h2 { border-color: #1f2937; }
     .meta, .note-translation, .slide-untranslated { color: #9ca3af; }
     .lang-tag, th { background: #1f2937; color: #9ca3af; }
+    .pause::before, .pause::after { border-color: #374151; }
+    .pause span { color: #6b7280; }
     th, td { border-color: #1f2937; }
     .badge { background: #374151; color: #d1d5db; }
     .badge-auto { background: #78350f; color: #fde68a; }

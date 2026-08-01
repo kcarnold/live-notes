@@ -25,9 +25,13 @@ most of these signals.
    listener's `listen=<lang>` attribute — the demand signal). Pull with
    `RoomServiceClient.listParticipants(sessionId)` against the `LIVEKIT_URL` (ws→http). The
    supervisor polls this every 10 s; it does not depend on any client-side beacon.
-4. **Y-Sweet / Yjs transcript doc** — the `liveTranscript-<code>` Y.Text per language is the
-   product itself; its steady growth is a good end-to-end "translation is actually flowing"
-   heartbeat that no single component can fake (written by `transcript-writer.ts`).
+4. **Y-Sweet / Yjs transcript doc** — the `liveTranscriptSegments-<code>` Y.Array per language
+   is the product itself; its steady growth is a good end-to-end "translation is actually
+   flowing" heartbeat that no single component can fake (written by `transcript-writer.ts`).
+   Each segment is one utterance, stamped with `startedAt` and the silence (`gapMs`) that
+   preceded it — the write side is the only place that knows when a delta arrived, so timing
+   recorded there is the only timing anything downstream can ever see. Sessions from before
+   this existed hold a flat `liveTranscript-<code>` Y.Text instead; readers fall back to it.
 
 Server logs are the fifth, lowest-friction source: bridges log `[TranslationBridge:<lang>] …`
 and the manager logs `[SessionManager] …`, including every telemetry event, suspend/resume, and
@@ -55,7 +59,7 @@ Server-level exceptions go through `phClient.captureException(...)` in
 ## Questions → where to look
 
 - **Is a talk live and translating right now?** LiveKit `listParticipants` (organizer + a
-  `translator-*` present) *and* `liveTranscript-*` still growing. Bridge `status` alone can read
+  `translator-*` present) *and* `liveTranscriptSegments-*` still growing. Bridge `status` alone can read
   `active` while deaf, so pair it with transcript growth.
 - **How reliable are session swaps?** `gemini_goaway` → `gemini_session_setup_complete`
   (`trigger: goaway`) latency, and whether `gemini_input_flushed.bufferedMs` / `gemini_audio_gap`
@@ -95,17 +99,22 @@ The session status page ([src/StatusView.tsx](../src/StatusView.tsx), reachable 
 layout component) is where these signals surface for an operator. Current state:
 
 - **Live transcripts (built).** [src/TranscriptHealth.tsx](../src/TranscriptHealth.tsx) renders one
-  tile per `liveTranscript-<code>` language present in the doc — source (`en`) first — showing char
-  count, a tail preview, and a staleness dot. This is source #4 (transcript growth), the end-to-end
-  "translation is actually flowing" heartbeat, read straight from Yjs with no backend change.
-  - Discovery + labeling live in [src/transcriptKeys.ts](../src/transcriptKeys.ts) (`liveTranscriptCodes`,
-    `liveTranscriptLabel`, and the key-namespace constants), shared with the session export
+  tile per `liveTranscriptSegments-<code>` language present in the doc — source (`en`) first —
+  showing char count, a tail preview, and a staleness dot. This is source #4 (transcript growth),
+  the end-to-end "translation is actually flowing" heartbeat, read straight from Yjs with no
+  backend change.
+  - Discovery + labeling live in [src/transcriptKeys.ts](../src/transcriptKeys.ts)
+    (`liveTranscriptCodes`, `liveTranscriptLabel`, the key-namespace constants, the segment shape,
+    and `readTranscriptSegments`), shared with the session export
     ([sessionExport.ts](../sessionExport.ts)) so both agree on the namespace. Kept dependency-free
     (type-only Yjs import) so the client doesn't pull the server export path into its bundle.
-  - **Freshness is client-relative.** Y.Text carries no timestamp, so "updated Ns ago" is measured
-    from when a delta is observed *while the page is open* — it can't recover the last-write time
-    from before you loaded. The initial sync populate is deliberately ignored so a stale backlog
-    doesn't read as "just updated." Good for "is it moving now"; not an absolute liveness clock.
+  - **Freshness is client-relative.** "Updated Ns ago" is measured from when a delta is observed
+    *while the page is open* — it doesn't use the last-write time from before you loaded. The
+    initial sync populate is deliberately ignored so a stale backlog doesn't read as "just
+    updated." Good for "is it moving now"; not an absolute liveness clock. Segments now carry
+    `startedAt`, so an absolute clock is *available* — but a segment's start isn't its last delta,
+    so seeding from it would over-report staleness on one that's still streaming. Worth revisiting
+    if the tile ever needs to answer "when did this last move" across a page load.
 - **Component health tiles (skeleton).** The Server / Proclaim / bridges / broadcaster tiles are
   still placeholders — nothing writes the `status` Y.Map yet (that's the #72 heartbeat producers).
 - **Preflight canary (skeleton).** Placeholder; no end-to-end check runs yet.

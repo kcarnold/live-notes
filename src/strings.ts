@@ -45,6 +45,9 @@ export interface AppStrings {
   // Stick-to-bottom scrolling (BilingualBlockViewer, LiveTranscript)
   jumpToLatest: string;
 
+  // Live transcript: label on the break shown for a long silence
+  transcriptPause: string;
+
   // Slide viewer
   noSlides: string;
   waitingForProclaim: string;
@@ -152,6 +155,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'No content yet',
     notTranslated: '(not translated)',
     jumpToLatest: '↓ New',
+    transcriptPause: 'Pause',
     listenLive: 'Listen live',
     stopAudio: 'Stop audio',
     englishTranscript: 'English transcript',
@@ -246,6 +250,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Aucun contenu pour l\u2019instant',
     notTranslated: '(non traduit)',
     jumpToLatest: '\u2193 Nouveau',
+    transcriptPause: 'Pause',
     listenLive: 'Écouter en direct',
     stopAudio: 'Couper le son',
     englishTranscript: 'Transcription anglaise',
@@ -340,6 +345,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Sin contenido a\u00fan',
     notTranslated: '(no traducido)',
     jumpToLatest: '\u2193 Nuevo',
+    transcriptPause: 'Pausa',
     listenLive: 'Escuchar en vivo',
     stopAudio: 'Detener audio',
     englishTranscript: 'Transcripción en inglés',
@@ -434,6 +440,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     noContent: 'Pa gen kontni pou kounye a',
     notTranslated: '(pa tradui)',
     jumpToLatest: '↓ Nouvo',
+    transcriptPause: 'Poz',
     listenLive: 'Koute an dirèk',
     stopAudio: 'Sispann odyo',
     englishTranscript: 'Transkripsyon anglè',

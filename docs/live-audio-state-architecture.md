@@ -57,7 +57,7 @@ flowchart LR
 
   LK[("LiveKit room<br/><i>ground truth: who is present,<br/>what is published</i>")]
   GEM[("Gemini Live<br/>WebSocket sessions")]
-  YS[("Y-Sweet doc<br/><i>liveTranscript-*</i>")]
+  YS[("Y-Sweet doc<br/><i>liveTranscriptSegments-*</i>")]
 
   BC -- "mic audio" --> LK
   LV -- "POST /translate, /token,<br/>beacon /unsubscribe" --> API
