@@ -51,7 +51,7 @@ if [[ -z "$TEAM_ID" ]]; then
     -derivedDataPath "$BUILD_DIR" \
     ENABLE_HARDENED_RUNTIME=NO \
     build
-  echo "==> Built: $BUILD_DIR/Build/Products/Release/$APP_NAME.app"
+  echo "==> Built: \"$BUILD_DIR/Build/Products/Release/$APP_NAME.app\""
   echo "    Unsigned. Set TEAM_ID (and NOTARIZE_PROFILE) for a distributable build."
   exit 0
 fi
