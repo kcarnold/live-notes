@@ -23,7 +23,26 @@ device is given a key once and keeps it.
 
 The last row is the deliberate gap: listeners legitimately request TTS and translator bots,
 so those endpoints cannot require an editor's key. They are still unauthenticated and still
-cost money. Not built yet (TODO): ensure that `/api/tts` can only speak lines that are in the current notes, and there's a maximum number of live translator bots (`/api/livekit/translate`) at a time.
+cost money — and once `enforce` closes everything else, they are the *only* unmetered spend
+left, which is where anyone holding the URL will end up.
+
+Both now carry a crude per-caller rate limit ([rateLimit.ts](../rateLimit.ts)) as a stopgap:
+
+```sh
+TTS_RATE_LIMIT_PER_MIN=600         # default; 0 disables
+TRANSLATE_RATE_LIMIT_PER_MIN=1200  # default; 0 disables
+```
+
+The defaults sit far above what a real service generates, on purpose. A congregation
+arrives from a single public address, so a limit tight enough to be interesting is also
+tight enough to cut off the room; what these stop is a script in a loop, which is orders of
+magnitude away. The caller is identified by `X-Forwarded-For` where present, which is
+spoofable — an abuser can evade the cap, which leaves us no worse off than having none.
+
+Still to build (TODO): `/api/tts` should only speak lines that are actually in the current
+notes, and there should be a ceiling on how many live translator bots
+(`/api/livekit/translate`) can exist at once. Those are the real fixes; the rate limit just
+buys time.
 
 ## Configuring the server
 

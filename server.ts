@@ -34,6 +34,7 @@ import TranslationSessionManager from './live-audio/translation-session-manager.
 import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
 import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
 import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
+import { limitFromEnv, makeRateLimit } from './rateLimit.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -209,6 +210,45 @@ function requireWriteKey(route: string): express.RequestHandler {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Rate limits for the two endpoints a write key can't protect (see rateLimit.ts).
+//
+// Listeners call these legitimately and often, so they can't require a key — which makes
+// them the whole of the unmetered spend once enforcement closes everything else. The
+// defaults sit far above a real service (a listener pings /translate every 10s; auto-speak
+// fetches one line at a time) because a congregation shares one public address and the
+// thing being stopped is a script in a loop, not a busy Sunday. Set either to 0 to disable.
+// ---------------------------------------------------------------------------
+const TTS_RATE_LIMIT_PER_MIN = limitFromEnv(process.env.TTS_RATE_LIMIT_PER_MIN, 600);
+const TRANSLATE_RATE_LIMIT_PER_MIN = limitFromEnv(
+  process.env.TRANSLATE_RATE_LIMIT_PER_MIN,
+  1200,
+);
+
+function makeCostLimiter(route: string, limit: number): express.RequestHandler {
+  console.log(
+    `[rate-limit] ${route}: ${limit > 0 ? `${limit}/min per caller` : 'disabled'}`,
+  );
+  return makeRateLimit({
+    route,
+    limit,
+    onLimited: ({ caller, count }) => {
+      console.warn(`[rate-limit] ${route} capped ${caller} at ${count} requests in a minute`);
+      phClient.capture({
+        distinctId: caller,
+        event: 'rate_limited',
+        properties: { route, count, limit },
+      });
+    },
+  });
+}
+
+const ttsRateLimit = makeCostLimiter('/api/tts', TTS_RATE_LIMIT_PER_MIN);
+const translateRateLimit = makeCostLimiter(
+  '/api/livekit/translate',
+  TRANSLATE_RATE_LIMIT_PER_MIN,
+);
+
 const app = express();
 app.use(express.static("dist"));
 app.use(express.json());
@@ -343,7 +383,7 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
 
 // Request (or reuse) a translator bot for a language in a room. The bot spins
 // up a Gemini Live session and publishes translated audio as `translator-<code>`.
-app.post('/api/livekit/translate', async (req, res) => {
+app.post('/api/livekit/translate', translateRateLimit, async (req, res) => {
   try {
     if (!getLiveKitConfig()) return res.status(503).json({ error: 'LiveKit not configured' });
 
@@ -764,7 +804,7 @@ const VOICE_CONFIG: Record<string, { voiceId: string; languageCode: string; mode
   },
 };
 
-app.post('/api/tts', async (req, res) => {
+app.post('/api/tts', ttsRateLimit, async (req, res) => {
   const { text, language } = req.body;
 
   if (!text || !language) {

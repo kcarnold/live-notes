@@ -40,6 +40,9 @@ Optional environment variables:
   `WRITE_KEYS` is empty). `observe` records every privileged request and allows it anyway —
   the rollout state. `enforce` refuses unauthorized ones.
 - `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
+- `TTS_RATE_LIMIT_PER_MIN` / `TRANSLATE_RATE_LIMIT_PER_MIN` - Per-caller caps on the two
+  endpoints viewers call and a write key can't protect (defaults 600 / 1200; 0 disables).
+  Sized to stop a script, not a congregation — see [rateLimit.ts](rateLimit.ts).
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
 - `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 - `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
