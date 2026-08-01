@@ -23,7 +23,7 @@ device is given a key once and keeps it.
 
 The last row is the deliberate gap: listeners legitimately request TTS and translator bots,
 so those endpoints cannot require an editor's key. They are still unauthenticated and still
-cost money. Rate limiting, not a key, is the answer there, and it isn't built yet.
+cost money. Not built yet (TODO): ensure that `/api/tts` can only speak lines that are in the current notes, and there's a maximum number of live translator bots (`/api/livekit/translate`) at a time.
 
 ## Configuring the server
 
