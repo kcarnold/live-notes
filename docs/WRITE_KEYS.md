@@ -68,18 +68,32 @@ booting into a state where every device — including the Proclaim service — i
 
 ## Giving a device its key
 
-**Browser (booth laptop, tablet).** Open the app once with the key in the URL fragment:
+**Browser (booth laptop, tablet).** Three ways in, all landing in the same
+`localStorage` slot:
 
-```
-https://…/sourceText#editor&key=THEKEY
-```
+1. **It asks.** Open an `#editor` URL on a device the server doesn't recognize and the page
+   prompts for a key, stores what you paste, and retries. Once per page load, whatever the
+   answer — cancelling continues read-only rather than nagging on the next reconnect. This
+   fires in `observe` mode too, where nothing is refused, because that is when devices are
+   supposed to be getting their keys.
+2. **The status page.** `/status` shows whether this device has a key and the last four
+   characters of it, with a box to paste a new one and a button to clear it. This is the one
+   to use for rotation: the masked tail answers "has this tablet moved to the new key yet?"
+   without putting the secret on a screen.
+3. **A URL, for a device you're setting up in advance:**
 
-The key is stored in that browser's `localStorage` and stripped from the address bar
-immediately, so it doesn't linger on screen or in a bookmark. Every later visit — plain
-`#editor`, no key — is authorized. A `?key=THEKEY` query parameter works too, but prefer the
-fragment: it never reaches the server's access log.
+   ```
+   https://…/sourceText#editor&key=THEKEY
+   ```
 
-Clearing site data (or a different browser, or a private window) means provisioning again.
+   The key is stored and stripped from the address bar immediately, so it doesn't linger on
+   screen or in a bookmark — though a URL you *typed* still lands in the browser's own
+   history and omnibox suggestions, so prefer (1) or (2) on a shared machine. A `?key=THEKEY`
+   query parameter works too, but prefer the fragment: it never reaches the server's access
+   log.
+
+Every later visit — plain `#editor`, no key — is authorized. Clearing site data (or a
+different browser, or a private window) means provisioning again.
 
 **Proclaim service.** Pass it to the installer:
 

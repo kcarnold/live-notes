@@ -232,13 +232,21 @@ app.get('/api/config', (_req, res) => {
 app.post('/api/ys-auth', async (req, res) => {
   const docId = req.body?.docId ?? null;
   const wantsEditor = req.body?.isEditor ?? false;
-  const authorized = wantsEditor ? writeAuth.check(req, '/api/ys-auth').allowed : true;
-  const authorization = wantsEditor && authorized ? 'full' : 'read-only';
+  // Only editor requests are evaluated, and so only they are audited: a viewer needs no
+  // key, and checking one anyway would put an audit record on every page load of every
+  // screen in the session.
+  const check = wantsEditor ? writeAuth.check(req, '/api/ys-auth') : null;
+  const authorization = check?.allowed ? 'full' : 'read-only';
   console.log(`Auth request: doc=${docId} isEditor=${wantsEditor} granted=${authorization}`);
   const clientToken = await documentManager.getOrCreateDocAndToken(docId, {
     authorization
   })
   res.setHeader('X-Granted-Authorization', authorization);
+  // Why the key was or wasn't accepted, which is not the same question as what was
+  // granted. In observe mode nothing is refused, so `granted` is always `full` and this
+  // header is the only way a device can discover it is holding a stale key — during the
+  // observe window, which is exactly when that is still cheap to fix.
+  if (check) res.setHeader('X-Write-Key-Status', check.result.status);
   res.send(clientToken)
 })
 

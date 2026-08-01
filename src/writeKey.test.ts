@@ -5,6 +5,8 @@ import {
   getWriteKey,
   hasWriteKey,
   initWriteKey,
+  maskWriteKey,
+  promptForWriteKeyOnce,
   resetWriteKeyCache,
   setWriteKey,
 } from './writeKey.ts';
@@ -166,5 +168,62 @@ describe('apiFetch', () => {
 
     const init = spy.mock.calls[0][1] as RequestInit | undefined;
     expect(new Headers(init?.headers).get(WRITE_KEY_HEADER)).toBeNull();
+  });
+});
+
+describe('maskWriteKey', () => {
+  it('shows only the tail, enough to tell two keys apart during a rotation', () => {
+    expect(maskWriteKey('kZ8xQ2vLm4vt7Rb9ab12')).toBe('…ab12');
+  });
+
+  it('gives away nothing about a key too short to mask', () => {
+    expect(maskWriteKey('abcd')).toBe('…');
+  });
+});
+
+describe('promptForWriteKeyOnce', () => {
+  it('stores what was typed and asks the caller to retry', () => {
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('  NEWKEY  ');
+
+    expect(promptForWriteKeyOnce('needs a key')).toBe(true);
+    expect(prompt).toHaveBeenCalledWith('needs a key');
+    expect(getWriteKey()).toBe('NEWKEY');
+  });
+
+  it('asks only once per page load', () => {
+    // The guard that matters: y-sweet re-invokes its auth endpoint on every reconnect
+    // cycle that exhausts the retry budget, so without this a flaky booth wifi would
+    // throw a blocking modal onto the editor tablet over and over mid-service.
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('NEWKEY');
+
+    expect(promptForWriteKeyOnce('needs a key')).toBe(true);
+    expect(promptForWriteKeyOnce('needs a key')).toBe(false);
+    expect(promptForWriteKeyOnce('needs a key')).toBe(false);
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not ask again after the operator cancels', () => {
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null);
+
+    expect(promptForWriteKeyOnce('needs a key')).toBe(false);
+    expect(promptForWriteKeyOnce('needs a key')).toBe(false);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(getWriteKey()).toBeNull();
+  });
+
+  it('leaves an existing key alone when the operator submits nothing', () => {
+    setWriteKey('OLDKEY');
+    vi.spyOn(window, 'prompt').mockReturnValue('   ');
+
+    expect(promptForWriteKeyOnce('needs a key')).toBe(false);
+    expect(getWriteKey()).toBe('OLDKEY');
+  });
+
+  it('survives a context where prompt() is unavailable', () => {
+    vi.spyOn(window, 'prompt').mockImplementation(() => {
+      throw new Error('blocked in a sandboxed iframe');
+    });
+
+    expect(promptForWriteKeyOnce('needs a key')).toBe(false);
   });
 });

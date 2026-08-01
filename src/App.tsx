@@ -26,7 +26,7 @@ import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
 import { StatusViewContainer } from "./StatusView";
 import { getDocId } from "./getDocId";
-import { apiFetch } from "./writeKey";
+import { apiFetch, promptForWriteKeyOnce } from "./writeKey";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
 // pane (listen-{language} / broadcast) is actually rendered, keeping it out of
@@ -477,29 +477,49 @@ const App = () => {
 
   const [, setIsEditor] = useAtom(isEditorAtom);
   const [, setEditorDenied] = useAtom(editorDeniedAtom);
+  const s = useStrings();
   React.useEffect(() => {
     setIsEditor(isEditor);
   }, [isEditor, setIsEditor]);
   const authEndpoint: AuthEndpoint = async () => {
-    const response = await apiFetch("/api/ys-auth", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ docId, isEditor }),
-    });
-    // The server decides what we actually get: asking to edit without a valid write key
-    // is answered with a read-only token rather than an error, so the session still
-    // displays. Record what was granted so the UI can stop offering edit controls.
-    const granted = response.headers.get("X-Granted-Authorization");
-    if (isEditor && granted === "read-only") {
+    const requestToken = async () => {
+      const response = await apiFetch("/api/ys-auth", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ docId, isEditor }),
+      });
+      return {
+        // The server decides what we actually get: asking to edit without a valid write
+        // key is answered with a read-only token rather than an error, so the session
+        // still displays.
+        granted: response.headers.get("X-Granted-Authorization"),
+        // Why the key was or wasn't accepted — absent for a viewer request, which is
+        // never evaluated.
+        keyStatus: response.headers.get("X-Write-Key-Status"),
+        clientToken: (await response.json()) as ClientToken,
+      };
+    };
+
+    let result = await requestToken();
+    // Provisioning: this device asked to edit and the server didn't recognize its key,
+    // so ask for one and try again. Keyed on the key's status rather than on what was
+    // granted, so it also fires in observe mode — where nothing is refused, and which is
+    // precisely the window in which devices are supposed to be getting their keys.
+    if (isEditor && result.keyStatus && result.keyStatus !== "ok") {
+      if (promptForWriteKeyOnce(s.enterWriteKey)) result = await requestToken();
+    }
+    // Record what we ended up with, so every isEditor-gated control degrades to the
+    // viewer experience rather than offering edits that silently do nothing.
+    if (isEditor && result.granted === "read-only") {
       console.warn(
         "[write-auth] editor access was not granted for this device; continuing read-only",
       );
       setIsEditor(false);
       setEditorDenied(true);
     }
-    return (await response.json()) as ClientToken;
+    return result.clientToken;
   };
 
   // Parse URL path to determine which page to render

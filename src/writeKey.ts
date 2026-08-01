@@ -122,9 +122,53 @@ export function setWriteKey(key: string | null): void {
   writeStored(normalized);
 }
 
-/** Reset the module's cache. Tests only. */
+/**
+ * Show the last few characters of a key, for answering "which key is this device on?"
+ * during a rotation without putting the secret on a projector. Four characters of a
+ * 48-character random key identifies it among the handful in `WRITE_KEYS` and is
+ * useless to anyone who doesn't already have the list.
+ */
+export function maskWriteKey(key: string): string {
+  const trimmed = key.trim();
+  if (trimmed.length <= 4) return '…';
+  return `…${trimmed.slice(-4)}`;
+}
+
+/**
+ * True once this page load has asked for a key. The guard is the whole reason this
+ * lives here rather than at the call site: y-sweet re-invokes its auth endpoint on
+ * every reconnect cycle that exhausts the retry budget, so an unguarded prompt would
+ * throw a blocking modal onto the editor tablet every time the wifi hiccups mid-service
+ * — a far worse failure than the missing key it is trying to fix.
+ */
+let hasPrompted = false;
+
+/**
+ * Ask for this device's key and store what is typed. Once per page load, whatever the
+ * answer: someone who cancels has said no, and asking again on the next reconnect would
+ * be nagging. Returns true only when a new key was stored, i.e. when it is worth the
+ * caller retrying the request that provoked this.
+ */
+export function promptForWriteKeyOnce(message: string): boolean {
+  if (hasPrompted) return false;
+  hasPrompted = true;
+  let typed: string | null;
+  try {
+    typed = window.prompt(message);
+  } catch {
+    // prompt() is unavailable (sandboxed iframe, some kiosk profiles). The device can
+    // still be provisioned by URL or from the status page.
+    return false;
+  }
+  if (!typed?.trim()) return false;
+  setWriteKey(typed.trim());
+  return true;
+}
+
+/** Reset the module's caches, as if this were a fresh page load. Tests only. */
 export function resetWriteKeyCache(): void {
   memoryKey = null;
+  hasPrompted = false;
 }
 
 /**
