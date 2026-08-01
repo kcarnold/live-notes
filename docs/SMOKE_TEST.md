@@ -94,6 +94,10 @@ Skip entirely when `WRITE_KEYS` is unset (the server logs `write authorization i
 - [ ] Provision the editor device once with `#editor&key=THEKEY`: the key disappears from
       the address bar, and `#editor` survives.
 - [ ] Reload that device with a plain `#editor` URL (no key): still an editor.
+- [ ] `/status` reports "Key installed" and the last four characters of the right key.
+- [ ] On a device with no key (or a wrong one), an `#editor` URL prompts for a key, and
+      pasting a valid one grants edit access without a reload. Cancelling continues
+      read-only — and does *not* prompt again on the next reconnect.
 - [ ] Server logs show `key=<label> → ok` for `/api/ys-auth` from each real device —
       the editor browsers, the Proclaim Mac (`Write key: configured` in its own log), and
       the feeder. Anything logged as `key=none` is a device that `enforce` would lock out.

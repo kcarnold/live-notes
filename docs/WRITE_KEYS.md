@@ -58,12 +58,19 @@ booting into a state where every device — including the Proclaim service — i
 
    ```
    [write-auth] observe /api/ys-auth key=proclaim → ok
-   [write-auth] observe /api/livekit/token key=none → MISSING (allowed — observe mode)
+   [write-auth] observe /api/livekit/token key=none ip=192.168.1.40 → MISSING (allowed — observe mode)
+   [write-auth] observe /api/ys-auth key=unknown(3f2a9c11) ip=192.168.1.51 → INVALID (allowed — observe mode)
    ```
 
    Every line with `key=none` or `key=unknown` is a device that would have been locked out.
-   Chase those down first — the PostHog event carries `route`, `status` and `keyLabel`, so
-   "has the tablet been provisioned yet?" is a chart, not a grep.
+   Chase those down first. The audit says as much as it can about who asked: the caller's
+   address, a truncated user agent, and — for a key that was presented but not recognized —
+   a short digest of it. That digest is what separates "still on last month's key" from
+   "junk", and being stable it makes every un-migrated device one bucket to watch drain.
+
+   The same fields ride on the PostHog `write_auth_check` event, filed under the device
+   label when known, else `stale-key-<digest>`, else `no-key-<ip>` — so "has the tablet been
+   provisioned yet?" is a chart, not a grep.
 3. When nothing but the odd stray shows up missing, set `WRITE_AUTH_MODE=enforce` and restart.
 
 ## Giving a device its key
@@ -109,12 +116,50 @@ It lands in the LaunchAgent plist as `PROCLAIM_WRITE_KEY`. Reinstalling without
 
 ## Rotating
 
-Rotation is editing `WRITE_KEYS` and restarting the server. Because it is a *list*, old and
-new can overlap: add the new key, move devices over one at a time, then delete the old entry.
-Removing a device's key is how you revoke it.
+The server holds many keys at once; each device holds exactly one. That asymmetry is what
+makes rotation work — the overlap lives in `WRITE_KEYS`, and devices move across it one at a
+time.
 
-One caveat: a Y-Sweet token already issued stays valid until it expires — revoking a key
-stops the *next* token from being issued, not the current one.
+**Not during a service.** Every `WRITE_KEYS` edit needs a server restart, and a restart drops
+the live translator bridges and the broadcaster's room along with it. Rotate on a weekday.
+
+1. **One edit, one restart.** Add the new key *and* relabel the old one to say it's on its
+   way out:
+
+   ```sh
+   WRITE_KEYS=booth-old:OLDKEY,booth:NEWKEY,proclaim:…,feeder:…
+   ```
+
+   Labels are display-only — nothing compares them — so renaming an entry doesn't disturb
+   the device still using it. What it buys you is a name for the un-migrated: the booth
+   laptop keeps working and now announces itself in the logs as `key=booth-old`.
+
+2. **Move the devices** (see the previous section: `/status` is the one to use here — the
+   masked tail tells you whether a device has actually moved). Watch the logs:
+
+   ```
+   [write-auth] observe /api/ys-auth key=booth-old ip=192.168.1.40 → ok
+   ```
+
+3. **When `booth-old` stops appearing, delete it** and restart again. That silence is the
+   completion criterion — better than trying to remember which devices you got.
+
+Removing a device's key is also how you revoke it. Two caveats:
+
+- **A Y-Sweet token already issued stays valid until it expires.** Revoking a key stops the
+  *next* token from being issued, not the one in flight.
+- **A key is per-device only by convention.** Nothing stops two devices sharing one, and the
+  server can't tell that they do. If you rotate a key to lock out a lost tablet, that only
+  works if nothing else was ever given the same key. The server warns at boot when two
+  labels share a key value, which catches the accident but not the habit.
+
+### Keys the server can't reach
+
+The Proclaim Mac and the audio feeder are rotated by hand, on the machine — the installer's
+`--write-key=` and the feeder's settings pane. There is no remote path. For the feeder in
+particular this means a rotation is a trip to the booth, so give it a key you're content to
+leave in place, and confirm it in the server log (`key=feeder → ok`) rather than by looking
+at the machine.
 
 ## What this is and isn't
 
