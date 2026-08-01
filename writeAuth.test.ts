@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   WriteAuth,
+  auditDistinctId,
   extractPresentedKey,
   formatAudit,
   parseWriteAuthMode,
@@ -9,7 +10,13 @@ import {
   type WriteAuthAudit,
 } from './writeAuth.ts';
 
-const req = (headers: Record<string, string | string[] | undefined>) => ({ headers });
+const req = (headers: Record<string, string | string[] | undefined>, ip?: string) => ({
+  headers,
+  ip,
+});
+
+/** What `client` looks like for a request that told us nothing about itself. */
+const anonymous = { ip: null, userAgent: null, keyFingerprint: null };
 
 describe('parseWriteKeys', () => {
   it('returns nothing for unset or empty input', () => {
@@ -93,6 +100,21 @@ describe('resolveWriteAuthConfig', () => {
     const config = resolveWriteAuthConfig({ WRITE_KEYS: 'tablet:hunter2' });
     expect(config.mode).toBe('observe');
     expect(config.notices.join('\n')).toMatch(/short key\(s\) \[tablet\]/);
+  });
+
+  it('warns when two labels share a key, since only the first will ever be logged', () => {
+    const config = resolveWriteAuthConfig({
+      WRITE_KEYS: 'booth:0123456789abcdef,tablet:0123456789abcdef',
+    });
+    expect(config.keys).toHaveLength(2);
+    expect(config.notices.join('\n')).toMatch(/tablet shares booth's key/);
+  });
+
+  it('says nothing when every key is distinct', () => {
+    const config = resolveWriteAuthConfig({
+      WRITE_KEYS: 'booth:0123456789abcdef,tablet:fedcba9876543210',
+    });
+    expect(config.notices.join('\n')).not.toMatch(/shares/);
   });
 });
 
@@ -181,6 +203,7 @@ describe('WriteAuth.check', () => {
         status: 'missing',
         label: null,
         refused: false,
+        client: anonymous,
       },
     ]);
   });
@@ -203,6 +226,83 @@ describe('WriteAuth.check', () => {
       ['invalid', true],
       ['ok', false],
     ]);
+  });
+});
+
+describe('WriteAuth.check attribution', () => {
+  const keys = { WRITE_KEYS: 'proclaim:0123456789abcdef' };
+
+  const auditFor = (request: ReturnType<typeof req>, env = keys) => {
+    const audits: WriteAuthAudit[] = [];
+    new WriteAuth(resolveWriteAuthConfig(env), (a) => audits.push(a)).check(request, '/api/tts');
+    return audits[0];
+  };
+
+  it('records where a keyless request came from', () => {
+    const audit = auditFor(req({ 'user-agent': 'AudioFeeder/1.0' }, '192.168.1.40'));
+    expect(audit.client.ip).toBe('192.168.1.40');
+    expect(audit.client.userAgent).toBe('AudioFeeder/1.0');
+    expect(audit.client.keyFingerprint).toBeNull();
+  });
+
+  it('truncates a long user agent rather than logging a whole browser string', () => {
+    const audit = auditFor(req({ 'user-agent': 'x'.repeat(300) }));
+    expect(audit.client.userAgent).toHaveLength(60);
+  });
+
+  it('fingerprints an unrecognized key, stably and without revealing it', () => {
+    const first = auditFor(req({ 'x-write-key': 'LAST-MONTHS-BOOTH-KEY' }));
+    const second = auditFor(req({ 'x-write-key': 'LAST-MONTHS-BOOTH-KEY' }));
+
+    expect(first.status).toBe('invalid');
+    expect(first.client.keyFingerprint).toMatch(/^[0-9a-f]{8}$/);
+    // Stable, so "every device still on the old key" is one bucket you can watch drain.
+    expect(second.client.keyFingerprint).toBe(first.client.keyFingerprint);
+    expect(first.client.keyFingerprint).not.toContain('BOOTH');
+  });
+
+  it('never fingerprints a key that worked', () => {
+    const audit = auditFor(req({ 'x-write-key': '0123456789abcdef' }));
+    expect(audit.status).toBe('ok');
+    expect(audit.client.keyFingerprint).toBeNull();
+  });
+});
+
+describe('auditDistinctId', () => {
+  const base = { mode: 'observe' as const, route: '/api/ys-auth', refused: false };
+
+  it('files an authorized request under the device label', () => {
+    expect(
+      auditDistinctId({ ...base, status: 'ok', label: 'proclaim', client: anonymous }),
+    ).toBe('proclaim');
+  });
+
+  it('groups everyone still holding the same stale key together', () => {
+    expect(
+      auditDistinctId({
+        ...base,
+        status: 'invalid',
+        label: null,
+        client: { ...anonymous, keyFingerprint: '3f2a9c11' },
+      }),
+    ).toBe('stale-key-3f2a9c11');
+  });
+
+  it('falls back to the address when there is no key at all to group by', () => {
+    expect(
+      auditDistinctId({
+        ...base,
+        status: 'missing',
+        label: null,
+        client: { ...anonymous, ip: '192.168.1.40' },
+      }),
+    ).toBe('no-key-192.168.1.40');
+  });
+
+  it('has one last fallback when a request says nothing about itself', () => {
+    expect(
+      auditDistinctId({ ...base, status: 'missing', label: null, client: anonymous }),
+    ).toBe('unknown-device');
   });
 });
 
@@ -239,7 +339,7 @@ describe('WriteAuth.gate', () => {
 });
 
 describe('formatAudit', () => {
-  const base = { mode: 'observe' as const, route: '/api/ys-auth' };
+  const base = { mode: 'observe' as const, route: '/api/ys-auth', client: anonymous };
 
   it('names the device on success', () => {
     expect(formatAudit({ ...base, status: 'ok', label: 'proclaim', refused: false })).toBe(
@@ -253,9 +353,30 @@ describe('formatAudit', () => {
     );
   });
 
-  it('marks a refusal', () => {
+  it('marks a refusal, and fingerprints the key that was refused', () => {
     expect(
-      formatAudit({ ...base, mode: 'enforce', status: 'invalid', label: null, refused: true }),
-    ).toBe('[write-auth] enforce /api/ys-auth key=unknown → INVALID (refused)');
+      formatAudit({
+        ...base,
+        mode: 'enforce',
+        status: 'invalid',
+        label: null,
+        refused: true,
+        client: { ...anonymous, keyFingerprint: '3f2a9c11' },
+      }),
+    ).toBe('[write-auth] enforce /api/ys-auth key=unknown(3f2a9c11) → INVALID (refused)');
+  });
+
+  it('says where a miss came from, so it can be chased down', () => {
+    expect(
+      formatAudit({
+        ...base,
+        status: 'missing',
+        label: null,
+        refused: false,
+        client: { ...anonymous, ip: '192.168.1.40' },
+      }),
+    ).toBe(
+      '[write-auth] observe /api/ys-auth key=none ip=192.168.1.40 → MISSING (allowed — observe mode)',
+    );
   });
 });

@@ -32,7 +32,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
 import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
-import { WriteAuth, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
+import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -179,7 +179,7 @@ const writeAuth = new WriteAuth(writeAuthConfig, (audit) => {
   if (audit.status === 'ok') console.log(line);
   else console.warn(line);
   phClient.capture({
-    distinctId: audit.label ?? 'unknown-device',
+    distinctId: auditDistinctId(audit),
     event: 'write_auth_check',
     properties: {
       route: audit.route,
@@ -187,6 +187,12 @@ const writeAuth = new WriteAuth(writeAuthConfig, (audit) => {
       keyLabel: audit.label,
       mode: audit.mode,
       refused: audit.refused,
+      // Attribution for the misses. Without these, every unauthorized request in the
+      // observe window collapses into one anonymous total, which cannot answer the only
+      // question that window exists to ask: *which* device still needs a key.
+      ip: audit.client.ip,
+      userAgent: audit.client.userAgent,
+      keyFingerprint: audit.client.keyFingerprint,
     },
   });
 });

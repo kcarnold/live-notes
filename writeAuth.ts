@@ -43,17 +43,43 @@ export interface WriteAuthResult {
   label: string | null;
 }
 
+/**
+ * Whatever can be said about who asked, for a request that presented no usable key.
+ *
+ * Not identity — there is none to be had here. This exists because the observe window's
+ * whole job is answering "which device is still missing a key", and a record saying only
+ * that *something* was unauthorized cannot answer it.
+ */
+export interface WriteAuthClient {
+  ip: string | null;
+  /** Truncated: enough to tell a Mac service from an iPad, not a tracking record. */
+  userAgent: string | null;
+  /**
+   * Short digest of a presented-but-unrecognized key. Set only for `invalid` — an `ok`
+   * request has a label, and a `missing` one presented nothing to digest. This is what
+   * distinguishes "still holding last month's booth key" from "random junk", which
+   * during a rotation is the entire question.
+   */
+  keyFingerprint: string | null;
+}
+
 /** The audit record emitted for every privileged request, in every non-`off` mode. */
 export interface WriteAuthAudit extends WriteAuthResult {
   mode: WriteAuthMode;
   route: string;
   /** True when the request was actually refused (enforce mode + a bad key). */
   refused: boolean;
+  client: WriteAuthClient;
 }
 
-/** Just enough of an express Request to read headers from. */
+/**
+ * Just enough of an express Request to read headers from. `ip` is express's, which
+ * behind a reverse proxy is the proxy's address unless `trust proxy` is configured —
+ * treat it as a hint for chasing down a device, never as an access control input.
+ */
 export interface HeaderBearingRequest {
   headers: Record<string, string | string[] | undefined>;
+  ip?: string;
 }
 
 /** Header clients use to present their key. `Authorization: Bearer <key>` also works. */
@@ -139,6 +165,24 @@ export function resolveWriteAuthConfig(env: {
         `use at least ${MIN_REASONABLE_KEY_LENGTH} random characters`,
     );
   }
+
+  // Two labels sharing a key value is a plausible slip while hand-editing WRITE_KEYS
+  // during a rotation, and a quiet one: matching returns the *first* label, so the
+  // second device's traffic is filed under the first device's name. The label is the
+  // only audit trail there is, so it silently lying is worth a line at boot.
+  const firstLabelForKey = new Map<string, string>();
+  const collisions: string[] = [];
+  for (const entry of keys) {
+    const first = firstLabelForKey.get(entry.key);
+    if (first) collisions.push(`${entry.label} shares ${first}'s key`);
+    else firstLabelForKey.set(entry.key, entry.label);
+  }
+  if (collisions.length > 0) {
+    notices.push(
+      `[write-auth] WARNING: ${collisions.join('; ')} — audits report only the first ` +
+        `label, so those devices are indistinguishable in the logs`,
+    );
+  }
   notices.push(
     `[write-auth] mode=${requestedMode} keys=[${keys.map((e) => e.label).join(', ')}]`,
   );
@@ -160,6 +204,43 @@ function keysMatch(presented: string, configured: string): boolean {
   const a = createHash('sha256').update(presented, 'utf8').digest();
   const b = createHash('sha256').update(configured, 'utf8').digest();
   return timingSafeEqual(a, b);
+}
+
+/**
+ * A short, stable digest of a key. Short on purpose: it is a label for "the key that was
+ * presented", not a credential, and it must be safe to put in a log and a chart.
+ */
+export function fingerprintKey(key: string): string {
+  return createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 8);
+}
+
+/** Truncated so a log line stays one line and the record stays a hint, not a profile. */
+const MAX_LOGGED_USER_AGENT = 60;
+
+function describeClient(
+  req: HeaderBearingRequest,
+  presented: string | null,
+  status: WriteAuthStatus,
+): WriteAuthClient {
+  const uaHeader = req.headers['user-agent'];
+  const ua = Array.isArray(uaHeader) ? uaHeader[0] : uaHeader;
+  return {
+    ip: req.ip ?? null,
+    userAgent: ua ? ua.slice(0, MAX_LOGGED_USER_AGENT) : null,
+    keyFingerprint: status === 'invalid' && presented ? fingerprintKey(presented) : null,
+  };
+}
+
+/**
+ * Who to file an audit record under. `ok` is the device's label, which is the whole
+ * reason labels exist. The other two are the interesting cases: an unrecognized key
+ * groups by the key itself, so every device still holding last month's key lands in one
+ * bucket you can watch drain; a request with no key at all has nothing but its address.
+ */
+export function auditDistinctId(audit: WriteAuthAudit): string {
+  if (audit.status === 'ok') return audit.label ?? 'unknown-device';
+  if (audit.client.keyFingerprint) return `stale-key-${audit.client.keyFingerprint}`;
+  return audit.client.ip ? `no-key-${audit.client.ip}` : 'unknown-device';
 }
 
 /** Pull the presented key from `X-Write-Key`, or from `Authorization: Bearer <key>`. */
@@ -207,9 +288,16 @@ export class WriteAuth {
     if (this.mode === 'off') {
       return { result: { status: 'ok', label: null }, allowed: true };
     }
+    const presented = extractPresentedKey(req);
     const result = this.evaluate(req);
     const allowed = this.mode !== 'enforce' || result.status === 'ok';
-    this.onAudit({ ...result, mode: this.mode, route, refused: !allowed });
+    this.onAudit({
+      ...result,
+      mode: this.mode,
+      route,
+      refused: !allowed,
+      client: describeClient(req, presented, result.status),
+    });
     return { result, allowed };
   }
 
@@ -234,12 +322,18 @@ export class WriteAuth {
 
 /** Render an audit record as a single greppable log line. */
 export function formatAudit(audit: WriteAuthAudit): string {
-  const key = audit.status === 'ok' ? audit.label : audit.status === 'missing' ? 'none' : 'unknown';
+  const key =
+    audit.status === 'ok'
+      ? audit.label
+      : audit.status === 'missing'
+        ? 'none'
+        : `unknown(${audit.client.keyFingerprint ?? '?'})`;
+  const from = audit.client.ip ? ` ip=${audit.client.ip}` : '';
   const outcome =
     audit.status === 'ok'
       ? 'ok'
       : audit.refused
         ? `${audit.status.toUpperCase()} (refused)`
         : `${audit.status.toUpperCase()} (allowed — observe mode)`;
-  return `[write-auth] ${audit.mode} ${audit.route} key=${key} → ${outcome}`;
+  return `[write-auth] ${audit.mode} ${audit.route} key=${key}${from} → ${outcome}`;
 }
