@@ -1,6 +1,11 @@
 #!/bin/bash
 # Install proclaim_service as a macOS LaunchAgent
-# Usage: bash install_proclaim_service.sh [--uninstall]
+# Usage: bash install_proclaim_service.sh [--server-url=<url>] [--branch=<branch>]
+#                                         [--no-auto-update] [--uninstall]
+#
+# The LaunchAgent runs proclaim_service_launch.sh, which updates this checkout
+# from the release branch on every launch before starting the service. See
+# PROCLAIM_SERVICE_SETUP.md ("Automatic updates").
 
 set -e
 
@@ -8,12 +13,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLIST_TEMPLATE="$SCRIPT_DIR/org.kenarnold.proclaim-service.plist.template"
 PLIST_DEST="$HOME/Library/LaunchAgents/org.kenarnold.proclaim-service.plist"
 SERVICE_SCRIPT="$SCRIPT_DIR/proclaim_service.py"
+LAUNCH_SCRIPT="$SCRIPT_DIR/proclaim_service_launch.sh"
 SERVICE_LABEL="org.kenarnold.proclaim-service"
 
 # Get current user and paths
 CURRENT_USER="$(whoami)"
 LOG_DIR="$HOME/Library/Logs/proclaim-service"
 UV_PATH="$(which uv)"
+GIT_PATH="$(which git || true)"
 
 # Colors for output
 RED='\033[0;31m'
@@ -43,10 +50,14 @@ fetch_posthog_config() {
 generate_plist() {
     # Generate plist from template with variable substitution
     sed "s|{{SERVICE_SCRIPT}}|$SERVICE_SCRIPT|g" "$PLIST_TEMPLATE" | \
+    sed "s|{{LAUNCH_SCRIPT}}|$LAUNCH_SCRIPT|g" | \
     sed "s|{{REPO_PATH}}|$SCRIPT_DIR|g" | \
     sed "s|{{LOG_DIR}}|$LOG_DIR|g" | \
     sed "s|{{USERNAME}}|$CURRENT_USER|g" | \
     sed "s|{{UV_PATH}}|$UV_PATH|g" | \
+    sed "s|{{GIT_PATH}}|$GIT_PATH|g" | \
+    sed "s|{{UPDATE_BRANCH}}|$UPDATE_BRANCH|g" | \
+    sed "s|{{AUTO_UPDATE}}|$AUTO_UPDATE|g" | \
     sed "s|{{POSTHOG_KEY}}|$POSTHOG_KEY|g" | \
     sed "s|{{POSTHOG_HOST}}|$POSTHOG_HOST|g" | \
     sed "s|{{YSWEET_URL}}|$SERVER_URL|g"
@@ -75,11 +86,17 @@ uninstall() {
 SERVER_URL="https://notelate.com"
 POSTHOG_KEY=""
 POSTHOG_HOST=""
+# Release channel the launch wrapper tracks. Promotion is deliberate:
+# `git push origin main:proclaim-stable`.
+UPDATE_BRANCH="proclaim-stable"
+AUTO_UPDATE="1"
 
 for arg in "$@"; do
     case "$arg" in
         --uninstall) uninstall ;;
         --server-url=*) SERVER_URL="${arg#--server-url=}" ;;
+        --branch=*) UPDATE_BRANCH="${arg#--branch=}" ;;
+        --no-auto-update) AUTO_UPDATE="0" ;;
     esac
 done
 
@@ -105,9 +122,27 @@ if [ ! -f "$SERVICE_SCRIPT" ]; then
     exit 1
 fi
 
+if [ ! -f "$LAUNCH_SCRIPT" ]; then
+    log_error "Launch wrapper not found: $LAUNCH_SCRIPT"
+    exit 1
+fi
+
 if [ -z "$UV_PATH" ]; then
     log_error "uv not found in PATH. Install uv first: https://docs.astral.sh/uv/"
     exit 1
+fi
+
+if [ "$AUTO_UPDATE" = "1" ]; then
+    if [ -z "$GIT_PATH" ]; then
+        log_warn "git not found in PATH; the service will run but never auto-update"
+        AUTO_UPDATE="0"
+    elif ! git -C "$SCRIPT_DIR" rev-parse --git-dir &>/dev/null; then
+        log_warn "$SCRIPT_DIR is not a git checkout; the service will run but never auto-update"
+        AUTO_UPDATE="0"
+    elif ! git -C "$SCRIPT_DIR" ls-remote --exit-code --heads origin "$UPDATE_BRANCH" &>/dev/null; then
+        log_warn "Branch '$UPDATE_BRANCH' not found on origin (create it with: git push origin main:$UPDATE_BRANCH)"
+        log_warn "Auto-update stays on; it will start working once the branch exists"
+    fi
 fi
 
 # Create LaunchAgents directory if needed
@@ -133,6 +168,11 @@ log_info "  Repo:   $SCRIPT_DIR"
 log_info "  Logs:   $LOG_DIR"
 log_info "  uv:     $UV_PATH"
 log_info "  Server: $SERVER_URL"
+if [ "$AUTO_UPDATE" = "1" ]; then
+    log_info "  Update: on every launch, from origin/$UPDATE_BRANCH"
+else
+    log_info "  Update: disabled (runs whatever is checked out)"
+fi
 
 # Check if already loaded
 if launchctl list "$SERVICE_LABEL" &>/dev/null; then
@@ -161,6 +201,8 @@ echo "  • View status:        launchctl list | grep proclaim-service"
 echo "  • View logs:          tail -f ~/Library/Logs/proclaim-service/*.log"
 echo "  • Stop service:       launchctl stop $SERVICE_LABEL"
 echo "  • Start service:      launchctl start $SERVICE_LABEL"
+echo "  • Update now:         launchctl stop $SERVICE_LABEL   # restart = update"
+echo "  • Promote a release:  git push origin main:$UPDATE_BRANCH   (not after Thursday)"
 echo "  • Uninstall:          bash install_proclaim_service.sh --uninstall"
 echo ""
 echo "More info: See PROCLAIM_SERVICE_SETUP.md"

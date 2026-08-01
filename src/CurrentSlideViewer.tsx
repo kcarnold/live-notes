@@ -1,26 +1,17 @@
 import { useMap } from '@y-sweet/react';
 import { useStrings } from './useLocale';
-
-interface Slide {
-  text: string;
-  isActive: boolean;
-}
+import { SlideText } from './SlideText';
 
 interface CurrentSlideViewerProps {
   title: string;
   slides: string[];
   currentIndex: number;
-  context?: number; // How many slides before/after to show (default: 0)
 }
 
 /**
- * Pure component that displays current slide with context (prev/next slides)
+ * Pure component that displays the current slide, auto-scaled to fit.
  */
-export function CurrentSlideViewer({
-  slides,
-  currentIndex,
-  context = 0
-}: CurrentSlideViewerProps) {
+export function CurrentSlideViewer({ slides, currentIndex }: CurrentSlideViewerProps) {
   const s = useStrings();
 
   if (slides.length === 0) {
@@ -35,57 +26,7 @@ export function CurrentSlideViewer({
   // separate writes, so currentIndex can transiently point past the slides.
   const clampedIndex = Math.min(Math.max(currentIndex, 0), slides.length - 1);
 
-  // Build array of slides to display with context
-  const startIdx = Math.max(0, clampedIndex - context);
-  const endIdx = Math.min(slides.length - 1, clampedIndex + context);
-
-  const visibleSlides: Slide[] = [];
-  for (let i = startIdx; i <= endIdx; i++) {
-    visibleSlides.push({
-      text: slides[i],
-      isActive: i === clampedIndex,
-    });
-  }
-
-  return (
-    <div className="flex flex-col bg-black dark:bg-gray-950 text-white overflow-hidden">
-      {/* Slides with context */}
-      <div className="flex-1 overflow-y-auto px-1 py-1 space-y-3">
-        {visibleSlides.map((slide, idx) => (
-          <div
-            key={startIdx + idx}
-            className={`transition-all duration-300 ${
-              slide.isActive
-                ? 'opacity-100 scale-100'
-                : 'opacity-40 scale-95'
-            }`}
-          >
-            <div
-              className={`p-1`}
-            >
-              <div className="text-center space-y-2">
-                {slide.text.split('\n').map((line, lineIdx) => (
-                  <div
-                    key={lineIdx}
-                    className={`leading-normal ${
-                      slide.isActive ? 'text-2xl' : 'text-xl font-light'
-                    }`}
-                  >
-                    {line || '\u00A0'}
-                  </div>
-                ))}
-              </div>
-            </div>
-            {!slide.isActive && (
-              <div className="text-xs text-gray-500 dark:text-gray-600 mt-1 text-center">
-                {startIdx + idx < clampedIndex ? s.previous : s.next}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <SlideText lines={slides[clampedIndex].split('\n')} />;
 }
 
 /**
@@ -120,12 +61,5 @@ export function CurrentSlideViewerContainer() {
     (slide): slide is string => typeof slide === 'string',
   );
 
-  return (
-    <CurrentSlideViewer
-      title={title}
-      slides={slides}
-      currentIndex={slideIndex}
-      context={0}
-    />
-  );
+  return <CurrentSlideViewer title={title} slides={slides} currentIndex={slideIndex} />;
 }

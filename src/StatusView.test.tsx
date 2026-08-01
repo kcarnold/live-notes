@@ -19,6 +19,39 @@ describe('StatusView', () => {
     expect(screen.getByText('Preflight canary')).toBeInTheDocument();
   });
 
+  it('shows the version the Proclaim service reports (#73)', () => {
+    render(
+      <StatusView
+        docId="doc-2026-07-13"
+        statusEntries={{
+          proclaimService: {
+            gitShaShort: 'abc1234',
+            gitBranch: 'proclaim-stable',
+            updatePending: false,
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText('abc1234 · proclaim-stable')).toBeInTheDocument();
+    expect(screen.queryByText(/update pending/i)).not.toBeInTheDocument();
+  });
+
+  it('flags a pending update when the release branch has moved on (#73)', () => {
+    render(
+      <StatusView
+        docId="doc-2026-07-13"
+        statusEntries={{
+          proclaimService: {
+            gitShaShort: 'abc1234',
+            gitBranch: 'proclaim-stable',
+            updatePending: true,
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText(/update pending/i)).toBeInTheDocument();
+  });
+
   it('reports how many components are heartbeating once the status map fills', () => {
     render(
       <StatusView

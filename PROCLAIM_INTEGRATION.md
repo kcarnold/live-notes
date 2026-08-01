@@ -10,6 +10,10 @@ The integration uses **Yjs** for real-time synchronization:
    - Polls Proclaim API for current presentation and slide status
    - Parses presentation content from the Proclaim database
    - Updates Yjs shared state via Y-Sweet WebSocket connection
+   - Internally decoupled into a **slide feed** (`proclaim_feed.py`, the source) and
+     **consumers** (`yjs_publisher.py` for clients, `slide_translator.py` for translation),
+     wired by `slide_sync_runtime.py`. `proclaim_service.py` is just the entrypoint. The feed
+     emits a serializable snapshot per poll — the seam a future replay harness records.
 
 2. **Yjs Shared State**
    - `proclaimPresentations` (Y.Map) - Maps itemId → presentation data
@@ -151,21 +155,17 @@ Browser Display
 
 No HTTP polling from browser → instant updates!
 
-## Future Enhancements
+## Auto-Update Mechanism
 
-### Auto-Update Mechanism
+The macOS LaunchAgent runs `proclaim_service_launch.sh`, which updates the
+checkout from the `proclaim-stable` release branch on every launch and then
+starts the service whether or not the update worked (a failed dependency sync
+rolls back to the SHA that was running). Releasing is
+`git push origin main:proclaim-stable`; applying a release is restarting the
+service. See [PROCLAIM_SERVICE_SETUP.md](PROCLAIM_SERVICE_SETUP.md#automatic-updates).
 
-For keeping the Python service up to date:
+On Linux the equivalent is a systemd unit that runs the same wrapper:
 
-**Option 1: Simple git pull script**
-```bash
-#!/bin/bash
-cd /path/to/live-notes
-git pull origin main
-uv sync
-```
-
-**Option 2: systemd/launchd service** (Linux/macOS)
 ```ini
 # /etc/systemd/system/proclaim-sync.service
 [Unit]
@@ -176,9 +176,8 @@ After=network.target
 Type=simple
 User=youruser
 WorkingDirectory=/path/to/live-notes
-ExecStartPre=/usr/bin/git pull origin main
-ExecStartPre=/usr/local/bin/uv sync
-ExecStart=/usr/local/bin/uv run proclaim_service.py
+Environment=UV_BIN=/usr/local/bin/uv
+ExecStart=/bin/bash /path/to/live-notes/proclaim_service_launch.sh
 Restart=always
 
 [Install]

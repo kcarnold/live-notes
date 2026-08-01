@@ -80,9 +80,10 @@ def decode_richtext_xml(xml: str) -> str:
 
 def split_into_slides(text: str) -> List[str]:
     """Split the text into sections based on blank lines or --."""
-    explicitly_delimited = '--' in text
+    lines = text.strip().splitlines()
+    explicitly_delimited = any(line.strip() == '--' for line in lines)
     sections = ['']
-    for line in text.strip().split('\n'):
+    for line in lines:
         line_stripped = line.strip()
         is_slide_break = (line_stripped == '' and not explicitly_delimited) or (line_stripped == '--')
         if is_slide_break:
@@ -106,7 +107,7 @@ def split_into_song_sections(text: str) -> Dict[str, List[str]]:
     """
     sections: Dict[str, List[str]] = {}
     current_section_label = None
-    section_types = {'verse', 'chorus', 'pre-chorus', 'bridge', 'tag', 'title', 'interlude', 'ending'}
+    section_types = {'verse', 'chorus', 'pre-chorus', 'bridge', 'tag', 'title', 'interlude', 'vamp', 'ending', 'intro', 'outro', 'breakdown', 'instrumental', 'refrain', 'misc'}
     lines = [line.strip() for line in text.splitlines()]
 
     for line_orig in lines:

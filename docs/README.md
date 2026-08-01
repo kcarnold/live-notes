@@ -12,9 +12,19 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 
 - [SMOKE_TEST.md](SMOKE_TEST.md) — the pre-service manual smoke-test checklist, and how PRs
   declare which sections they touch.
+- [OBSERVABILITY.md](OBSERVABILITY.md) — what to observe about the live-audio backend
+  (status/liveness) and where to pull it from: PostHog events, in-process state, LiveKit, Yjs.
+- [live-audio-resilience.md](live-audio-resilience.md) — how the translation bridge survives
+  LiveKit and Gemini dropping connections under it. Incident history (two "active but deaf"
+  outages), the invariant, and the three defense layers. **Read before changing the bridge's
+  subscription or reconnect paths** — the failure mode is silent, and the sample code this
+  subsystem came from does not defend against it. Written to be upstreamable.
 
 ## Design docs
 
+- [live-audio-state-architecture.md](live-audio-state-architecture.md) — state audit of the
+  live-translation subsystem (client + server state machines, edge-case catalog), a proposed
+  supervisor/reconciler architecture, and the hot-fix ladder to apply before it.
 - [slide-translations-plan.md](slide-translations-plan.md) — slide translation agent design.
 - Replay harness design: [#70](https://github.com/kcarnold/live-notes/issues/70) —
   record-at-the-boundary replay of full services for testing and accountability.

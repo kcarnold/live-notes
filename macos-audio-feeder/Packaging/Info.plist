@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Info.plist for the Audio Feeder .app bundle, consumed by the Xcode target generated from
+  ../project.yml (INFOPLIST_FILE). The $(...) values are substituted at build time from the
+  build settings declared there, so version/identifier/executable names have a single source
+  of truth and can't drift out of sync with the product.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- Menu-bar-only: no Dock icon, no main window. -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Shown in the one-time microphone permission prompt. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Audio Feeder captures one channel of your sound board to broadcast it for live translation.</string>
+</dict>
+</plist>
