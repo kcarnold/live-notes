@@ -185,7 +185,6 @@ permission prompt.
 - [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device,
       pipeline reconciliation)
 - [x] Losing the room is noticed and recovered from (`RoomDelegate` → `DisconnectPolicy`) —
-      **written but not yet built or run against a real room**, see `NOTEBOOK.md` 2026-07-30
 - [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
 - [x] Build a real `.app` bundle (Xcode target generated from `project.yml`; frameworks
       embedded automatically)
