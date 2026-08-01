@@ -35,18 +35,49 @@ export const TRANSCRIPT_PAUSE_MS = 10_000;
  * One utterance of a transcript. The writer opens a segment on the first delta
  * after a sentence ends or after a long silence, so segment boundaries are exactly
  * where a pause can be reported.
+ *
+ * Only observations are stored — when the utterance started and when it last grew.
+ * The silence between utterances is derived from those (see `gapMs`), so it can't
+ * drift out of agreement with them, and so the writer can recover its own state from
+ * the doc rather than holding it in memory across a restart.
  */
 export interface TranscriptSegment {
   text: string;
   /** Epoch ms of this segment's first delta; undefined for legacy transcripts. */
   startedAt?: number;
+  /** Epoch ms of this segment's most recent delta; undefined for legacy transcripts. */
+  endedAt?: number;
   /**
-   * Silence (ms) between the previous delta — in this language — and this segment's
-   * first one. Undefined for the first segment of a transcript and for legacy ones.
-   * Measured against the last delta rather than the previous segment's start, so a
-   * long utterance is never mistaken for a pause.
+   * DERIVED, not stored: silence (ms) between the previous segment's last delta and
+   * this one's first. Undefined for the first segment of a transcript and for legacy
+   * ones. Measured from the previous segment's *end* rather than its start, so a long
+   * utterance is never mistaken for a pause.
    */
   gapMs?: number;
+}
+
+/** The stored fields of one segment Y.Map, read in one place so the writer and reader agree. */
+export function readSegmentFields(segment: Y.Map<unknown>): {
+  text: string;
+  startedAt?: number;
+  endedAt?: number;
+} {
+  const startedAt = segment.get('startedAt');
+  const endedAt = segment.get('endedAt');
+  return {
+    text: yTextValue(segment.get('text')),
+    ...(typeof startedAt === 'number' ? { startedAt } : {}),
+    ...(typeof endedAt === 'number' ? { endedAt } : {}),
+  };
+}
+
+/**
+ * When a segment last grew — the reference point for the silence that follows it.
+ * Falls back to its start, which is the same thing for a one-delta segment.
+ */
+export function segmentLastActivityAt(segment: Y.Map<unknown>): number | undefined {
+  const { startedAt, endedAt } = readSegmentFields(segment);
+  return endedAt ?? startedAt;
 }
 
 /** Whether the silence before this segment is worth marking in the UI. */
@@ -65,19 +96,34 @@ export function readTranscriptSegments(doc: Y.Doc, code: string): TranscriptSegm
   return legacySegments(doc, code);
 }
 
-/** Project a segments Y.Array into plain objects. Split out for the client's snapshot cache. */
+/**
+ * Project a segments Y.Array into plain objects, deriving each gap from the previous
+ * segment's end. Split out for the client's snapshot cache.
+ *
+ * The gap is computed against the previous *emitted* segment, so a skipped empty one
+ * (which the writer never produces, but a partially-synced doc might momentarily show)
+ * widens the gap rather than hiding the silence on either side of it.
+ */
 export function segmentsFromArray(yArray: Y.Array<Y.Map<unknown>>): TranscriptSegment[] {
   const segments: TranscriptSegment[] = [];
+  let previousEndedAt: number | undefined;
+
   for (const yMap of yArray.toArray()) {
-    const text = yTextValue(yMap.get('text')).trim();
-    if (text === '') continue;
-    const startedAt = yMap.get('startedAt');
-    const gapMs = yMap.get('gapMs');
+    const { text, startedAt, endedAt } = readSegmentFields(yMap);
+    const trimmed = text.trim();
+    if (trimmed === '') continue;
+
+    const gapMs =
+      startedAt !== undefined && previousEndedAt !== undefined
+        ? Math.max(0, startedAt - previousEndedAt)
+        : undefined;
     segments.push({
-      text,
-      ...(typeof startedAt === 'number' ? { startedAt } : {}),
-      ...(typeof gapMs === 'number' ? { gapMs } : {}),
+      text: trimmed,
+      ...(startedAt !== undefined ? { startedAt } : {}),
+      ...(endedAt !== undefined ? { endedAt } : {}),
+      ...(gapMs !== undefined ? { gapMs } : {}),
     });
+    previousEndedAt = endedAt ?? startedAt;
   }
   return segments;
 }

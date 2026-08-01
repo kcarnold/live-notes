@@ -179,4 +179,57 @@ describe("TranscriptSegmentLog", () => {
   it("ignores empty deltas entirely", () => {
     expect(run([[0, ""]])).toEqual([]);
   });
+
+  it("stamps each segment with when it last grew", () => {
+    const segments = run([
+      [0, "The Lord"],
+      [500, " is my shepherd."],
+      [3000, " I shall not want."],
+    ]);
+
+    expect(segments[0].endedAt).toBe(T0 + 500);
+    expect(segments[1].endedAt).toBe(T0 + 3000);
+  });
+
+  // The writer keeps nothing between calls, so a restarted server picks up from the doc.
+  // Before this, `breakPending`/`lastDeltaAt` lived in memory and the first delta after a
+  // restart glued onto the pre-restart utterance — hiding the boundary and the gap.
+  describe("after a server restart (fresh log, same doc)", () => {
+    /** Replay `before`, drop the log on the floor, then replay `after` on a new one. */
+    function acrossRestart(before: [number, string][], after: [number, string][]) {
+      const doc = new Y.Doc();
+      const first = new TranscriptSegmentLog(doc);
+      for (const [offset, text] of before) first.append("en", text, T0 + offset);
+
+      const second = new TranscriptSegmentLog(doc);
+      for (const [offset, text] of after) second.append("en", text, T0 + offset);
+
+      return readTranscriptSegments(doc, "en");
+    }
+
+    it("still breaks at the sentence the restart interrupted", () => {
+      const segments = acrossRestart([[0, "Let us pray."]], [[900, " Amen."]]);
+
+      expect(segments.map((s) => s.text)).toEqual(["Let us pray.", "Amen."]);
+    });
+
+    it("reports the silence the outage itself caused", () => {
+      const segments = acrossRestart(
+        [[0, "We were in the middle of"]], // mid-sentence when the server went down
+        [[45_000, " a thought."]],
+      );
+
+      expect(segments.map((s) => s.text)).toEqual([
+        "We were in the middle of",
+        "a thought.",
+      ]);
+      expect(segments[1].gapMs).toBe(45_000);
+    });
+
+    it("does not invent a break when the restart was quick and mid-sentence", () => {
+      const segments = acrossRestart([[0, "We were saying"]], [[2000, " something."]]);
+
+      expect(segments.map((s) => s.text)).toEqual(["We were saying something."]);
+    });
+  });
 });

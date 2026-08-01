@@ -28,10 +28,14 @@ most of these signals.
 4. **Y-Sweet / Yjs transcript doc** — the `liveTranscriptSegments-<code>` Y.Array per language
    is the product itself; its steady growth is a good end-to-end "translation is actually
    flowing" heartbeat that no single component can fake (written by `transcript-writer.ts`).
-   Each segment is one utterance, stamped with `startedAt` and the silence (`gapMs`) that
-   preceded it — the write side is the only place that knows when a delta arrived, so timing
-   recorded there is the only timing anything downstream can ever see. Sessions from before
-   this existed hold a flat `liveTranscript-<code>` Y.Text instead; readers fall back to it.
+   Each segment is one utterance, stamped with `startedAt` and `endedAt` — the write side is
+   the only place that knows when a delta arrived, so timing recorded there is the only timing
+   anything downstream can ever see. Only those observations are stored; the silence between
+   utterances is *derived* at read time as `startedAt − previous.endedAt`. That keeps the two
+   from disagreeing, and lets the writer recover its own state from the doc instead of holding
+   it in memory — so a server restart mid-session neither loses the utterance boundary nor
+   hides the gap the restart itself caused. Sessions from before this existed hold a flat
+   `liveTranscript-<code>` Y.Text instead; readers fall back to it.
 
 Server logs are the fifth, lowest-friction source: bridges log `[TranslationBridge:<lang>] …`
 and the manager logs `[SessionManager] …`, including every telemetry event, suspend/resume, and
@@ -112,9 +116,9 @@ layout component) is where these signals surface for an operator. Current state:
     *while the page is open* — it doesn't use the last-write time from before you loaded. The
     initial sync populate is deliberately ignored so a stale backlog doesn't read as "just
     updated." Good for "is it moving now"; not an absolute liveness clock. Segments now carry
-    `startedAt`, so an absolute clock is *available* — but a segment's start isn't its last delta,
-    so seeding from it would over-report staleness on one that's still streaming. Worth revisiting
-    if the tile ever needs to answer "when did this last move" across a page load.
+    `endedAt` — the exact time of the last delta — so seeding the tile from the last segment
+    would make it a true cross-page-load clock. Small, self-contained follow-up; left out of the
+    pause-indicator change to keep that scoped.
 - **Component health tiles (skeleton).** The Server / Proclaim / bridges / broadcaster tiles are
   still placeholders — nothing writes the `status` Y.Map yet (that's the #72 heartbeat producers).
 - **Preflight canary (skeleton).** Placeholder; no end-to-end check runs yet.

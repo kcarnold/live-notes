@@ -7,11 +7,10 @@
 //
 // Two things worth knowing about the freshness signal:
 //   - "updated Ns ago" is measured client-side from when a delta is observed while
-//     this view is mounted. It's relative to the page, not absolute wall-clock. (Now
-//     that segments carry `startedAt`, the pre-page-load write time *is* recoverable
-//     — but a segment's start isn't its last delta, so seeding from it would
-//     over-report staleness on a segment that's still streaming. Left alone: for "is
-//     it moving now", observing deltas is the right signal.)
+//     this view is mounted. It's relative to the page, not absolute wall-clock. Segments
+//     now carry `endedAt` — the exact time of the last delta — so seeding this from the
+//     last segment would give a true cross-page-load clock. Not done here only to keep
+//     the pause-indicator change scoped; it's a small, self-contained follow-up.
 //   - The initial sync populate fires one observe with the full backlog; that isn't
 //     a live delta, so each tile ignores its first observed value.
 import { useEffect, useMemo, useRef, useState } from 'react';

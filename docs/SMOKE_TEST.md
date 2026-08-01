@@ -53,7 +53,9 @@ an incident happens that this list would not have caught, add a line.
 - [ ] Stop and restart the broadcaster mid-session; transcript resumes without a reload.
 - [ ] **Server-restart recovery**: with a listener connected and the speaker talking,
       restart the Node server. Within ~15 s the supervisor rebuilds the bridges from room
-      presence and the transcript resumes — no reload, no re-tap on any client.
+      presence and the transcript resumes — no reload, no re-tap on any client. The resumed
+      speech must start a *new* utterance with a pause divider covering the outage, not get
+      glued onto the sentence that was in flight when the server went down.
 - [ ] **The LiveKit full reconnect** (the 2026-07-12 outage — see
       [live-audio-resilience.md](live-audio-resilience.md)). With a bridge running and the
       speaker talking, force the reconnect that once deafened every translator for six

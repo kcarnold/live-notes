@@ -7,17 +7,21 @@ import {
 } from './sessionExport.ts';
 import { slideTranslationKey, type SlideTranslationEntry } from './src/slideTranslation.ts';
 
-/** Append a transcript segment the way live-audio/transcript-writer.ts does. */
+/**
+ * Append a transcript segment the way live-audio/transcript-writer.ts does: stored
+ * timings are observations only (when the utterance started and last grew), and the
+ * silence between utterances is derived from them at read time.
+ */
 function transcriptSegment(
   doc: Y.Doc,
   code: string,
   text: string,
-  timing: { startedAt: number; gapMs?: number },
+  timing: { startedAt: number; endedAt?: number },
 ) {
   const segment = new Y.Map<unknown>();
   doc.getArray<Y.Map<unknown>>(`liveTranscriptSegments-${code}`).push([segment]);
   segment.set('startedAt', timing.startedAt);
-  if (timing.gapMs !== undefined) segment.set('gapMs', timing.gapMs);
+  segment.set('endedAt', timing.endedAt ?? timing.startedAt);
   segment.set('text', new Y.Text(text));
 }
 
@@ -165,15 +169,15 @@ describe('buildSessionExport', () => {
 
   it('marks a long silence between utterances, and leaves short gaps alone', () => {
     const doc = new Y.Doc();
-    transcriptSegment(doc, 'en', 'Let us pray.', { startedAt: 1000 });
-    transcriptSegment(doc, 'en', 'Amen.', { startedAt: 5000, gapMs: 3000 });
-    transcriptSegment(doc, 'en', 'Please be seated.', { startedAt: 125_000, gapMs: 120_000 });
+    transcriptSegment(doc, 'en', 'Let us pray.', { startedAt: 1000, endedAt: 2000 });
+    transcriptSegment(doc, 'en', 'Amen.', { startedAt: 5000, endedAt: 5000 });
+    transcriptSegment(doc, 'en', 'Please be seated.', { startedAt: 125_000, endedAt: 126_000 });
 
     const data = buildSessionExport(doc, 'doc-2026-07-13');
     expect(data.liveTranscripts[0].segments.map((s) => s.gapMs)).toEqual([
       undefined,
-      3000,
-      120_000,
+      3000, // 5s − 2s
+      120_000, // 125s − 5s
     ]);
 
     // Exactly one divider: the two-minute gap, not the three-second one.
