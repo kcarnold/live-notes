@@ -1,27 +1,28 @@
 // TranscriptHealth: an operator-facing liveness view of the live speech-translation
 // transcripts, for the session status page. It answers "is translation actually
 // flowing right now, and into which languages?" by reading the same
-// `liveTranscript-{code}` Y.Text streams the product itself renders (see
+// `liveTranscriptSegments-{code}` streams the product itself renders (see
 // LiveTranscript.tsx and OBSERVABILITY.md §4 — transcript growth is the one
 // end-to-end heartbeat no single component can fake).
 //
 // Two things worth knowing about the freshness signal:
-//   - Yjs Y.Text carries no timestamp, so "updated Ns ago" is measured client-side
-//     from when a delta is observed while this view is mounted. It's relative to the
-//     page, not absolute wall-clock — you can't recover the last-write time from
-//     before you opened the page. For "is it moving now" that's the right signal.
+//   - "updated Ns ago" is measured client-side from when a delta is observed while
+//     this view is mounted. It's relative to the page, not absolute wall-clock. Segments
+//     now carry `endedAt` — the exact time of the last delta — so seeding this from the
+//     last segment would give a true cross-page-load clock. Not done here only to keep
+//     the pause-indicator change scoped; it's a small, self-contained follow-up.
 //   - The initial sync populate fires one observe with the full backlog; that isn't
 //     a live delta, so each tile ignores its first observed value.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useYDoc } from '@y-sweet/react';
 import type * as Y from 'yjs';
-import { useAsPlainText } from './yjsUtils';
 import { useStrings, resolveLocale } from './useLocale';
+import { useTranscriptSegments } from './useTranscriptSegments';
 import {
-  LIVE_TRANSCRIPT_PREFIX,
   LIVE_TRANSCRIPT_SOURCE_CODE,
   liveTranscriptCodes,
   liveTranscriptLabel,
+  transcriptPlainText,
 } from './transcriptKeys';
 
 /** Freshness thresholds (ms) for the staleness dot. */
@@ -66,7 +67,10 @@ function tail(text: string): string {
 
 function TranscriptHealthTile({ code }: { code: string }) {
   const s = useStrings();
-  const [text] = useAsPlainText(`${LIVE_TRANSCRIPT_PREFIX}${code}`);
+  const segments = useTranscriptSegments(code);
+  // Flattened for the char count and tail preview — this view is about whether the
+  // transcript is *moving*, not about its structure, so the segmentation is noise here.
+  const text = useMemo(() => transcriptPlainText(segments), [segments]);
   const isSource = code === LIVE_TRANSCRIPT_SOURCE_CODE;
 
   // Record when a *live* delta arrives. The first observed value is the initial

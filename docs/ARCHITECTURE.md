@@ -69,7 +69,7 @@ doc is *derived* data that the system under test will regenerate.
 |---|---|---|
 | Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
 | `proclaim_service.py` (slide feed → Yjs publisher + translator) | `proclaimServiceOrder`, `proclaimPresentations`, `proclaimStatus`, `slideTranslations`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
-| translation-bridge / transcript-writer | live transcript | Organizer audio track + Gemini Live responses |
+| translation-bridge / transcript-writer | `liveTranscriptSegments-{code}` (one utterance per entry, stamped `startedAt` + `endedAt`; the silence between utterances is derived from those, not stored) | Organizer audio track + Gemini Live responses — including *when* each delta arrived, which only the writer sees |
 | Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |
 

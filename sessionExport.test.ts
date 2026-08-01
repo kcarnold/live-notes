@@ -7,6 +7,24 @@ import {
 } from './sessionExport.ts';
 import { slideTranslationKey, type SlideTranslationEntry } from './src/slideTranslation.ts';
 
+/**
+ * Append a transcript segment the way live-audio/transcript-writer.ts does: stored
+ * timings are observations only (when the utterance started and last grew), and the
+ * silence between utterances is derived from them at read time.
+ */
+function transcriptSegment(
+  doc: Y.Doc,
+  code: string,
+  text: string,
+  timing: { startedAt: number; endedAt?: number },
+) {
+  const segment = new Y.Map<unknown>();
+  doc.getArray<Y.Map<unknown>>(`liveTranscriptSegments-${code}`).push([segment]);
+  segment.set('startedAt', timing.startedAt);
+  segment.set('endedAt', timing.endedAt ?? timing.startedAt);
+  segment.set('text', new Y.Text(text));
+}
+
 /** Build a source block Y.Map the way the block editor stores them. */
 function block(id: string, position: string, content: string, opts?: { type?: 'heading' | 'bullet'; level?: number }) {
   const map = new Y.Map<unknown>();
@@ -129,11 +147,10 @@ describe('buildSessionExport', () => {
 
   it('collects live speech-translation transcripts, source language first', () => {
     const doc = new Y.Doc();
-    // Written by the live-audio pipeline as `liveTranscript-{code}` Y.Text.
-    doc.getText('liveTranscript-en').insert(0, 'The Lord is my shepherd.\n\n');
-    doc.getText('liveTranscript-fr').insert(0, "L'Éternel est mon berger.\n\n");
-    doc.getText('liveTranscript-es').insert(0, 'El Señor es mi pastor.\n\n');
-    doc.getText('liveTranscript-de'); // empty — should be dropped
+    transcriptSegment(doc, 'en', 'The Lord is my shepherd.', { startedAt: 1000 });
+    transcriptSegment(doc, 'fr', "L'Éternel est mon berger.", { startedAt: 1000 });
+    transcriptSegment(doc, 'es', 'El Señor es mi pastor.', { startedAt: 1000 });
+    doc.getArray('liveTranscriptSegments-de'); // empty — should be dropped
 
     const data = buildSessionExport(doc, 'doc-2026-07-13');
 
@@ -148,6 +165,37 @@ describe('buildSessionExport', () => {
     expect(html).toContain('Live speech translation');
     expect(html).toContain('English (source)');
     expect(html).toContain("L'Éternel est mon berger.");
+  });
+
+  it('marks a long silence between utterances, and leaves short gaps alone', () => {
+    const doc = new Y.Doc();
+    transcriptSegment(doc, 'en', 'Let us pray.', { startedAt: 1000, endedAt: 2000 });
+    transcriptSegment(doc, 'en', 'Amen.', { startedAt: 5000, endedAt: 5000 });
+    transcriptSegment(doc, 'en', 'Please be seated.', { startedAt: 125_000, endedAt: 126_000 });
+
+    const data = buildSessionExport(doc, 'doc-2026-07-13');
+    expect(data.liveTranscripts[0].segments.map((s) => s.gapMs)).toEqual([
+      undefined,
+      3000, // 5s − 2s
+      120_000, // 125s − 5s
+    ]);
+
+    // Exactly one divider: the two-minute gap, not the three-second one.
+    const html = renderSessionHtml(data);
+    expect(html.match(/class="pause"/g)).toHaveLength(1);
+    expect(html).toContain('Pause &middot; 2m');
+  });
+
+  it('still exports a pre-segments session, whose transcript is a flat Y.Text', () => {
+    const doc = new Y.Doc();
+    doc.getText('liveTranscript-en').insert(0, 'The Lord is my shepherd.\n\nI shall not want.\n\n');
+
+    const data = buildSessionExport(doc, 'doc-2026-07-13');
+
+    expect(data.liveTranscripts[0].text).toBe('The Lord is my shepherd.\n\nI shall not want.');
+    const html = renderSessionHtml(data);
+    expect(html).toContain('I shall not want.');
+    expect(html).not.toContain('class="pause"'); // no timing was ever recorded
   });
 
   it('leaves date undefined for non-date doc ids', () => {
