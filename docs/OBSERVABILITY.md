@@ -106,6 +106,28 @@ layout component) is where these signals surface for an operator. Current state:
     from when a delta is observed *while the page is open* — it can't recover the last-write time
     from before you loaded. The initial sync populate is deliberately ignored so a stale backlog
     doesn't read as "just updated." Good for "is it moving now"; not an absolute liveness clock.
+- **Connected clients (built).** [src/ClientPresenceView.tsx](../src/ClientPresenceView.tsx) lists
+  every browser on the session — the page it has open, device class, editor/viewer role, UI locale,
+  and how long it's been connected — grouped by URL so a glance answers "how many people are on the
+  French view right now?". This is a *fifth* source: **Yjs awareness**, distinct from the transcript
+  doc (#4). Notes on why it works and what constrains it:
+  - **No backend, no heartbeat producer.** y-protocols' `Awareness` constructor already calls
+    `setLocalState({})`, so every client announces itself, re-announces every ~15 s, and is dropped
+    after a 30 s timeout. Membership *is* the liveness signal, and the list is self-cleaning.
+  - **Read-only viewers can publish.** y-sweet gates writes on `SyncStep2`/`Update` messages but
+    relays `Message::Awareness` with no authorization check, so the viewers issued read-only tokens
+    in [server.ts](../server.ts) — most of the population — do appear.
+  - **Publish from every page.** `@y-sweet/react`'s `usePresence` skips clients with an empty
+    awareness state, so `PresencePublisher` is mounted above the layout in
+    [src/App.tsx](../src/App.tsx). A corollary: the server-side Yjs writers that use `YSweetProvider`
+    ([transcript-writer.ts](../live-audio/transcript-writer.ts), `slideConversationStore.ts`) stay
+    invisible until they deliberately publish a presence identity — see next steps.
+  - **Every field must be stable per connection.** Awareness re-broadcasts the whole state to every
+    peer on each announce, so a ticking value costs O(n²) messages with a congregation's worth of
+    phones on the doc. `connectedSince` is a fixed instant the viewer subtracts from, never an age.
+  - **Presence is broadcast to everyone**, not only to whoever opened `/status`. Any viewer with
+    devtools can read it, which is why it carries a coarse device class and never the raw
+    user-agent string.
 - **Component health tiles (skeleton).** The Server / Proclaim / bridges / broadcaster tiles are
   still placeholders — nothing writes the `status` Y.Map yet (that's the #72 heartbeat producers).
 - **Preflight canary (skeleton).** Placeholder; no end-to-end check runs yet.
@@ -127,3 +149,10 @@ layout component) is where these signals surface for an operator. Current state:
    translators, so this wants a small new endpoint or field.
 4. **Preflight canary** — a ~30 s end-to-end check run before a service; the `simulateScenario` hook
    on the session manager is a starting point, but wiring a real canary is a feature, not a wire-up.
+5. **Presence identities for the backend Yjs clients** — [transcript-writer.ts](../live-audio/transcript-writer.ts)
+   and `slideConversationStore.ts` already hold `YSweetProvider` connections; having them publish a
+   presence state (`{ role: 'transcript-writer', language }`) would make them real rows in the
+   connected-clients list for the cost of one `setLocalState`, covering part of step 3 without a
+   `status`-map producer. The client presence view validates every awareness state
+   ([src/presence.ts](../src/presence.ts) `readClientPresence`), so non-browser identities want a
+   `role` the viewer knows how to render rather than being silently dropped.

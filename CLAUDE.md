@@ -419,6 +419,9 @@ The app has two modes determined by URL hash (`#editor`):
 - [BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx) - Shows blocks with original text and translation side-by-side
 - [BilingualBlockViewerContainer.tsx](src/BilingualBlockViewerContainer.tsx) - Yjs connector for BilingualBlockViewer
 - [CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx) - Proclaim slide viewer with pure component and Yjs container
+- [ClientPresenceView.tsx](src/ClientPresenceView.tsx) - Status-page list of connected clients (page, device, role), read from Yjs awareness
+- [presence.ts](src/presence.ts) - Pure presence helpers: device classification, awareness-state validation, grouping — plus the constraints that come with riding awareness
+- [usePublishPresence.ts](src/usePublishPresence.ts) - Publishes this client's presence; mounted once in App so it runs on every page
 
 ### TTS System
 - [useTTS.ts](src/useTTS.ts) - Low-level TTS hook managing audio playback lifecycle

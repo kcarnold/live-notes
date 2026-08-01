@@ -25,6 +25,7 @@ import { BilingualBlockViewerContainer } from "./BilingualBlockViewerContainer";
 import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
 import { StatusViewContainer } from "./StatusView";
+import { PresencePublisher } from "./usePublishPresence";
 import { getDocId } from "./getDocId";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
@@ -480,6 +481,12 @@ const App = () => {
 
   return (
     <YDocProvider docId={docId} authEndpoint={authEndpoint}>
+      {/*
+        Publishes this client's presence over awareness. Mounted here, above the
+        page, so it runs on every layout — the status page can only list clients
+        that publish, and viewers are most of who we want to see there.
+      */}
+      <PresencePublisher />
       {pageComponent}
     </YDocProvider>
   );

@@ -3,6 +3,7 @@ import { useMap, useYDoc } from '@y-sweet/react';
 import { useStrings } from './useLocale';
 import { getDocId } from './getDocId';
 import { TranscriptHealth } from './TranscriptHealth';
+import { ClientPresenceViewContainer } from './ClientPresenceView';
 
 /**
  * Session status / admin page.
@@ -61,9 +62,19 @@ export interface StatusViewProps {
    * observers). Kept as a slot so the pure component stays testable without Yjs.
    */
   liveTranscripts?: ReactNode;
+  /**
+   * Connected-client list, injected by the container (it reads Yjs awareness).
+   * Same slot pattern as `liveTranscripts`, for the same reason.
+   */
+  clientPresence?: ReactNode;
 }
 
-export function StatusView({ docId, statusEntries, liveTranscripts }: StatusViewProps) {
+export function StatusView({
+  docId,
+  statusEntries,
+  liveTranscripts,
+  clientPresence,
+}: StatusViewProps) {
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
   const reportingCount = Object.keys(statusEntries).length;
@@ -137,6 +148,12 @@ export function StatusView({ docId, statusEntries, liveTranscripts }: StatusView
           )}
         </section>
 
+        {/* Connected clients — real presence, read from Yjs awareness. */}
+        <section className={sectionClass}>
+          <h2 className={sectionTitleClass}>{s.statusPresenceTitle}</h2>
+          {clientPresence ?? <p className={placeholderClass}>{s.statusPresenceEmpty}</p>}
+        </section>
+
         {/* Preflight canary — placeholder until #72. */}
         <section className={sectionClass}>
           <h2 className={sectionTitleClass}>{s.statusCanaryTitle}</h2>
@@ -180,6 +197,7 @@ export function StatusViewContainer() {
       docId={getDocId()}
       statusEntries={statusEntries}
       liveTranscripts={<TranscriptHealth />}
+      clientPresence={<ClientPresenceViewContainer />}
     />
   );
 }
