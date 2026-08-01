@@ -45,6 +45,12 @@
         <key>YSWEET_URL</key>
         <string>{{YSWEET_URL}}</string>
 
+        <!-- Shared key authorizing this machine's writes (full Y-Sweet tokens and
+             /api/translateItem). Installed by install_proclaim_service.sh --write-key=;
+             never fetched from the server, since /api/config is public. -->
+        <key>PROCLAIM_WRITE_KEY</key>
+        <string>{{WRITE_KEY}}</string>
+
         <!-- Set PROCLAIM_BASE_URL if on different machine -->
         <key>PROCLAIM_BASE_URL</key>
         <string>http://127.0.0.1:52195</string>

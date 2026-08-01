@@ -32,6 +32,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager from './live-audio/translation-session-manager.ts';
 import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
+import { WriteAuth, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
 
 // Get API keys from environment variables, crash if not set
 function getEnvOrCrash(name: string): string {
@@ -156,6 +157,51 @@ function currentDayDocId(): string {
   return `doc-${ymd}`;
 }
 
+// ---------------------------------------------------------------------------
+// Write authorization (shared keys, not user logins — see writeAuth.ts).
+//
+// Reading is open to anyone: viewers get read-only Y-Sweet tokens, TTS and listener
+// LiveKit tokens with no key at all. What a key protects is the ability to *write* —
+// full doc tokens, the broadcaster's microphone, and the endpoints that spend money on
+// models and TTS.
+//
+// Defaults to `observe`: every privileged request is checked and recorded, and then
+// allowed regardless. That makes it safe to ship keys to the clients first and read
+// the logs for a week before flipping WRITE_AUTH_MODE=enforce.
+// ---------------------------------------------------------------------------
+const writeAuthConfig = resolveWriteAuthConfig(process.env);
+for (const notice of writeAuthConfig.notices) console.log(notice);
+
+const writeAuth = new WriteAuth(writeAuthConfig, (audit) => {
+  // Log every outcome, and mirror it to PostHog so the observe week can be read as a
+  // chart ("is the Proclaim service presenting a key yet?") rather than by grepping.
+  const line = formatAudit(audit);
+  if (audit.status === 'ok') console.log(line);
+  else console.warn(line);
+  phClient.capture({
+    distinctId: audit.label ?? 'unknown-device',
+    event: 'write_auth_check',
+    properties: {
+      route: audit.route,
+      status: audit.status,
+      keyLabel: audit.label,
+      mode: audit.mode,
+      refused: audit.refused,
+    },
+  });
+});
+
+/**
+ * Gate a route that is *always* privileged. Routes where only some requests are
+ * privileged (asking for an editor token, or for the broadcaster's microphone) call
+ * `writeAuth.check`/`gate` inline instead, so an ordinary viewer request stays open.
+ */
+function requireWriteKey(route: string): express.RequestHandler {
+  return (req, res, next) => {
+    if (writeAuth.gate(req, res, route)) next();
+  };
+}
+
 const app = express();
 app.use(express.static("dist"));
 app.use(express.json());
@@ -173,16 +219,26 @@ app.get('/api/config', (_req, res) => {
 });
 
 // Y-Sweet
+//
+// Read-only tokens are unconditional — anyone may watch a session. A *full* token is
+// the app's real write boundary (the browser talks to Y-Sweet directly with it), so
+// asking for one is what requires a key.
+//
+// An unauthorized editor request is downgraded to read-only rather than refused: a
+// device with a stale key then shows the session as a viewer instead of a blank page,
+// which is the failure anyone would rather have mid-service. The granted level comes
+// back in a header so the UI can say so plainly instead of offering edit controls that
+// silently do nothing.
 app.post('/api/ys-auth', async (req, res) => {
-  console.log('Auth request:', req.body);
   const docId = req.body?.docId ?? null;
-  const isEditor = req.body?.isEditor ?? false;
-  const authorization = isEditor ? 'full' : 'read-only';
-  // In a production app, this is where you'd authenticate the user
-  // and check that they are authorized to access the doc.
+  const wantsEditor = req.body?.isEditor ?? false;
+  const authorized = wantsEditor ? writeAuth.check(req, '/api/ys-auth').allowed : true;
+  const authorization = wantsEditor && authorized ? 'full' : 'read-only';
+  console.log(`Auth request: doc=${docId} isEditor=${wantsEditor} granted=${authorization}`);
   const clientToken = await documentManager.getOrCreateDocAndToken(docId, {
     authorization
   })
+  res.setHeader('X-Granted-Authorization', authorization);
   res.send(clientToken)
 })
 
@@ -252,6 +308,12 @@ app.post('/api/livekit/token', async (req, res) => {
     }
 
     const isOrganizer = role === 'organizer';
+    // An organizer token is the microphone. Its holder can speak into the room and —
+    // because every broadcaster joins under the same `organizer-host` identity, which
+    // LiveKit resolves by evicting the incumbent — can silently cut off whoever is
+    // currently speaking. Listeners ask for no such thing and need no key.
+    if (isOrganizer && !writeAuth.gate(req, res, '/api/livekit/token')) return;
+
     const at = new AccessToken(lk.apiKey, lk.apiSecret, {
       identity,
       name: identity,
@@ -401,7 +463,7 @@ app.post('/api/livekit/translate/simulate', async (req, res) => {
 });
 
 
-app.post('/api/requestTranslatedBlocks', async (req, res) => {
+app.post('/api/requestTranslatedBlocks', requireWriteKey('/api/requestTranslatedBlocks'), async (req, res) => {
   console.log('Request translated blocks:', req.body);
   const translationTodos = (req.body?.translationTodos as [TranslationTodo]) ?? [];
   const language = req.body?.language;
@@ -437,7 +499,8 @@ app.post('/api/slideLibrary/lookup', (req, res) => {
 });
 
 // Upsert a reviewed translation. Body: { language, sourceText, text, provenance? }.
-app.post('/api/slideLibrary', async (req, res) => {
+// Writes to the persistent library on disk, so unlike the lookups above it needs a key.
+app.post('/api/slideLibrary', requireWriteKey('/api/slideLibrary'), async (req, res) => {
   const { language, sourceText, text, provenance } = req.body ?? {};
   if (!language || typeof sourceText !== 'string' || typeof text !== 'string') {
     return res.status(400).json({ ok: false, error: 'Missing language, sourceText, or text' });
@@ -451,7 +514,7 @@ app.post('/api/slideLibrary', async (req, res) => {
 // { slides: string[], languages: string[], reference?: string }. `reference` is a free-text
 // dump (possibly multilingual, arbitrarily segmented) the model uses where it covers a
 // target language and ignores otherwise. Returns { translations: { [language]: PerSlideTranslation[] } }.
-app.post('/api/translateItem', async (req, res) => {
+app.post('/api/translateItem', requireWriteKey('/api/translateItem'), async (req, res) => {
   const slides = (req.body?.slides as string[]) ?? [];
   const requestedLanguages = (req.body?.languages as string[]) ?? [];
   const reference = (req.body?.reference as string | undefined)?.trim();
@@ -568,7 +631,7 @@ app.post('/api/translateItem', async (req, res) => {
 // text and/or revise translations via set_translations; revised entries are returned for the
 // browser to write into the slideTranslations Y.Map. Conversation progress (status, agent
 // reasoning, tool calls) streams live via the slideConversations Y.Map.
-app.post('/api/slideConversation/message', async (req, res) => {
+app.post('/api/slideConversation/message', requireWriteKey('/api/slideConversation/message'), async (req, res) => {
   const itemId = (req.body?.itemId as string | undefined)?.trim();
   const text = (req.body?.text as string | undefined)?.trim();
   const docId = (req.body?.docId as string | undefined)?.trim();
@@ -636,7 +699,7 @@ app.post('/api/slideConversation/message', async (req, res) => {
 
 // Record a reviewer's manual edit as a note in the conversation, so the next follow-up has
 // that context. No agent run — the edit itself is written to Yjs/library by the browser.
-app.post('/api/slideConversation/note', async (req, res) => {
+app.post('/api/slideConversation/note', requireWriteKey('/api/slideConversation/note'), async (req, res) => {
   const itemId = (req.body?.itemId as string | undefined)?.trim();
   const text = (req.body?.text as string | undefined)?.trim();
   const docId = (req.body?.docId as string | undefined)?.trim();

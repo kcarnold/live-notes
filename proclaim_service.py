@@ -39,6 +39,7 @@ from proclaim_feed import DEFAULT_PROCLAIM_BASE_URL, ProclaimFeed
 from slide_feed import SlideFeed
 from slide_replay import RecordingSlideFeed, ReplaySlideFeed, load_records
 from slide_sync_runtime import RuntimeTiming, SlideSyncRuntime
+from write_key import get_write_key, write_key_headers
 from slide_translator import SlideTranslator
 from yjs_publisher import YjsSlidePublisher
 
@@ -56,6 +57,10 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 PROCLAIM_BASE_URL = os.getenv('PROCLAIM_BASE_URL', DEFAULT_PROCLAIM_BASE_URL)
 YSWEET_URL = os.getenv('YSWEET_URL', '')
 assert YSWEET_URL, "YSWEET_URL must be set"
+# Shared key identifying this machine to the server's privileged endpoints (full Y-Sweet
+# tokens, /api/translateItem). Installed into the LaunchAgent plist by
+# install_proclaim_service.sh --write-key=. Optional while the server runs in observe mode.
+WRITE_KEY = get_write_key()
 POLL_INTERVAL = float(os.getenv('PROCLAIM_POLL_INTERVAL', '0.5'))  # seconds
 POLL_INTERVAL_OFF_AIR = float(os.getenv('PROCLAIM_POLL_INTERVAL_OFF_AIR', '10'))  # seconds
 # How often the feed re-reads the full on-air service order (all items + slides). Items whose
@@ -197,7 +202,7 @@ def make_status_announcer(
     return announce
 
 
-def make_translate_fn(ysweet_url: str, languages: List[str]):
+def make_translate_fn(ysweet_url: str, languages: List[str], write_key: Optional[str] = None):
     """Build the translation call the SlideTranslator injects: POST /api/translateItem.
 
     Returns the ``{language: [{text, status, provenance}, ...]}`` map, or None on failure
@@ -228,6 +233,7 @@ def make_translate_fn(ysweet_url: str, languages: List[str]):
                 response = await client.post(
                     f"{ysweet_url}/api/translateItem",
                     json=body,
+                    headers=write_key_headers(write_key),
                     timeout=3 * 60.0,
                 )
                 response.raise_for_status()
@@ -295,7 +301,9 @@ def build_runtime(
     )
     publisher = YjsSlidePublisher()
     translator = SlideTranslator(
-        translate_fn=make_translate_fn(YSWEET_URL, SLIDE_TRANSLATION_LANGUAGES),
+        translate_fn=make_translate_fn(
+            YSWEET_URL, SLIDE_TRANSLATION_LANGUAGES, write_key=WRITE_KEY
+        ),
         languages=SLIDE_TRANSLATION_LANGUAGES,
         scan_interval=TRANSLATION_SCAN_INTERVAL,
         report_exception=report_exception,
@@ -315,6 +323,7 @@ def build_runtime(
         feed, publisher, translator, YSWEET_URL,
         doc_id=doc_id, timing=timing, report_exception=report_exception,
         on_session_start=make_status_announcer(),
+        write_key=WRITE_KEY,
     )
 
 
@@ -366,6 +375,10 @@ async def main():
 
     logger.info(f"Proclaim URL: {PROCLAIM_BASE_URL}")
     logger.info(f"Poll interval: {POLL_INTERVAL}s (on air), {POLL_INTERVAL_OFF_AIR}s (off air)")
+    # Says whether a key is configured, never what it is. Worth a line: once the server
+    # enforces keys, "no write key configured" is the whole explanation for a service that
+    # connects but silently can't write.
+    logger.info(f"Write key: {'configured' if WRITE_KEY else 'NOT configured'}")
     version_info = service_version_info()
     logger.info(
         f"Version: {version_info['gitShaShort'] or 'unknown'} "

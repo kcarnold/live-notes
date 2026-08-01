@@ -11,6 +11,7 @@ import type { PerSlideTranslation } from './slideItemTranslation.ts';
 import type { BibleToolCall } from '../bible.ts';
 import type { Content } from '@google/genai';
 import { getDocId } from './getDocId.ts';
+import { apiFetch } from './writeKey.ts';
 
 export type { BibleToolCall };
 export type { Content };
@@ -98,7 +99,7 @@ export function parseSlidesInput(text: string): string[] {
 }
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -111,7 +112,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 
 /** Fetch all reviewed library entries. */
 export async function fetchLibrary(): Promise<SlideLibraryRecord[]> {
-  const response = await fetch('/api/slideLibrary');
+  const response = await apiFetch('/api/slideLibrary');
   if (!response.ok) throw new Error(`/api/slideLibrary failed: ${response.status}`);
   const data = (await response.json()) as { entries: SlideLibraryRecord[] };
   return data.entries;

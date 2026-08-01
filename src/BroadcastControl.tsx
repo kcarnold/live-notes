@@ -17,6 +17,7 @@ import { isEditorAtom } from "./configAtoms";
 import { useStrings } from "./useLocale";
 import { LiveTranscript } from "./LiveTranscript";
 import { getDocId } from "./getDocId";
+import { apiFetch } from "./writeKey";
 
 // The default/primary translator bridge transcribes the speaker's own audio and
 // writes it to the shared Yjs doc under this code, so the broadcaster can read
@@ -161,7 +162,7 @@ export function BroadcastControl() {
     setError(null);
     setConnecting(true);
     try {
-      const tk = (await fetch("/api/livekit/token", {
+      const tk = (await apiFetch("/api/livekit/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

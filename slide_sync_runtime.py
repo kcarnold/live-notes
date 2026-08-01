@@ -26,6 +26,7 @@ from pycrdt.websocket.websocket import HttpxWebsocket
 
 from slide_feed import SessionInfo, SlideFeed, SnapshotBus
 from slide_translator import SlideTranslator
+from write_key import write_key_headers
 from yjs_publisher import YjsSlidePublisher
 
 logger = logging.getLogger(__name__)
@@ -55,11 +56,16 @@ class SlideSyncRuntime:
         timing: Optional[RuntimeTiming] = None,
         report_exception: Optional[Callable[[Exception], None]] = None,
         on_session_start: Optional[Callable[[Doc], None]] = None,
+        write_key: Optional[str] = None,
     ):
         self.feed = feed
         self.publisher = publisher
         self.translator = translator
         self.ysweet_url = ysweet_url
+        # Shared key identifying this device to the server when asking for a *full*
+        # (writable) Y-Sweet token. Optional: while the server runs in observe mode a
+        # keyless request is recorded and still served.
+        self.write_key = write_key
         self.timing = timing or RuntimeTiming()
         self._report_exception = report_exception or (lambda _e: None)
         # Called with the freshly connected Doc at the start of every session — the seam the
@@ -156,6 +162,7 @@ class SlideSyncRuntime:
             response = await client.post(
                 f"{self.ysweet_url}/api/ys-auth",
                 json={"docId": self.doc_id, "isEditor": True},
+                headers=write_key_headers(self.write_key),
                 timeout=self.timing.ysweet_token_timeout,
             )
             response.raise_for_status()

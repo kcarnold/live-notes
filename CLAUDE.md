@@ -33,6 +33,12 @@ Required environment variables (`.env`):
 - `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
 
 Optional environment variables:
+- `WRITE_KEYS` - Shared per-device keys authorizing writes (editing, the microphone, the
+  model/TTS endpoints). Comma-separated `label:key` or bare `key`. Reading needs no key.
+  See [docs/WRITE_KEYS.md](docs/WRITE_KEYS.md).
+- `WRITE_AUTH_MODE` - `off` | `observe` | `enforce` (default `observe`; forced to `off` when
+  `WRITE_KEYS` is empty). `observe` records every privileged request and allows it anyway —
+  the rollout state. `enforce` refuses unauthorized ones.
 - `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
 - `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
@@ -143,11 +149,20 @@ docker compose down
 
 ## Architecture
 
+### Write Authorization
+
+Shared per-device keys, not user logins ([writeAuth.ts](writeAuth.ts), browser side
+[src/writeKey.ts](src/writeKey.ts), Python side [write_key.py](write_key.py)). Viewers need
+no key; a key is what buys a *writable* Y-Sweet token, the broadcaster's microphone, and the
+endpoints that spend money. Clients present it as `X-Write-Key`. Defaults to `observe` mode,
+which records every privileged request and allows it anyway. Full picture:
+[docs/WRITE_KEYS.md](docs/WRITE_KEYS.md).
+
 ### Core Collaboration Flow
 
 The app uses **Yjs** for real-time collaborative state management:
 
-1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status
+1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status, gated on a write key (an unauthorized editor request is downgraded to read-only, not refused)
 2. **Shared Y.Doc** per session: Each session (identified by `?doc=doc-YYYY-MM-DD`) has a shared Yjs document
 3. **Key shared data structures**:
    - `translatedText-{language}` (Y.Text): Translated output for each language

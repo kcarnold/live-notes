@@ -12,6 +12,8 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 
 - [SMOKE_TEST.md](SMOKE_TEST.md) — the pre-service manual smoke-test checklist, and how PRs
   declare which sections they touch.
+- [WRITE_KEYS.md](WRITE_KEYS.md) — shared-key write authorization: what needs a key, the
+  observe→enforce rollout, how each device is given one, and how to rotate.
 - [OBSERVABILITY.md](OBSERVABILITY.md) — what to observe about the live-audio backend
   (status/liveness) and where to pull it from: PostHog events, in-process state, LiveKit, Yjs.
 - [live-audio-resilience.md](live-audio-resilience.md) — how the translation bridge survives

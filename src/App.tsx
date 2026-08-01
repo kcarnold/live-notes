@@ -8,7 +8,7 @@ import React, { useState } from "react";
 import "./App.css";
 
 import { useAtom } from "jotai";
-import { fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
+import { editorDeniedAtom, fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
 import {
   LISTEN_LANGUAGE_CODES,
@@ -26,6 +26,7 @@ import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
 import { StatusViewContainer } from "./StatusView";
 import { getDocId } from "./getDocId";
+import { apiFetch } from "./writeKey";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
 // pane (listen-{language} / broadcast) is actually rendered, keeping it out of
@@ -441,6 +442,31 @@ function LayoutPage({ layout: initialLayout }: { layout: string }) {
   );
 }
 
+/**
+ * Shown when a device asked for `#editor` but the server would only issue a read-only
+ * token — i.e. this device has no valid write key. Fixed rather than in flow so it can't
+ * reshuffle a projected layout, and dismissible because the session still works fine
+ * read-only and nobody needs a banner over the words during a service.
+ */
+function EditorDeniedBanner() {
+  const s = useStrings();
+  const [denied] = useAtom(editorDeniedAtom);
+  const [dismissed, setDismissed] = useState(false);
+  if (!denied || dismissed) return null;
+  return (
+    <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg shadow-lg bg-amber-100 text-amber-900 dark:bg-amber-900 dark:text-amber-100 text-sm max-w-[90vw]">
+      <span>{s.editorAccessDenied}</span>
+      <button
+        type="button"
+        className="text-xs underline whitespace-nowrap"
+        onClick={() => setDismissed(true)}
+      >
+        {s.dismiss}
+      </button>
+    </div>
+  );
+}
+
 const App = () => {
   // We're an editor only if location hash includes #editor
   const isEditor = window.location.hash.includes("editor");
@@ -450,17 +476,29 @@ const App = () => {
   const docId = getDocId();
 
   const [, setIsEditor] = useAtom(isEditorAtom);
+  const [, setEditorDenied] = useAtom(editorDeniedAtom);
   React.useEffect(() => {
     setIsEditor(isEditor);
   }, [isEditor, setIsEditor]);
   const authEndpoint: AuthEndpoint = async () => {
-    const response = await fetch("/api/ys-auth", {
+    const response = await apiFetch("/api/ys-auth", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ docId, isEditor }),
     });
+    // The server decides what we actually get: asking to edit without a valid write key
+    // is answered with a read-only token rather than an error, so the session still
+    // displays. Record what was granted so the UI can stop offering edit controls.
+    const granted = response.headers.get("X-Granted-Authorization");
+    if (isEditor && granted === "read-only") {
+      console.warn(
+        "[write-auth] editor access was not granted for this device; continuing read-only",
+      );
+      setIsEditor(false);
+      setEditorDenied(true);
+    }
     return (await response.json()) as ClientToken;
   };
 
@@ -480,6 +518,7 @@ const App = () => {
 
   return (
     <YDocProvider docId={docId} authEndpoint={authEndpoint}>
+      <EditorDeniedBanner />
       {pageComponent}
     </YDocProvider>
   );

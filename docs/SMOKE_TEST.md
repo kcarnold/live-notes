@@ -85,7 +85,28 @@ startup log line reports which):
 - [ ] Tap a translated line: audio plays. Tap again: cancels.
 - [ ] Auto-speak advances line to line.
 
-## 6. Teardown sanity
+## 6. Write keys
+
+Skip entirely when `WRITE_KEYS` is unset (the server logs `write authorization is off`).
+
+- [ ] Server startup logs show the expected mode and key labels:
+      `[write-auth] mode=observe keys=[proclaim, booth, …]`.
+- [ ] Provision the editor device once with `#editor&key=THEKEY`: the key disappears from
+      the address bar, and `#editor` survives.
+- [ ] Reload that device with a plain `#editor` URL (no key): still an editor.
+- [ ] Server logs show `key=<label> → ok` for `/api/ys-auth` from each real device —
+      the editor browsers, the Proclaim Mac (`Write key: configured` in its own log), and
+      the feeder. Anything logged as `key=none` is a device that `enforce` would lock out.
+- [ ] A viewer URL (no `#editor`, no key) still connects, and TTS still plays — viewers must
+      never need a key.
+
+**In `enforce` mode only** (skip while in `observe`):
+
+- [ ] An editor URL on an unprovisioned device shows the read-only banner and no edit
+      controls, rather than a blank or broken page.
+- [ ] Broadcast from an unprovisioned device fails with a visible error, not silence.
+
+## 7. Teardown sanity
 
 - [ ] Close all listener tabs; confirm the supervisor winds the translator bots down within
       ~2 minutes (60 s demand grace + a reconcile tick; watch for `[SessionManager] Supervisor

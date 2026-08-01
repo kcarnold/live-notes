@@ -79,6 +79,10 @@ export interface AppStrings {
   goHome: string;
   downloadSession: string;
 
+  // Write authorization (shared device keys)
+  editorAccessDenied: string;
+  dismiss: string;
+
   // Status / admin page (skeleton for #72)
   statusTitle: string;
   statusHealthTitle: string;
@@ -179,6 +183,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Next',
     untitledPresentation: 'Untitled Presentation',
     goHome: 'Go home',
+    editorAccessDenied: 'This device is not set up to edit. Showing the session read-only.',
+    dismiss: 'Dismiss',
     downloadSession: 'Download session',
     statusTitle: 'Session status',
     statusHealthTitle: 'Component health',
@@ -273,6 +279,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Suivant',
     untitledPresentation: 'Pr\u00e9sentation sans titre',
     goHome: 'Accueil',
+    editorAccessDenied: "Cet appareil n'est pas autorisé à modifier. Session affichée en lecture seule.",
+    dismiss: 'Fermer',
     downloadSession: 'Télécharger la session',
     statusTitle: 'État de la session',
     statusHealthTitle: 'État des composants',
@@ -367,6 +375,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Siguiente',
     untitledPresentation: 'Presentaci\u00f3n sin t\u00edtulo',
     goHome: 'Ir al inicio',
+    editorAccessDenied: 'Este dispositivo no está autorizado para editar. Sesión en solo lectura.',
+    dismiss: 'Cerrar',
     downloadSession: 'Descargar sesión',
     statusTitle: 'Estado de la sesión',
     statusHealthTitle: 'Estado de los componentes',
@@ -461,6 +471,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     next: 'Apr\u00e8',
     untitledPresentation: 'Prezantasyon San Tit',
     goHome: 'Retounen lakay',
+    editorAccessDenied: 'Aparèy sa a pa otorize pou modifye. N ap montre sesyon an an lekti sèlman.',
+    dismiss: 'Fèmen',
     downloadSession: 'Telechaje sesyon an',
     statusTitle: 'Estati sesyon an',
     statusHealthTitle: 'Estati konpozan yo',

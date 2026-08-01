@@ -58,6 +58,7 @@ final class Publisher {
     var onStateChange: ((State) -> Void)?
 
     private let serverURL: String
+    private let writeKey: String?
     private var room: Room?
     private var connectTask: Task<Void, Never>?
 
@@ -70,8 +71,9 @@ final class Publisher {
     /// notably the `didDisconnectWithError(nil)` that our own `stop()` provokes.
     private var sessionID: Int = 0
 
-    init(serverURL: String) {
+    init(serverURL: String, writeKey: String? = nil) {
         self.serverURL = serverURL
+        self.writeKey = writeKey
     }
 
     /// Connect to `room` (the doc id) and publish. Idempotent while connected/connecting.
@@ -115,7 +117,8 @@ final class Publisher {
         var pending: Room?
         do {
             Log.publisher.notice("fetching token from \(self.serverURL, privacy: .public) for room \(docID, privacy: .public)")
-            let token = try await LiveKitTokenClient(serverURL: serverURL).fetchToken(room: docID)
+            let token = try await LiveKitTokenClient(serverURL: serverURL, writeKey: writeKey)
+                .fetchToken(room: docID)
             guard isCurrent(id) else { return }
             Log.publisher.notice("token OK; connecting to \(token.serverUrl, privacy: .public)")
 

@@ -75,6 +75,21 @@ open AudioFeeder.xcodeproj # then just hit Run
 Re-run `xcodegen generate` after changing `project.yml` (or after adding source files, since
 the file list is captured at generation time).
 
+## Write key
+
+Publishing takes the room's microphone — and because every broadcaster shares the
+`organizer-host` identity, it evicts whoever is currently speaking. The server therefore
+gates organizer tokens on a shared per-device key ([docs/WRITE_KEYS.md](../docs/WRITE_KEYS.md)).
+
+Paste this machine's key into **Settings → Server → Write key**. It rides on the
+`/api/livekit/token` request as `X-Write-Key`; nothing else about the request changes. While
+the server runs in `observe` mode a blank key still works, so the feeder keeps publishing
+until the server switches to `enforce`.
+
+The key is persisted in the app's plaintext JSON config alongside the other settings, not the
+Keychain — proportionate for a key that grants a room's microphone and is rotated by editing
+the server's `WRITE_KEYS`.
+
 ## Watching the logs
 
 The app has no console window and, when it's doing its job, no visible UI beyond a menu-bar

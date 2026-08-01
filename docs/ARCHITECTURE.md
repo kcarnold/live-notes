@@ -99,8 +99,14 @@ writer once each component announces its clientID (planned: via the status heart
   needs non-silent audio, not just a connection.
 - **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
   show's scheduled date), so a service's state lives in one doc per date.
-- **Editor vs viewer** is enforced server-side via Y-Sweet token scope, keyed off the
-  `#editor` request — there is currently no other auth.
+- **Editor vs viewer** is enforced server-side via Y-Sweet token scope. The `#editor` request
+  states an intent; whether it is honored depends on a shared per-device write key
+  (`writeAuth.ts`, [WRITE_KEYS.md](WRITE_KEYS.md)) — as does taking the microphone, and the
+  endpoints that spend money. Reading needs no key, and never will: viewers are the point.
+  An unauthorized editor request is *downgraded* to a read-only token rather than refused, so
+  a stale key shows the session read-only instead of a blank screen mid-service. The whole
+  thing defaults to `observe` mode, which records what it would have refused and refuses
+  nothing — check the mode before concluding that a key is being enforced.
 
 ## Testing seams
 
