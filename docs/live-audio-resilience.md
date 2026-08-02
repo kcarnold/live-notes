@@ -185,10 +185,23 @@ and neither can a health check that asks whether audio is arriving.
 A subscription that ends must end the pipe that reads it. Two layers, for the same reason
 reconcile has several triggers:
 
-1. **Retire on the event.** `TrackUnsubscribed` and `ParticipantDisconnected` for the organizer
-   cancel the reader for that track. Because LiveKit reuses one identity for every broadcaster, a
-   departure notice may be delivered *after* the rejoin it precedes, so a pipe is only retired if it
-   was opened before the event was observed — otherwise the fix would tear down the live pipe.
+1. **Retire on the event, scoped to what the event names.** `TrackUnsubscribed` cancels the reader
+   for *that track*; `ParticipantDisconnected` cancels the pipes belonging to *that participant
+   object*. Neither may close anything broader, because LiveKit reuses one identity for every
+   broadcaster and does not guarantee that a departure notice arrives before the rejoin that
+   replaces it. A stale notice carries the old participant object, so object identity is what
+   distinguishes it from an on-time one — the identity string is the same either way.
+
+   The first attempt at this scoped by *generation* instead: a monotonic pipe id, retiring only
+   pipes opened at or before the event's "observation point". It didn't work, in two ways worth
+   recording. The observation point was sampled when the handler *ran*, not when the event was
+   generated, and the handler is synchronous — so every live pipe always qualified and the guard
+   was inert. And the fallback that made an over-eager close look survivable ("reconcile will
+   re-subscribe") does not hold here: the SDK deletes `remoteParticipants` **by identity** before
+   emitting `ParticipantDisconnected`, so a stale notice evicts the rejoined participant, reconcile
+   finds no organizer, and `organizerHasUnmutedAudio()` returns false — which resets the escalation
+   counter every tick, so the stall watchdog never fires either. The bridge would have sat `active`
+   and permanently deaf: the exact failure this document is about, reintroduced by its own fix.
 2. **Supersede regardless.** All organizer audio is the same microphone, so opening a pipe closes
    every other one. This is the layer that does not depend on getting LiveKit's event vocabulary
    right — the same argument as reconcile, applied to teardown. It also *reports* when it fires
@@ -305,7 +318,9 @@ Coverage is deliberately split by what each layer can prove:
 | leave → rejoin **frame count** | outage 3 stays fixed: fed once, not twice |
 | rejoin with **no departure event** | the supersede layer holds without the event |
 | re-pipe after unsubscribe | teardown didn't buy correctness with deafness |
+| departure notice arrives **after** the rejoin | teardown is scoped to what the event names, so a stale one is a no-op |
 | stopped bridge, mic still streaming | nothing reaches a torn-down session |
+| subscription lands **after** `stop()` | no pipe is opened on a discarded bridge (asserts the stream was never constructed, not just that frames didn't arrive) |
 
 The two property tests — "only one trigger fires" and "no departure event" — are the ones worth
 stealing. They assert the *property* the design rests on rather than the behavior of any particular

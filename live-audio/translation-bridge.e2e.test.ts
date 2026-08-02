@@ -45,6 +45,13 @@ class FakeRemoteTrack {
   private queue: FakeAudioFrame[] = [];
   private waiter: ((v: IteratorResult<FakeAudioFrame>) => void) | null = null;
   private ended = false;
+  /**
+   * How many AudioStreams have been opened over this track — i.e. how many times the
+   * bridge decided to pipe it. Stands in for the native FFI stream a real pipe allocates,
+   * so a test can assert "no pipe was opened" directly rather than inferring it from the
+   * absence of frames (which a torn-down Gemini socket would suppress anyway).
+   */
+  streamsOpened = 0;
 
   /** Speak: deliver one 100ms frame to whoever is reading this track. */
   push(frame: FakeAudioFrame): void {
@@ -115,7 +122,9 @@ class FakeAudioFrame {
 
 /** `new AudioStream(track)` in the bridge resolves to a reader over that track. */
 class FakeAudioStream {
-  constructor(private readonly track: FakeRemoteTrack) {}
+  constructor(private readonly track: FakeRemoteTrack) {
+    track.streamsOpened++;
+  }
   getReader(): FakeReader {
     return new FakeReader(this.track);
   }
@@ -225,6 +234,7 @@ class FakeRoom extends EventEmitter {
     }
 
     // Same identity, brand-new participant/publication/track objects — a rejoin, not a resume.
+    this.replaced = departing;
     this.remoteParticipants.delete(identity);
     const participant = new FakeParticipant(identity);
     const track = new FakeRemoteTrack();
@@ -232,6 +242,30 @@ class FakeRoom extends EventEmitter {
     this.remoteParticipants.set(identity, participant);
     this.emit(RoomEvent.ParticipantConnected, participant);
     return track;
+  }
+
+  /** The participant object the most recent `organizerRejoins` replaced. */
+  private replaced: FakeParticipant | null = null;
+
+  /**
+   * The departure notice for the participant a rejoin already replaced, arriving *after*
+   * that rejoin — the ordering LiveKit does not rule out. The server kicks the old session
+   * on an identity collision, and that kick can easily reach us behind the new session's
+   * subscribe round-trip.
+   *
+   * Two details are load-bearing, both taken from the SDK's event dispatcher:
+   *   - the notice names the *old* participant object, which is the only thing that
+   *     distinguishes it from an on-time departure (the identity string is identical);
+   *   - the SDK deletes from `remoteParticipants` **by identity** before emitting, so a
+   *     stale notice evicts whoever currently holds the identity — the rejoined
+   *     participant. That is why an over-eager close here is not recoverable: reconcile
+   *     walks `remoteParticipants` and, after this, finds no organizer to re-subscribe.
+   */
+  announceLateDeparture(): void {
+    const departed = this.replaced;
+    if (!departed) throw new Error("no rejoin has happened for a departure to lag behind");
+    this.remoteParticipants.delete(departed.identity);
+    this.emit(RoomEvent.ParticipantDisconnected, departed);
   }
 
   /**
@@ -569,6 +603,33 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await bridge.stop();
   });
 
+  it("keeps the rejoin's pipe when the old session's departure notice arrives late", async () => {
+    // The mirror image of the two tests above, and the case an over-eager teardown gets
+    // wrong. LiveKit does not guarantee that "the old session left" is delivered before
+    // "the new session joined" — on an identity collision the server's kick races the
+    // rejoin's subscribe round-trip. A bridge that reacts to the leave by closing whatever
+    // the organizer had open then retires the pipe it opened moments ago, and cannot get
+    // it back (see FakeRoom.announceLateDeparture): reconcile has no organizer left to
+    // find in the room, and the stall watchdog won't escalate for a mic it can't see, so
+    // the bridge sits `active` and permanently deaf. Closing by participant *object* is
+    // what makes the stale notice a no-op.
+    const { bridge, room, seated: oldMic } = await boot((r) => r.seatOrganizer(ORGANIZER));
+    await speak(oldMic, 1);
+
+    const newMic = room.organizerRejoins(ORGANIZER, { announceDeparture: false });
+    await vi.advanceTimersByTimeAsync(50);
+    await speak(newMic, 2);
+    expect(framesToGemini()).toBe(3); // the rejoin is live and feeding
+
+    room.announceLateDeparture();
+    await vi.advanceTimersByTimeAsync(50);
+
+    await speak(newMic, 4);
+    expect(framesToGemini()).toBe(7); // ...and still feeding afterwards
+    expect(bridge.status).toBe("active");
+    await bridge.stop();
+  });
+
   it("stops feeding Gemini once the bridge is stopped, even if the mic keeps streaming", async () => {
     // stop() disconnects the room, but the track object in a test (and an FFI stream in
     // production) can outlive that. Nothing may reach a torn-down Gemini session.
@@ -580,6 +641,33 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     await speak(mic, 5);
 
     expect(framesToGemini()).toBe(after);
+    // The frame count alone would pass on a bridge that never stopped reading, because a
+    // torn-down Gemini socket drops frames anyway. The buffer is where a still-running
+    // read loop actually shows up.
+    expect(bridge.health().bufferedFrames).toBe(0);
+  });
+
+  it("opens no pipe for a subscription that lands after the bridge is stopped", async () => {
+    // LiveKit events are FFI-queued, so a TrackSubscribed can be delivered during stop()'s
+    // `await room.disconnect()` or after a fatal Disconnected. A pipe opened then is
+    // unreachable by every teardown path that has already run — a native AudioStream and a
+    // read loop that outlive the bridge the supervisor has discarded, once per recycle.
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
+    await speak(mic, 1);
+
+    await bridge.stop();
+
+    const organizer = room.remoteParticipants.get(ORGANIZER) as FakeParticipant;
+    const strayTrack = new FakeRemoteTrack();
+    room.emit(
+      RoomEvent.TrackSubscribed,
+      strayTrack,
+      new FakePublication(strayTrack, organizer, room),
+      organizer
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(strayTrack.streamsOpened).toBe(0);
   });
 
   it("recovers when the input dies with no room event at all (the unknown-unknown)", async () => {

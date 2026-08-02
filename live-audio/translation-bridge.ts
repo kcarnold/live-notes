@@ -261,8 +261,18 @@ export interface AudioParticipantLike {
  * another multiple. See docs/live-audio-resilience.md.
  */
 interface OrganizerPipe {
-  /** Creation order; compared against a room event's observation point (see `pipeSeq`). */
+  /** Creation order. An id for logs and telemetry; carries no ordering semantics. */
   readonly seq: number;
+  /**
+   * The participant object this pipe's track was delivered on — the handle for "retire
+   * the pipes belonging to *this* departure".
+   *
+   * Object identity, not `identity`: LiveKit reuses one identity string for every
+   * broadcaster, so a rejoin arrives as a brand-new `RemoteParticipant` under the same
+   * name. Matching on the string would let a late-delivered departure notice for the
+   * participant that *left* retire the pipe the rejoin had already opened.
+   */
+  readonly owner: RemoteParticipant;
   /**
    * Retired. Set synchronously by `close()`, and checked in the read loop — this flag,
    * not `reader.cancel()`, is what actually stops frames reaching Gemini, so a cancel
@@ -419,9 +429,11 @@ export class TranslationBridge {
   // a track's stream ends, so a re-subscribed track pipes again. `lastOrganizerFrameAt`
   // is the liveness signal (0 = no organizer audio has ever arrived).
   private pipes: Map<RemoteTrack, OrganizerPipe> = new Map();
-  // Monotonic pipe id. Also the ordering tie-break: a room event observed at generation N
-  // may only retire pipes opened at or before N, so a late-delivered "the organizer left"
-  // cannot take down the pipe their rejoin already opened.
+  // Monotonic pipe id, for correlating the piped/closed telemetry of one pipe across a
+  // log. Deliberately *not* an ordering guard: which pipe a room event may retire is
+  // decided by the participant object it names (see `OrganizerPipe.owner`), because a
+  // sequence number can't distinguish a departure that arrived late from one that
+  // arrived on time.
   private pipeSeq: number = 0;
   private lastOrganizerFrameAt: number = 0;
   private lastStallRecoveryAt: number = 0;
@@ -711,17 +723,23 @@ export class TranslationBridge {
 
     this.room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
       if (participant.identity !== this.organizerIdentity) return;
-      // Captured before anything async: pipes opened after this point belong to a rejoin
-      // and must survive a disconnect notice for the participant they replaced. (LiveKit
-      // reuses one identity for every broadcaster, so "the organizer" leaving and "the
-      // organizer" arriving can legitimately overlap.)
-      const cutoff = this.pipeSeq;
       console.log(`[TranslationBridge:${this.targetLanguage}] Organizer left the room`);
       this.record("livekit_organizer_disconnected", { pipes: this.pipes.size });
-      // No track argument here, so close by generation: everything this participant could
-      // possibly have opened. Their audio is gone either way, and an over-eager close is
-      // recoverable (reconcile re-subscribes) where an under-eager one is the 2x bug.
-      this.closePipes("organizer_disconnected", { cutoff });
+      // Scoped to the pipes *this participant object* opened. There is no track argument
+      // on this event, but there is a participant, and that is the precise thing: their
+      // audio is gone, nobody else's is.
+      //
+      // Closing by identity instead — or closing everything — is wrong in the one case
+      // that matters, because LiveKit does not guarantee the leave beats the rejoin. When
+      // it doesn't, an identity-wide close retires the pipe the rejoin just opened, and
+      // nothing brings it back: the SDK deletes `remoteParticipants` *by identity* before
+      // emitting this event, so the rejoined participant is already out of the room's map
+      // and reconcile has nothing to re-subscribe. The bridge then sits `active` and deaf,
+      // which is the failure mode this whole file exists to prevent.
+      const closed = this.closePipes("organizer_disconnected", { owner: participant });
+      // A matching close() reconciles on its way out. If nothing matched, converge anyway
+      // — reconcile is idempotent, and a departure is exactly when the room changed shape.
+      if (closed === 0) this.reconcile("organizer_disconnected");
     });
 
     await this.room.connect(this.livekitUrl, token, {
@@ -1269,7 +1287,7 @@ export class TranslationBridge {
         if (participant.identity !== this.organizerIdentity) return;
         if (pub.kind !== TrackKind.KIND_AUDIO) return;
         if (this.pipes.has(track)) return;
-        this.pipeTrackToGemini(track);
+        this.pipeTrackToGemini(track, participant);
       }
     );
 
@@ -1370,27 +1388,33 @@ export class TranslationBridge {
   }
 
   /**
-   * Retire every pipe opened at or before `cutoff` (default: all of them), except `keep`.
-   * Returns how many it closed — nonzero from the supersede path means the room handed us
-   * a second pipe without any event we recognized as the first one ending.
+   * Retire pipes: all of them by default, or narrowed to those belonging to `owner`, and
+   * never `keep`. Returns how many it closed — nonzero from the supersede path means the
+   * room handed us a second pipe without any event we recognized as the first one ending.
    */
   private closePipes(
     why: string,
-    opts: { cutoff?: number; keep?: RemoteTrack } = {}
+    opts: { owner?: RemoteParticipant; keep?: RemoteTrack } = {}
   ): number {
-    const cutoff = opts.cutoff ?? Number.POSITIVE_INFINITY;
     let closed = 0;
     // Snapshot: close() mutates the map.
     for (const [track, pipe] of [...this.pipes]) {
       if (track === opts.keep) continue;
-      if (pipe.seq > cutoff) continue;
+      if (opts.owner && pipe.owner !== opts.owner) continue;
       pipe.close(why);
       closed++;
     }
     return closed;
   }
 
-  private pipeTrackToGemini(track: RemoteAudioTrack): void {
+  private pipeTrackToGemini(track: RemoteAudioTrack, owner: RemoteParticipant): void {
+    // A bridge past its life doesn't open pipes. LiveKit events are FFI-queued, so one can
+    // land during stop()'s `await room.disconnect()` or after a fatal Disconnected — and a
+    // pipe created then is unreachable by every teardown path that already ran, leaving a
+    // live native AudioStream and a read loop on a bridge the supervisor has discarded.
+    // Same guard, same reason, as reconcile().
+    if (this.status === "closed" || this.status === "error") return;
+
     // **At most one pipe feeds Gemini at a time.** One 100ms stream is 10 frames/sec; two
     // concurrent pipes are 20, and Gemini can only emit at 1x, so the translation falls a
     // second behind per second of speech with no way to catch up (2026-08-01: the
@@ -1427,6 +1451,7 @@ export class TranslationBridge {
     // again, then reconcile in case the replacement is already sitting in the room.
     const pipe: OrganizerPipe = {
       seq,
+      owner,
       closed: false,
       close: (why: string) => {
         if (pipe.closed) return;
