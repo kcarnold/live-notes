@@ -53,6 +53,24 @@ describe('StatusView', () => {
     expect(screen.getByText(/update pending/i)).toBeInTheDocument();
   });
 
+  it('shows a connected-clients section, empty until the container injects presence', () => {
+    render(<StatusView docId="doc-2026-07-13" statusEntries={{}} />);
+    expect(screen.getByText('Connected clients')).toBeInTheDocument();
+    expect(screen.getByText(/no clients are reporting presence/i)).toBeInTheDocument();
+  });
+
+  it('renders injected client presence in place of the empty state', () => {
+    render(
+      <StatusView
+        docId="doc-2026-07-13"
+        statusEntries={{}}
+        clientPresence={<p>3 phones on the French view</p>}
+      />,
+    );
+    expect(screen.getByText('3 phones on the French view')).toBeInTheDocument();
+    expect(screen.queryByText(/no clients are reporting presence/i)).not.toBeInTheDocument();
+  });
+
   it('reports how many components are heartbeating once the status map fills', () => {
     render(
       <StatusView

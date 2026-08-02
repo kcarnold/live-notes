@@ -3,6 +3,7 @@ import { useMap, useYDoc } from '@y-sweet/react';
 import { useStrings } from './useLocale';
 import { getDocId } from './getDocId';
 import { TranscriptHealth } from './TranscriptHealth';
+import { ClientPresenceViewContainer } from './ClientPresenceView';
 import { getWriteKey, maskWriteKey, setWriteKey } from './writeKey';
 
 /**
@@ -145,6 +146,11 @@ export interface StatusViewProps {
    * observers). Kept as a slot so the pure component stays testable without Yjs.
    */
   liveTranscripts?: ReactNode;
+  /**
+   * Connected-client list, injected by the container (it reads Yjs awareness).
+   * Same slot pattern as `liveTranscripts`, for the same reason.
+   */
+  clientPresence?: ReactNode;
   /** This device's stored write key, or null when it has none. */
   writeKey?: string | null;
   /**
@@ -158,6 +164,7 @@ export function StatusView({
   docId,
   statusEntries,
   liveTranscripts,
+  clientPresence,
   writeKey = null,
   onWriteKeyChange,
 }: StatusViewProps) {
@@ -233,6 +240,12 @@ export function StatusView({
           )}
         </section>
 
+        {/* Connected clients — real presence, read from Yjs awareness. */}
+        <section className={sectionClass}>
+          <h2 className={sectionTitleClass}>{s.statusPresenceTitle}</h2>
+          {clientPresence ?? <p className={placeholderClass}>{s.statusPresenceEmpty}</p>}
+        </section>
+
         {/* This device's write key — provisioning and rotation, off the viewer screens. */}
         {onWriteKeyChange && (
           <WriteKeySection writeKey={writeKey} onWriteKeyChange={onWriteKeyChange} />
@@ -283,6 +296,7 @@ export function StatusViewContainer() {
       docId={getDocId()}
       statusEntries={statusEntries}
       liveTranscripts={<TranscriptHealth />}
+      clientPresence={<ClientPresenceViewContainer />}
       writeKey={writeKey}
       onWriteKeyChange={(key) => {
         setWriteKey(key);

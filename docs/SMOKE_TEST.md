@@ -91,7 +91,21 @@ startup log line reports which):
 - [ ] Tap a translated line: audio plays. Tap again: cancels.
 - [ ] Auto-speak advances line to line.
 
-## 6. Write keys
+## 6. Status page — connected clients
+
+- [ ] Open `/status` on the session. Under **Connected clients**, confirm this device appears,
+      marked "this device", on the URL you actually have open.
+- [ ] Open a second tab on a translated view (e.g. `/translatedText-French`) and, ideally, a
+      phone on the same session. Both should appear within a couple of seconds, grouped under
+      their URLs, with a plausible device class — a phone must not read as "Desktop".
+- [ ] Confirm the note-taker tab (`#editor`) carries the "editor" badge and viewers do not.
+      Viewers hold read-only tokens; if they're missing from the list entirely, awareness is
+      being dropped, not just the doc writes.
+- [ ] Switch language with the selector on a viewer tab (which rewrites the URL in place). That
+      client's row should move to the new URL group within a few seconds.
+- [ ] Close a tab; its row should disappear within ~30 s (the awareness timeout).
+
+## 7. Write keys
 
 Skip entirely when `WRITE_KEYS` is unset (the server logs `write authorization is off`).
 
@@ -116,7 +130,7 @@ Skip entirely when `WRITE_KEYS` is unset (the server logs `write authorization i
       controls, rather than a blank or broken page.
 - [ ] Broadcast from an unprovisioned device fails with a visible error, not silence.
 
-## 7. Teardown sanity
+## 8. Teardown sanity
 
 - [ ] Close all listener tabs; confirm the supervisor winds the translator bots down within
       ~2 minutes (60 s demand grace + a reconcile tick; watch for `[SessionManager] Supervisor

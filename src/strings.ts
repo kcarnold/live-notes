@@ -108,6 +108,16 @@ export interface AppStrings {
   statusTranscriptSource: string;
   statusTranscriptNoUpdates: string;
   statusUpdatePending: string;
+  statusPresenceTitle: string;
+  statusPresenceEmpty: string;
+  statusPresenceConnected: string;
+  statusPresenceEditor: string;
+  statusPresenceYou: string;
+  statusPresenceJustNow: string;
+  statusDevicePhone: string;
+  statusDeviceTablet: string;
+  statusDeviceDesktop: string;
+  statusDeviceUnknown: string;
 
   // Layout diagram component labels
   componentSourceText: string;
@@ -222,6 +232,16 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptSource: 'source',
     statusTranscriptNoUpdates: 'No updates since page load',
     statusUpdatePending: 'Update pending — restart the service',
+    statusPresenceTitle: 'Connected clients',
+    statusPresenceEmpty: 'No clients are reporting presence yet.',
+    statusPresenceConnected: 'Connected now',
+    statusPresenceEditor: 'editor',
+    statusPresenceYou: 'this device',
+    statusPresenceJustNow: 'just now',
+    statusDevicePhone: 'Phone',
+    statusDeviceTablet: 'Tablet',
+    statusDeviceDesktop: 'Desktop',
+    statusDeviceUnknown: 'Unknown device',
     componentSourceText: 'Source Text',
     componentTranslatedText: 'Translated Text',
     componentBilingual: 'Bilingual View',
@@ -329,6 +349,16 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptSource: 'source',
     statusTranscriptNoUpdates: 'Aucune mise à jour depuis le chargement de la page',
     statusUpdatePending: 'Mise à jour en attente — redémarrez le service',
+    statusPresenceTitle: 'Clients connectés',
+    statusPresenceEmpty: 'Aucun client ne signale sa présence pour l’instant.',
+    statusPresenceConnected: 'Connectés maintenant',
+    statusPresenceEditor: 'éditeur',
+    statusPresenceYou: 'cet appareil',
+    statusPresenceJustNow: 'à l’instant',
+    statusDevicePhone: 'Téléphone',
+    statusDeviceTablet: 'Tablette',
+    statusDeviceDesktop: 'Ordinateur',
+    statusDeviceUnknown: 'Appareil inconnu',
     componentSourceText: 'Texte source',
     componentTranslatedText: 'Texte traduit',
     componentBilingual: 'Vue bilingue',
@@ -436,6 +466,16 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptSource: 'fuente',
     statusTranscriptNoUpdates: 'Sin actualizaciones desde que se cargó la página',
     statusUpdatePending: 'Actualización pendiente — reinicie el servicio',
+    statusPresenceTitle: 'Clientes conectados',
+    statusPresenceEmpty: 'Todavía ningún cliente informa su presencia.',
+    statusPresenceConnected: 'Conectados ahora',
+    statusPresenceEditor: 'editor',
+    statusPresenceYou: 'este dispositivo',
+    statusPresenceJustNow: 'ahora mismo',
+    statusDevicePhone: 'Teléfono',
+    statusDeviceTablet: 'Tableta',
+    statusDeviceDesktop: 'Computadora',
+    statusDeviceUnknown: 'Dispositivo desconocido',
     componentSourceText: 'Texto fuente',
     componentTranslatedText: 'Texto traducido',
     componentBilingual: 'Vista biling\u00fce',
@@ -543,6 +583,16 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusTranscriptSource: 'sous',
     statusTranscriptNoUpdates: 'Pa gen mizajou depi paj la chaje',
     statusUpdatePending: 'Gen yon mizajou k ap tann — rekòmanse sèvis la',
+    statusPresenceTitle: 'Kliyan ki konekte',
+    statusPresenceEmpty: 'Poko gen kliyan k ap siyale prezans yo.',
+    statusPresenceConnected: 'Konekte kounye a',
+    statusPresenceEditor: 'editè',
+    statusPresenceYou: 'aparèy sa a',
+    statusPresenceJustNow: 'kounye a',
+    statusDevicePhone: 'Telefòn',
+    statusDeviceTablet: 'Tablèt',
+    statusDeviceDesktop: 'Òdinatè',
+    statusDeviceUnknown: 'Aparèy enkoni',
     componentSourceText: 'Teks sous',
     componentTranslatedText: 'Teks tradui',
     componentBilingual: 'Vi Bileng',
