@@ -5,23 +5,29 @@ networks it straddles, and why the obvious sample-code shape does not.
 
 This subsystem started as Google sample code for Gemini Live + LiveKit. Sample code models the
 happy path: join a room, subscribe to a track, stream it to the model, publish the result. That
-shape is correct for a demo that runs for two minutes, and it has now caused two production
+shape is correct for a demo that runs for two minutes, and it has now caused three production
 outages in services that run for ninety. **The notes here are written so they can be upstreamed** —
 each fix is stated as a failure mode, an invariant, and a minimal remedy, not as a diff against
 our code.
 
 ## The invariant
 
-> A bridge whose `status` is `"active"` is receiving organizer audio.
+> A bridge whose `status` is `"active"` is receiving organizer audio — **exactly once, at
+> the rate the organizer is speaking it.**
 
-Every outage so far has been a violation of exactly this: the bridge is *up* — joined to the room,
-publishing its translated-audio track, holding a healthy Gemini socket — and simply not being fed.
-Nothing throws. Nothing disconnects. It is **active but deaf**, and it stays that way until a human
-notices the silence and restarts the process.
+The first two outages violated the first half: the bridge is *up* — joined to the room, publishing
+its translated-audio track, holding a healthy Gemini socket — and simply not being fed. Nothing
+throws. Nothing disconnects. It is **active but deaf**, and it stays that way until a human notices
+the silence and restarts the process.
 
 Deafness is the failure mode to design against, because it is the one the happy-path shape cannot
 see. A crash is loud and gets restarted. A bridge that is merely *not receiving* looks, from every
 signal the sample code emits, exactly like a bridge whose speaker has paused.
+
+The second half of the invariant was added after outage 3, which was the same blindness pointed the
+other way: the bridge was fed the same speech *twice over*, and every signal the sample emits looked
+healthier than usual. Both halves come from one property — a bridge is only correct when its input is
+exactly what the room is producing, and it has no way to tell unless it measures.
 
 ## Failure mode 1 — the publish race
 
@@ -141,6 +147,57 @@ useEffect(() => {
 had **continuously reconciled** subscription; the bridge had a **once-at-startup** one. Same SDK,
 same options, opposite outcome. The comment in that effect is the lesson the bridge hadn't learned.
 
+## Failure mode 3 — fed twice (2026-08-01)
+
+The organizer's publisher left the room and rejoined — which a scheduled feeder does at every run
+boundary, and a human does whenever their laptop sleeps or their network blips. Four times in one
+evening's log.
+
+LiveKit announced the departure properly: `TrackUnsubscribed`, then `ParticipantDisconnected`. The
+bridge logged both — outage 2's observability fix had made sure of that — and did nothing else. The
+read loop over the departed track's `AudioStream` stayed running. It went quiet while the organizer
+was away, and **started producing frames again when they came back**, alongside the pipe the rejoin
+had just opened.
+
+So Gemini received the same speech on two pipes. Input frames are 100 ms, so one pipe is 10
+frames/sec; two are 20. Gemini emits translated audio at 1x real time and has no way to emit faster,
+so the surplus becomes backlog: the translation fell one second further behind for every second of
+speech, and could never recover within that session's life. Roughly eleven minutes of surplus
+accumulated before the session was torn down. A second rejoin would have made it 3x.
+
+### Why nothing caught it
+
+Every guard in this document is a *liveness* guard, and the input was extremely live. The stall
+watchdog watches for too few frames. `status` was `active`, correctly. Gemini's socket was healthy.
+Audio was audible and the transcript was arriving — just late, and getting later. The only visible
+symptom was a listener complaint that the translation was "quite a bit farther behind."
+
+It had to be recovered from arithmetic. Frame counters are cumulative, so they cannot show a rate;
+the tell was that a bridge's 500-frame log markers were spaced exactly 25.000 s apart (20/sec) while
+another bridge in the same log, same feeder, no rejoin, sat at 9.9999/sec. The confirmation was two
+`Organizer audio stream ended` lines 77 µs apart at teardown, where every healthy bridge printed one.
+
+**Rate, not count.** A counter that only goes up cannot distinguish "working" from "working twice",
+and neither can a health check that asks whether audio is arriving.
+
+### The remedy
+
+A subscription that ends must end the pipe that reads it. Two layers, for the same reason
+reconcile has several triggers:
+
+1. **Retire on the event.** `TrackUnsubscribed` and `ParticipantDisconnected` for the organizer
+   cancel the reader for that track. Because LiveKit reuses one identity for every broadcaster, a
+   departure notice may be delivered *after* the rejoin it precedes, so a pipe is only retired if it
+   was opened before the event was observed — otherwise the fix would tear down the live pipe.
+2. **Supersede regardless.** All organizer audio is the same microphone, so opening a pipe closes
+   every other one. This is the layer that does not depend on getting LiveKit's event vocabulary
+   right — the same argument as reconcile, applied to teardown. It also *reports* when it fires
+   (`organizer_audio_pipe_superseded`), because a supersede means an event the first layer missed.
+
+The cancel itself is best-effort. What actually stops frames is a `closed` flag on the pipe, checked
+once per frame in the read loop, so a `cancel()` that hangs, throws, or isn't implemented costs one
+extra frame rather than the fix.
+
 ## The remedy: reconcile, then watch
 
 ### 1. Correctness — reconcile against current state, don't react to events
@@ -167,6 +224,11 @@ we lost twice; this stops playing it.
 Piping stays separate from subscribing: a track may be delivered to us more than once and must reach
 the model exactly once, so `TrackSubscribed` dedupes on track identity. That dedupe is cleared when a
 stream ends — deduping forever is right for redundant deliveries and wrong for a track that has died.
+
+Reconciling *up* is only half of it, as outage 3 showed. A pipe is a resource with an owner and an
+end, not a fire-and-forget loop: it must be retirable, retiring must be idempotent and safe from any
+event in any order, and opening a new one must retire the old. Deduping on identity alone cannot get
+there — the two pipes had different track objects, and both were, individually, perfectly valid.
 
 And treat the read loop's `done` as an event, not an exit: log it, report it, drop the track from the
 dedupe, reconcile.
@@ -213,17 +275,23 @@ websocket — and asserts on the single thing a listener cares about: **is audio
 Gemini?** No test inspects internal state. Each one breaks the input the way production broke it and
 checks that frames resume.
 
-The load-bearing part of the fake is that `FakeRoom.fullReconnect()` reproduces LiveKit's documented
-sequence *exactly*, including the gap that caused the outage: `ParticipantConnected` for everyone
-already present, and **no `TrackPublished`** for their existing publications. Get that detail wrong
-and the test passes against broken code.
+Two details of the fake are load-bearing, and each one is a detail that, gotten wrong, makes the test
+pass against broken code:
+
+- `FakeRoom.fullReconnect()` reproduces LiveKit's documented sequence *exactly*, including the gap
+  that caused outage 2: `ParticipantConnected` for everyone already present, and **no
+  `TrackPublished`** for their existing publications.
+- `FakeRoom.organizerRejoins()` does **not** end the departing track's stream, and `cancel()` on the
+  fake reader detaches that reader without killing the track. Outage 3 is precisely a track that
+  keeps producing after the bridge should have stopped listening; a fake whose teardown ended the
+  track would make the fix look correct for the wrong reason.
 
 Which is not hypothetical — **verify that a regression test can actually fail.** Run it against the
 code from before the fix (`git show <pre-fix-sha>:live-audio/translation-bridge.ts`) and confirm it
-goes red. Three of the five e2e tests fail against `9ff8822`, the code that was in production during
-the outage; the two that pass are the happy path and outage 1's race, which that commit already
-fixed. A regression test that has never been observed to fail is a guess about the bug, not a test
-of it.
+goes red. Three of the five original e2e tests fail against `9ff8822`, the code in production during
+outage 2; the two that pass are the happy path and outage 1's race, which that commit already fixed.
+Both outage-3 counting tests fail against `aee88fa`. A regression test that has never been observed
+to fail is a guess about the bug, not a test of it.
 
 Coverage is deliberately split by what each layer can prove:
 
@@ -234,14 +302,24 @@ Coverage is deliberately split by what each layer can prove:
 | full reconnect | outage 2 stays fixed |
 | input dies with **no room event at all** | the watchdog catches the unknown-unknown |
 | **only one trigger fires** | the convergence claim — no single trigger is load-bearing |
+| leave → rejoin **frame count** | outage 3 stays fixed: fed once, not twice |
+| rejoin with **no departure event** | the supersede layer holds without the event |
+| re-pipe after unsubscribe | teardown didn't buy correctness with deafness |
+| stopped bridge, mic still streaming | nothing reaches a torn-down session |
 
-That last one is the one worth stealing. It asserts the *property* the design rests on, rather than
-the behavior of any particular event, so it keeps holding even if LiveKit changes which events it
-emits — which is exactly the thing we have now been wrong about twice.
+The two property tests — "only one trigger fires" and "no departure event" — are the ones worth
+stealing. They assert the *property* the design rests on rather than the behavior of any particular
+event, so they keep holding even if LiveKit changes which events it emits, which is exactly the thing
+we have now been wrong about three times.
+
+Note the shape of the outage-3 assertions: `toBe(5)`, not `toBeGreaterThan(0)`. Every test written
+for the first two outages asks whether audio is *still arriving*, and every one of them passes on a
+bridge being fed double. Once a failure mode exists in both directions, the assertion has to be a
+count.
 
 ## Upstreaming notes
 
-For anyone carrying these back to the Gemini Live + LiveKit sample, the three defects are, in
+For anyone carrying these back to the Gemini Live + LiveKit sample, the four defects are, in
 order of severity:
 
 1. **Subscription is decided from events, not reconciled against state.** A sample that sets
@@ -254,10 +332,19 @@ order of severity:
    fine; deciding once from an event is not.)
 2. **`if (done) break;` swallows the death of the input.** The read loop's terminal condition is a
    real event and should be surfaced to the caller.
-3. **Deafness is unobservable.** There is no liveness signal on the audio path, so a bridge that has
+3. **A pipe from a track to the model is opened and never owned.** The sample starts a read loop per
+   subscribed track and has no way to stop one. That is fine while a publisher joins once and stays,
+   and wrong the moment they leave and come back: `TrackUnsubscribed` doesn't end the loop, the
+   departed track resumes on rejoin, and the model is fed the same speech twice at twice real time —
+   which for a streaming model means unbounded, unrecoverable latency growth rather than an error.
+   Make the pipe cancellable, retire it when its subscription ends, and have a new pipe supersede any
+   existing one.
+4. **Deafness is unobservable.** There is no liveness signal on the audio path, so a bridge that has
    stopped receiving is indistinguishable from a speaker who has stopped talking — to the code, to
-   the logs, and to the operator.
+   the logs, and to the operator. Nor is the opposite: log input *rate*, not just a cumulative frame
+   count, or double-feeding is invisible to every health signal you have.
 
 The general principle, worth stating plainly because it generalizes past this sample: **a component
-that bridges two networks must treat "my input went quiet" as a first-class, monitored state.** The
-sample treats it as the absence of an event, which is exactly the thing you cannot alert on.
+that bridges two networks must treat its input rate as a first-class, monitored quantity — both "went
+quiet" and "arriving twice" are states, not the absence of an event.** Absence of an event is exactly
+the thing you cannot alert on; a rate you can.

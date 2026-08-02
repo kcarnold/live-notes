@@ -60,11 +60,15 @@ class FakeRemoteTrack {
   /** The stream dies — what a LiveKit full reconnect does to an existing track. */
   end(): void {
     this.ended = true;
-    if (this.waiter) {
-      const w = this.waiter;
-      this.waiter = null;
-      w({ done: true, value: undefined as never });
-    }
+    this.releaseWaiter();
+  }
+
+  /** A reader let go of us (cancel): its pending read resolves, the track lives on. */
+  releaseWaiter(): void {
+    if (!this.waiter) return;
+    const w = this.waiter;
+    this.waiter = null;
+    w({ done: true, value: undefined as never });
   }
 
   read(): Promise<IteratorResult<FakeAudioFrame>> {
@@ -74,6 +78,29 @@ class FakeRemoteTrack {
     return new Promise((resolve) => {
       this.waiter = resolve;
     });
+  }
+}
+
+/**
+ * A reader over one track. `cancel()` detaches *this reader* without killing the track —
+ * which is the case that matters: the 2026-08-01 bug is a track that keeps producing
+ * frames after the bridge should have stopped listening to it. A fake whose cancel ended
+ * the track would make the fix look correct for the wrong reason.
+ */
+class FakeReader {
+  private cancelled = false;
+  constructor(private readonly track: FakeRemoteTrack) {}
+
+  async read(): Promise<IteratorResult<FakeAudioFrame>> {
+    if (this.cancelled) return { done: true, value: undefined as never };
+    const result = await this.track.read();
+    if (this.cancelled) return { done: true, value: undefined as never };
+    return result;
+  }
+
+  async cancel(): Promise<void> {
+    this.cancelled = true;
+    this.track.releaseWaiter();
   }
 }
 
@@ -89,8 +116,8 @@ class FakeAudioFrame {
 /** `new AudioStream(track)` in the bridge resolves to a reader over that track. */
 class FakeAudioStream {
   constructor(private readonly track: FakeRemoteTrack) {}
-  getReader() {
-    return { read: () => this.track.read() };
+  getReader(): FakeReader {
+    return new FakeReader(this.track);
   }
 }
 
@@ -170,6 +197,54 @@ class FakeRoom extends EventEmitter {
     const pub = participant.publish(new FakePublication(track, participant, this));
     this.emit(RoomEvent.TrackPublished, pub, participant);
     return track;
+  }
+
+  /**
+   * The organizer leaves the room and comes back — what the scheduled audio feeder does at
+   * every run boundary, four times in the 2026-08-01 log.
+   *
+   * The load-bearing detail: LiveKit announces the departure (TrackUnsubscribed, then
+   * ParticipantDisconnected) but does **not** end the old AudioStream. It goes quiet while
+   * they are away and starts producing again when they return. A bridge that treats those
+   * events as news rather than as a teardown instruction ends up with two live pipes into
+   * one Gemini session — and Gemini, fed at 2x and emitting at 1x, falls a second behind
+   * per second of speech forever.
+   *
+   * `announceDeparture: false` removes even those two events, leaving only the rejoin.
+   */
+  organizerRejoins(
+    identity: string,
+    { announceDeparture = true }: { announceDeparture?: boolean } = {}
+  ): FakeRemoteTrack {
+    const departing = this.remoteParticipants.get(identity) as FakeParticipant;
+    if (announceDeparture) {
+      for (const [, pub] of departing.trackPublications) {
+        this.emit(RoomEvent.TrackUnsubscribed, pub.track, pub, departing);
+      }
+      this.emit(RoomEvent.ParticipantDisconnected, departing);
+    }
+
+    // Same identity, brand-new participant/publication/track objects — a rejoin, not a resume.
+    this.remoteParticipants.delete(identity);
+    const participant = new FakeParticipant(identity);
+    const track = new FakeRemoteTrack();
+    participant.publish(new FakePublication(track, participant, this));
+    this.remoteParticipants.set(identity, participant);
+    this.emit(RoomEvent.ParticipantConnected, participant);
+    return track;
+  }
+
+  /**
+   * The subscription drops while the organizer stays put (LiveKit bandwidth management, a
+   * subscription reset). The pipe must end *and* come back: the fix must not buy its
+   * correctness by leaving the bridge deaf.
+   */
+  unsubscribeOrganizerTrack(identity: string): void {
+    const participant = this.remoteParticipants.get(identity) as FakeParticipant;
+    for (const [, pub] of participant.trackPublications) {
+      pub.subscribed = false; // so a reconcile can genuinely re-subscribe
+      this.emit(RoomEvent.TrackUnsubscribed, pub.track, pub, participant);
+    }
   }
 
   /**
@@ -424,6 +499,87 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
     expect(framesToGemini()).toBe(7); // audio resumed — we are not deaf
     expect(bridge.status).toBe("active");
     await bridge.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // Outage 3 (2026-08-01): fed twice, not once.
+  //
+  // Every earlier test asks "is audio still reaching Gemini?". These ask the question
+  // that failure inverted: is it reaching Gemini *only once*? The bridge stayed active
+  // and audible the whole time — it just fell further behind every minute, because the
+  // organizer's rejoin left the previous pipe running alongside the new one. Counting
+  // frames is the entire assertion; a test that only checked "> 0" would pass on the bug.
+  // -------------------------------------------------------------------------
+
+  it("feeds Gemini once, not twice, when the organizer leaves and rejoins", async () => {
+    const { bridge, room, seated: oldMic } = await boot((r) => r.seatOrganizer(ORGANIZER));
+
+    await speak(oldMic, 2);
+    expect(framesToGemini()).toBe(2);
+
+    const newMic = room.organizerRejoins(ORGANIZER);
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The old media path was never torn down by LiveKit, so it resumes right alongside
+    // the new one. Only the new one may reach Gemini.
+    await speak(oldMic, 5);
+    await speak(newMic, 3);
+
+    expect(framesToGemini()).toBe(5); // 2 before + 3 after; the orphan's 5 are dropped
+    expect(bridge.status).toBe("active");
+    await bridge.stop();
+  });
+
+  it("supersedes an orphaned pipe even when no departure event fires at all", async () => {
+    // The defense that doesn't depend on getting LiveKit's event vocabulary right — the
+    // same reasoning as reconcile, applied to teardown. Here the organizer's rejoin is the
+    // *only* thing the bridge is told; no TrackUnsubscribed, no ParticipantDisconnected.
+    const events: string[] = [];
+    const { bridge, room, seated: oldMic } = await boot((r) => r.seatOrganizer(ORGANIZER), {
+      recordEvent: (event: string) => events.push(event),
+    });
+    await speak(oldMic, 1);
+
+    const newMic = room.organizerRejoins(ORGANIZER, { announceDeparture: false });
+    await vi.advanceTimersByTimeAsync(50);
+
+    await speak(oldMic, 4);
+    await speak(newMic, 2);
+
+    expect(framesToGemini()).toBe(3); // 1 + 2
+    // ...and it says so, because a supersede here means an event we should have handled.
+    expect(events).toContain("organizer_audio_pipe_superseded");
+    await bridge.stop();
+  });
+
+  it("re-pipes after an unsubscribe — teardown must not leave the bridge deaf", async () => {
+    // The other side of the fix. Closing the pipe on TrackUnsubscribed is only correct if
+    // the subscription coming back brings audio with it; a fix that just stopped listening
+    // would pass both tests above and lose the service.
+    const { bridge, room, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
+    await speak(mic, 2);
+
+    room.unsubscribeOrganizerTrack(ORGANIZER);
+    await vi.advanceTimersByTimeAsync(50); // close → reconcile → re-subscribe → re-pipe
+
+    await speak(mic, 3);
+
+    expect(framesToGemini()).toBe(5); // resumed, and still exactly once per frame
+    expect(bridge.status).toBe("active");
+    await bridge.stop();
+  });
+
+  it("stops feeding Gemini once the bridge is stopped, even if the mic keeps streaming", async () => {
+    // stop() disconnects the room, but the track object in a test (and an FFI stream in
+    // production) can outlive that. Nothing may reach a torn-down Gemini session.
+    const { bridge, seated: mic } = await boot((r) => r.seatOrganizer(ORGANIZER));
+    await speak(mic, 2);
+
+    await bridge.stop();
+    const after = framesToGemini();
+    await speak(mic, 5);
+
+    expect(framesToGemini()).toBe(after);
   });
 
   it("recovers when the input dies with no room event at all (the unknown-unknown)", async () => {

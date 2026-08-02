@@ -251,6 +251,29 @@ export interface AudioParticipantLike {
 }
 
 /**
+ * One live route from a subscribed organizer track into the Gemini socket.
+ *
+ * A pipe exists so it can be *retired*. Before 2026-08-01 the bridge had no such handle:
+ * when the organizer left the room it logged the departure and left the read loop running,
+ * so the rejoin opened a second pipe alongside the first. Both then fed the same Gemini
+ * session, at 2x real time, which Gemini can only emit at 1x — the translation fell a
+ * second behind per second of speech and could never catch up. Each further rejoin added
+ * another multiple. See docs/live-audio-resilience.md.
+ */
+interface OrganizerPipe {
+  /** Creation order; compared against a room event's observation point (see `pipeSeq`). */
+  readonly seq: number;
+  /**
+   * Retired. Set synchronously by `close()`, and checked in the read loop — this flag,
+   * not `reader.cancel()`, is what actually stops frames reaching Gemini, so a cancel
+   * that hangs, throws or is unimplemented costs at most one more frame.
+   */
+  closed: boolean;
+  /** Idempotent teardown. Safe to call from any event, in any order, any number of times. */
+  close(why: string): void;
+}
+
+/**
  * Subscribe to every organizer audio publication in the room *right now*. Returns how
  * many publications it acted on, which is the bridge's "am I actually wired up?" signal.
  *
@@ -391,11 +414,15 @@ export class TranslationBridge {
 
   // Organizer-audio liveness. The bridge's defining failure mode is going deaf while
   // staying `active` (see docs/live-audio-resilience.md), so the input side is
-  // continuously reconciled and watched. `pipedTracks` dedupes piping (TrackSubscribed
-  // can be delivered redundantly) and is cleared when a track's stream ends, so a
-  // re-subscribed track pipes again. `lastOrganizerFrameAt` is the liveness signal
-  // (0 = no organizer audio has ever arrived).
-  private pipedTracks: Set<RemoteAudioTrack> = new Set();
+  // continuously reconciled and watched. `pipes` dedupes piping (TrackSubscribed can be
+  // delivered redundantly) and is the handle used to *retire* a pipe; it is cleared when
+  // a track's stream ends, so a re-subscribed track pipes again. `lastOrganizerFrameAt`
+  // is the liveness signal (0 = no organizer audio has ever arrived).
+  private pipes: Map<RemoteTrack, OrganizerPipe> = new Map();
+  // Monotonic pipe id. Also the ordering tie-break: a room event observed at generation N
+  // may only retire pipes opened at or before N, so a late-delivered "the organizer left"
+  // cannot take down the pipe their rejoin already opened.
+  private pipeSeq: number = 0;
   private lastOrganizerFrameAt: number = 0;
   private lastStallRecoveryAt: number = 0;
   private stallWatchdog: ReturnType<typeof setInterval> | null = null;
@@ -556,7 +583,8 @@ export class TranslationBridge {
       clearInterval(this.stallWatchdog);
       this.stallWatchdog = null;
     }
-    this.pipedTracks.clear();
+    // Status is already "closed", so each close() short-circuits its reconcile.
+    this.closePipes("stop");
 
     this.teardownGeminiSide();
 
@@ -631,6 +659,7 @@ export class TranslationBridge {
       // see the translator gone. Drop the Gemini side too, so the bridge can't linger as
       // a zombie holding a paid-for session that no audio will ever reach.
       this.status = "error";
+      this.closePipes("room_disconnected");
       this.teardownGeminiSide();
     });
 
@@ -648,17 +677,21 @@ export class TranslationBridge {
       this.record("livekit_reconnected");
     });
 
-    // Not load-bearing, but this is the vocabulary the next incident will be read in:
-    // the last one had to be reconstructed from frame-count arithmetic because the
-    // bridge subscribed to three room events and depended on nine.
+    // The organizer's track going away must *end its pipe*, not merely be logged. Until
+    // 2026-08-01 these two handlers only logged, and the read loop for an unsubscribed
+    // track stayed alive: silent while the organizer was gone, then feeding Gemini again
+    // alongside the rejoin's new pipe. See OrganizerPipe.
     this.room.on(
       RoomEvent.TrackUnsubscribed,
-      (_track: RemoteTrack, _pub: RemoteTrackPublication, participant: RemoteParticipant) => {
+      (track: RemoteTrack, _pub: RemoteTrackPublication, participant: RemoteParticipant) => {
         if (participant.identity !== this.organizerIdentity) return;
         console.log(
           `[TranslationBridge:${this.targetLanguage}] Organizer audio track unsubscribed`
         );
-        this.record("livekit_organizer_track_unsubscribed");
+        this.record("livekit_organizer_track_unsubscribed", { pipes: this.pipes.size });
+        // By identity, not wholesale: if this event arrives late, after a rejoin has
+        // already opened a pipe for a different track, only the named one may close.
+        this.pipes.get(track)?.close("track_unsubscribed");
       }
     );
 
@@ -678,8 +711,17 @@ export class TranslationBridge {
 
     this.room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
       if (participant.identity !== this.organizerIdentity) return;
+      // Captured before anything async: pipes opened after this point belong to a rejoin
+      // and must survive a disconnect notice for the participant they replaced. (LiveKit
+      // reuses one identity for every broadcaster, so "the organizer" leaving and "the
+      // organizer" arriving can legitimately overlap.)
+      const cutoff = this.pipeSeq;
       console.log(`[TranslationBridge:${this.targetLanguage}] Organizer left the room`);
-      this.record("livekit_organizer_disconnected");
+      this.record("livekit_organizer_disconnected", { pipes: this.pipes.size });
+      // No track argument here, so close by generation: everything this participant could
+      // possibly have opened. Their audio is gone either way, and an over-eager close is
+      // recoverable (reconcile re-subscribes) where an under-eager one is the 2x bug.
+      this.closePipes("organizer_disconnected", { cutoff });
     });
 
     await this.room.connect(this.livekitUrl, token, {
@@ -1226,8 +1268,7 @@ export class TranslationBridge {
       (track: RemoteAudioTrack, pub: RemoteTrackPublication, participant: RemoteParticipant) => {
         if (participant.identity !== this.organizerIdentity) return;
         if (pub.kind !== TrackKind.KIND_AUDIO) return;
-        if (this.pipedTracks.has(track)) return;
-        this.pipedTracks.add(track);
+        if (this.pipes.has(track)) return;
         this.pipeTrackToGemini(track);
       }
     );
@@ -1301,9 +1342,9 @@ export class TranslationBridge {
       }
 
       console.warn(
-        `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription (pipes=${this.pipedTracks.size})`
+        `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription (pipes=${this.pipes.size})`
       );
-      this.record("organizer_audio_stalled", { stalledMs, pipes: this.pipedTracks.size });
+      this.record("organizer_audio_stalled", { stalledMs, pipes: this.pipes.size });
       this.reconcile("stall");
     }, STALL_CHECK_INTERVAL_MS);
     // Don't hold the process open on this timer alone.
@@ -1328,16 +1369,48 @@ export class TranslationBridge {
     return false;
   }
 
+  /**
+   * Retire every pipe opened at or before `cutoff` (default: all of them), except `keep`.
+   * Returns how many it closed — nonzero from the supersede path means the room handed us
+   * a second pipe without any event we recognized as the first one ending.
+   */
+  private closePipes(
+    why: string,
+    opts: { cutoff?: number; keep?: RemoteTrack } = {}
+  ): number {
+    const cutoff = opts.cutoff ?? Number.POSITIVE_INFINITY;
+    let closed = 0;
+    // Snapshot: close() mutates the map.
+    for (const [track, pipe] of [...this.pipes]) {
+      if (track === opts.keep) continue;
+      if (pipe.seq > cutoff) continue;
+      pipe.close(why);
+      closed++;
+    }
+    return closed;
+  }
+
   private pipeTrackToGemini(track: RemoteAudioTrack): void {
-    // `pipes` is the count that makes the input *rate* readable. One 100ms stream is
-    // 10 frames/sec; two concurrent pipes on the same room feed Gemini at 2x real time,
-    // which it can only emit at 1x, so the translation falls behind monotonically with
-    // no way to catch up. That is invisible in a frame counter alone — it took backing
-    // the rate out of `socketLifetimeMs` to even suspect it — so state it here.
-    console.log(
-      `[TranslationBridge:${this.targetLanguage}] Subscribed to organizer audio track, piping to Gemini (pipes=${this.pipedTracks.size})`
-    );
-    this.record("organizer_audio_piped", { pipes: this.pipedTracks.size });
+    // **At most one pipe feeds Gemini at a time.** One 100ms stream is 10 frames/sec; two
+    // concurrent pipes are 20, and Gemini can only emit at 1x, so the translation falls a
+    // second behind per second of speech with no way to catch up (2026-08-01: the
+    // organizer's rejoin opened a second pipe and the lag grew for 11 minutes).
+    //
+    // The room events that *should* end the old pipe are handled in joinLiveKitRoom, but
+    // this line is the one that does not depend on getting the event vocabulary right —
+    // the same reason reconcile exists. All organizer audio is the same microphone, so a
+    // newly subscribed track always supersedes whatever came before it.
+    const superseded = this.closePipes("superseded", { keep: track });
+    if (superseded > 0) {
+      // Reaching here means an unsubscribe/disconnect we didn't see. Not fatal (the pipe
+      // is closed now), but it is the signal that the event wiring below missed a case.
+      console.warn(
+        `[TranslationBridge:${this.targetLanguage}] Superseded ${superseded} orphaned organizer pipe(s) — a teardown event was missed`
+      );
+      this.record("organizer_audio_pipe_superseded", { count: superseded });
+    }
+
+    const seq = ++this.pipeSeq;
 
     const audioStream = new AudioStream(track, {
       sampleRate: this.inputSampleRate,
@@ -1347,42 +1420,76 @@ export class TranslationBridge {
 
     // Process frames as they arrive via ReadableStream reader
     const reader = audioStream.getReader();
-    const readLoop = async () => {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        this.sendAudioToGemini(value);
-      }
-    };
 
     // The stream *ending* is an event, not an exit. A bare `break` here is what made the
     // 2026-07-12 outage silent: LiveKit's full reconnect ended this stream, the loop fell
     // out, and nothing logged it. Forget the track so that if it comes back we pipe it
     // again, then reconcile in case the replacement is already sitting in the room.
-    const streamClosed = (why: string) => {
-      this.pipedTracks.delete(track);
-      console.log(
-        `[TranslationBridge:${this.targetLanguage}] Pipe closed (${why}) — pipes=${this.pipedTracks.size}`
-      );
-      this.record("organizer_audio_pipe_closed", { why, pipes: this.pipedTracks.size });
-      this.reconcile(why);
+    const pipe: OrganizerPipe = {
+      seq,
+      closed: false,
+      close: (why: string) => {
+        if (pipe.closed) return;
+        pipe.closed = true;
+        // Only forget the track if this pipe is still the registered one: a newer pipe
+        // over the same track object must not be unregistered by an older one's teardown.
+        if (this.pipes.get(track) === pipe) this.pipes.delete(track);
+        console.log(
+          `[TranslationBridge:${this.targetLanguage}] Pipe closed (${why}) — seq=${seq}, pipes=${this.pipes.size}`
+        );
+        this.record("organizer_audio_pipe_closed", { why, seq, pipes: this.pipes.size });
+        // Best-effort: ends the read loop with done=true on a real AudioStream, and frees
+        // the FFI stream rather than waiting for GC. `closed` above already made the pipe
+        // harmless, so every failure mode here is tolerable and none may propagate.
+        try {
+          const cancelled = reader.cancel?.(why);
+          if (cancelled && typeof cancelled.catch === "function") {
+            cancelled.catch(() => {});
+          }
+        } catch {
+          // A reader that refuses to cancel is exactly the case `closed` covers.
+        }
+        // A superseding pipe is already live — reconciling would only churn subscriptions.
+        if (why !== "superseded") this.reconcile(why);
+      },
+    };
+    this.pipes.set(track, pipe);
+
+    console.log(
+      `[TranslationBridge:${this.targetLanguage}] Subscribed to organizer audio track, piping to Gemini (seq=${seq}, pipes=${this.pipes.size})`
+    );
+    this.record("organizer_audio_piped", { seq, pipes: this.pipes.size });
+
+    const readLoop = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        // Re-checked every frame rather than trusted to cancel(): a retired pipe must not
+        // reach Gemini even if its stream keeps yielding.
+        if (pipe.closed) return;
+        this.sendAudioToGemini(value);
+      }
     };
 
     readLoop()
       .then(() => {
+        // Retired first, then the stream ended — i.e. our own cancel() landing. Expected.
+        if (pipe.closed) return;
         console.warn(
-          `[TranslationBridge:${this.targetLanguage}] Organizer audio stream ended`
+          `[TranslationBridge:${this.targetLanguage}] Organizer audio stream ended (seq=${seq})`
         );
-        this.record("organizer_audio_stream_ended");
-        streamClosed("stream_ended");
+        this.record("organizer_audio_stream_ended", { seq });
+        pipe.close("stream_ended");
       })
       .catch((err: Error) => {
+        // Ditto: cancel() rejects the in-flight read on some ReadableStream implementations.
+        if (pipe.closed) return;
         console.error(
           `[TranslationBridge:${this.targetLanguage}] Audio stream error:`,
           err
         );
-        this.record("organizer_audio_stream_error", { message: err.message });
-        streamClosed("stream_error");
+        this.record("organizer_audio_stream_error", { message: err.message, seq });
+        pipe.close("stream_error");
       });
   }
 
@@ -1464,7 +1571,7 @@ export class TranslationBridge {
       this.framesSentToGemini++;
       if (this.framesSentToGemini <= 3 || this.framesSentToGemini % 500 === 0) {
         console.log(
-          `[TranslationBridge:${this.targetLanguage}] Sent audio frame #${this.framesSentToGemini} to Gemini (${base64.length} bytes base64, ${int16Data.length} samples, pipes=${this.pipedTracks.size})`
+          `[TranslationBridge:${this.targetLanguage}] Sent audio frame #${this.framesSentToGemini} to Gemini (${base64.length} bytes base64, ${int16Data.length} samples, pipes=${this.pipes.size})`
         );
       }
 
