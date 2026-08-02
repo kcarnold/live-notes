@@ -29,11 +29,17 @@ public enum LiveKitTokenError: Error, CustomStringConvertible {
 public struct LiveKitTokenClient: Sendable {
     public static let organizerIdentity = "organizer-host"
 
+    /// Must match WRITE_KEY_HEADER in the server's writeAuth.ts.
+    public static let writeKeyHeader = "X-Write-Key"
+
     public var serverURL: String
+    /// Shared key authorizing an organizer (publishing) token. Omitted when nil/blank.
+    public var writeKey: String?
     private let session: URLSession
 
-    public init(serverURL: String, session: URLSession = .shared) {
+    public init(serverURL: String, writeKey: String? = nil, session: URLSession = .shared) {
         self.serverURL = serverURL
+        self.writeKey = writeKey
         self.session = session
     }
 
@@ -44,9 +50,11 @@ public struct LiveKitTokenClient: Sendable {
         ["room": room, "identity": identity, "role": role]
     }
 
-    public func fetchToken(room: String,
-                           identity: String = organizerIdentity,
-                           role: String = "organizer") async throws -> LiveKitToken {
+    /// Build the exact request `fetchToken` sends. Separated so tests can assert on the
+    /// headers and body without stubbing the network.
+    public func makeRequest(room: String,
+                            identity: String = organizerIdentity,
+                            role: String = "organizer") throws -> URLRequest {
         let base = serverURL.hasSuffix("/") ? String(serverURL.dropLast()) : serverURL
         guard let url = URL(string: "\(base)/api/livekit/token") else {
             throw LiveKitTokenError.malformedResponse
@@ -54,8 +62,18 @@ public struct LiveKitTokenClient: Sendable {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let key = writeKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+            req.setValue(key, forHTTPHeaderField: Self.writeKeyHeader)
+        }
         req.httpBody = try JSONSerialization.data(
             withJSONObject: Self.requestBody(room: room, identity: identity, role: role))
+        return req
+    }
+
+    public func fetchToken(room: String,
+                           identity: String = organizerIdentity,
+                           role: String = "organizer") async throws -> LiveKitToken {
+        let req = try makeRequest(room: room, identity: identity, role: role)
 
         let (data, response) = try await session.data(for: req)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {

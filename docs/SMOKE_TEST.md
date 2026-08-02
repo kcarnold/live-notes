@@ -46,10 +46,16 @@ an incident happens that this list would not have caught, add a line.
       waits); within ~10 s of the organizer joining, the translator appears and the
       transcript flows. The listener's amber "Restarting translation…" state may flash
       briefly — it must go green without a reload.
+- [ ] **Pause indicator**: stop speaking for ~15 s, then resume. A dashed "Pause · Ns" rule
+      appears between the two utterances, with a plausible duration. Normal gaps between
+      sentences must *not* produce one. (A bridge outage also shows up here — that's intended,
+      but it means a divider isn't proof the speaker was silent.)
 - [ ] Stop and restart the broadcaster mid-session; transcript resumes without a reload.
 - [ ] **Server-restart recovery**: with a listener connected and the speaker talking,
       restart the Node server. Within ~15 s the supervisor rebuilds the bridges from room
-      presence and the transcript resumes — no reload, no re-tap on any client.
+      presence and the transcript resumes — no reload, no re-tap on any client. The resumed
+      speech must start a *new* utterance with a pause divider covering the outage, not get
+      glued onto the sentence that was in flight when the server went down.
 - [ ] **The LiveKit full reconnect** (the 2026-07-12 outage — see
       [live-audio-resilience.md](live-audio-resilience.md)). With a bridge running and the
       speaker talking, force the reconnect that once deafened every translator for six
@@ -99,7 +105,32 @@ startup log line reports which):
       client's row should move to the new URL group within a few seconds.
 - [ ] Close a tab; its row should disappear within ~30 s (the awareness timeout).
 
-## 7. Teardown sanity
+## 7. Write keys
+
+Skip entirely when `WRITE_KEYS` is unset (the server logs `write authorization is off`).
+
+- [ ] Server startup logs show the expected mode and key labels:
+      `[write-auth] mode=observe keys=[proclaim, booth, …]`.
+- [ ] Provision the editor device once with `#editor&key=THEKEY`: the key disappears from
+      the address bar, and `#editor` survives.
+- [ ] Reload that device with a plain `#editor` URL (no key): still an editor.
+- [ ] `/status` reports "Key installed" and the last four characters of the right key.
+- [ ] On a device with no key (or a wrong one), an `#editor` URL prompts for a key, and
+      pasting a valid one grants edit access without a reload. Cancelling continues
+      read-only — and does *not* prompt again on the next reconnect.
+- [ ] Server logs show `key=<label> → ok` for `/api/ys-auth` from each real device —
+      the editor browsers, the Proclaim Mac (`Write key: configured` in its own log), and
+      the feeder. Anything logged as `key=none` is a device that `enforce` would lock out.
+- [ ] A viewer URL (no `#editor`, no key) still connects, and TTS still plays — viewers must
+      never need a key.
+
+**In `enforce` mode only** (skip while in `observe`):
+
+- [ ] An editor URL on an unprovisioned device shows the read-only banner and no edit
+      controls, rather than a blank or broken page.
+- [ ] Broadcast from an unprovisioned device fails with a visible error, not silence.
+
+## 8. Teardown sanity
 
 - [ ] Close all listener tabs; confirm the supervisor winds the translator bots down within
       ~2 minutes (60 s demand grace + a reconcile tick; watch for `[SessionManager] Supervisor

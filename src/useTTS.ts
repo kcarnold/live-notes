@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Howl } from 'howler';
+import { apiFetch } from './writeKey.ts';
 
 /**
  * Fetches audio for a given text and language from the TTS API.
@@ -14,7 +15,7 @@ async function fetchAudio(text: string, language: string): Promise<string> {
     strippedText += '.';
   }
 
-  const response = await fetch('/api/tts', {
+  const response = await apiFetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text: strippedText, language }),

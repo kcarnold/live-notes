@@ -69,7 +69,7 @@ doc is *derived* data that the system under test will regenerate.
 |---|---|---|
 | Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
 | `proclaim_service.py` (slide feed → Yjs publisher + translator) | `proclaimServiceOrder`, `proclaimPresentations`, `proclaimStatus`, `slideTranslations`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
-| translation-bridge / transcript-writer | live transcript | Organizer audio track + Gemini Live responses |
+| translation-bridge / transcript-writer | `liveTranscriptSegments-{code}` (one utterance per entry, stamped `startedAt` + `endedAt`; the silence between utterances is derived from those, not stored) | Organizer audio track + Gemini Live responses — including *when* each delta arrived, which only the writer sees |
 | Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |
 
@@ -99,8 +99,14 @@ writer once each component announces its clientID (planned: via the status heart
   needs non-silent audio, not just a connection.
 - **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
   show's scheduled date), so a service's state lives in one doc per date.
-- **Editor vs viewer** is enforced server-side via Y-Sweet token scope, keyed off the
-  `#editor` request — there is currently no other auth.
+- **Editor vs viewer** is enforced server-side via Y-Sweet token scope. The `#editor` request
+  states an intent; whether it is honored depends on a shared per-device write key
+  (`writeAuth.ts`, [WRITE_KEYS.md](WRITE_KEYS.md)) — as does taking the microphone, and the
+  endpoints that spend money. Reading needs no key, and never will: viewers are the point.
+  An unauthorized editor request is *downgraded* to a read-only token rather than refused, so
+  a stale key shows the session read-only instead of a blank screen mid-service. The whole
+  thing defaults to `observe` mode, which records what it would have refused and refuses
+  nothing — check the mode before concluding that a key is being enforced.
 
 ## Testing seams
 

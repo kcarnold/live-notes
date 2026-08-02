@@ -2,6 +2,7 @@ import { useMap } from '@y-sweet/react';
 import { useStrings } from './useLocale';
 import { SlideText } from './SlideText';
 import {
+  isBlankSlide,
   resolveSlideTranslation,
   slideTextLines,
   slideTranslationKey,
@@ -25,6 +26,8 @@ export interface SlideTranslationViewerProps {
  * - An `auto` (machine, unreviewed) translation gets a subtle "unreviewed" badge.
  * - When the displayed language differs from the requested one (e.g. reviewed French
  *   shown to a Haitian Creole viewer), a small language tag is shown.
+ * - A blank source slide renders blank: there is nothing to translate, so the
+ *   "not translated" placeholder would be misleading.
  */
 export function SlideTranslationViewer({
   slides,
@@ -44,6 +47,13 @@ export function SlideTranslationViewer({
   // Clamp: Proclaim publishes status and presentation separately, so the index
   // can transiently point past the slides.
   const clampedIndex = Math.min(Math.max(currentIndex, 0), slides.length - 1);
+
+  // A blank source slide mirrors as a blank translation — the source viewer shows
+  // nothing here, so this pane should match rather than claim it is untranslated.
+  if (isBlankSlide(slides[clampedIndex])) {
+    return <SlideText lines={[]} />;
+  }
+
   const resolved = resolvedBySlide[clampedIndex];
   const isUnreviewed = resolved?.entry.status === 'auto';
 
@@ -97,7 +107,7 @@ export function SlideTranslationViewerContainer({ language }: { language: string
       translationsMap.get(slideTranslationKey(lang, slideText)) as SlideTranslationEntry | undefined;
 
     const resolvedBySlide = slides.map((slideText) =>
-      slideText.trim() === '' ? undefined : resolveSlideTranslation(language, slideText, lookup),
+      isBlankSlide(slideText) ? undefined : resolveSlideTranslation(language, slideText, lookup),
     );
 
     view = { slides, slideIndex, resolvedBySlide };
