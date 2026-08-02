@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private var statusObserver: AnyCancellable?
+    private var keyWindowObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only — no Dock icon, no app menu. (At package time `LSUIElement` in the
@@ -58,6 +59,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Keep the menu-bar glyph in sync with publishing state.
         statusObserver = controller.$status.sink { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatusIcon() }
+        }
+
+        // The Settings window is the only titled window this app creates (the popover's
+        // window is borderless), so `.titled` reliably picks it out. Pin it to `.floating`
+        // so it can't get buried behind other apps' windows — as an `.accessory` app we have
+        // no Dock icon or Cmd+Tab entry, so once it's lost there's no way back except
+        // reopening it from the menu-bar popover.
+        keyWindowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { note in
+            guard let window = note.object as? NSWindow, window.styleMask.contains(.titled) else { return }
+            window.level = .floating
         }
     }
 
