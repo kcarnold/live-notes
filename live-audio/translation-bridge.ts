@@ -1301,9 +1301,9 @@ export class TranslationBridge {
       }
 
       console.warn(
-        `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription`
+        `[TranslationBridge:${this.targetLanguage}] No organizer audio for ${stalledMs}ms — reconciling subscription (pipes=${this.pipedTracks.size})`
       );
-      this.record("organizer_audio_stalled", { stalledMs });
+      this.record("organizer_audio_stalled", { stalledMs, pipes: this.pipedTracks.size });
       this.reconcile("stall");
     }, STALL_CHECK_INTERVAL_MS);
     // Don't hold the process open on this timer alone.
@@ -1329,10 +1329,15 @@ export class TranslationBridge {
   }
 
   private pipeTrackToGemini(track: RemoteAudioTrack): void {
+    // `pipes` is the count that makes the input *rate* readable. One 100ms stream is
+    // 10 frames/sec; two concurrent pipes on the same room feed Gemini at 2x real time,
+    // which it can only emit at 1x, so the translation falls behind monotonically with
+    // no way to catch up. That is invisible in a frame counter alone — it took backing
+    // the rate out of `socketLifetimeMs` to even suspect it — so state it here.
     console.log(
-      `[TranslationBridge:${this.targetLanguage}] Subscribed to organizer audio track, piping to Gemini`
+      `[TranslationBridge:${this.targetLanguage}] Subscribed to organizer audio track, piping to Gemini (pipes=${this.pipedTracks.size})`
     );
-    this.record("organizer_audio_piped");
+    this.record("organizer_audio_piped", { pipes: this.pipedTracks.size });
 
     const audioStream = new AudioStream(track, {
       sampleRate: this.inputSampleRate,
@@ -1356,6 +1361,10 @@ export class TranslationBridge {
     // again, then reconcile in case the replacement is already sitting in the room.
     const streamClosed = (why: string) => {
       this.pipedTracks.delete(track);
+      console.log(
+        `[TranslationBridge:${this.targetLanguage}] Pipe closed (${why}) — pipes=${this.pipedTracks.size}`
+      );
+      this.record("organizer_audio_pipe_closed", { why, pipes: this.pipedTracks.size });
       this.reconcile(why);
     };
 
@@ -1455,7 +1464,7 @@ export class TranslationBridge {
       this.framesSentToGemini++;
       if (this.framesSentToGemini <= 3 || this.framesSentToGemini % 500 === 0) {
         console.log(
-          `[TranslationBridge:${this.targetLanguage}] Sent audio frame #${this.framesSentToGemini} to Gemini (${base64.length} bytes base64, ${int16Data.length} samples)`
+          `[TranslationBridge:${this.targetLanguage}] Sent audio frame #${this.framesSentToGemini} to Gemini (${base64.length} bytes base64, ${int16Data.length} samples, pipes=${this.pipedTracks.size})`
         );
       }
 
