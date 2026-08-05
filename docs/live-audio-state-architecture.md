@@ -45,7 +45,7 @@ flowchart LR
   subgraph Browser["Browser (per viewer)"]
     LV["ListenViewer<br/><i>state: wantLive, conn, audioOn, error</i>"]
     BC["BroadcastControl<br/><i>state: conn, error</i>"]
-    LT["LiveTranscript<br/>(stateless, reads Yjs)"]
+    LT["LiveTranscript<br/>(reads Yjs; no LiveKit dependency)"]
   end
 
   subgraph Server["Node server (singleton, in-memory)"]
