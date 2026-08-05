@@ -97,11 +97,41 @@ value is indistinguishable from a label holding a value — nothing said "you ca
 `.textFieldStyle(.roundedBorder)` on the `Form`. Same disease as the weekday chips, third
 instance in one screen: **state and affordance both have to be drawn, not implied.**
 
-**Verified.** `swift test` (45 tests) and `xcodebuild build` both clean on macOS 26 / Swift
-6.3.3, and the settings window was driven by hand: chips toggle visibly, the summary tracks.
-The popover's new mode picker is compiled and tested but **not yet clicked** — nobody launched
-the app to work it, because launching a second feeder takes the room's microphone from
-whoever has it. Work it once before the next service.
+### The picker's first click found a real one: publishing from inside a view update
+
+Clicking **Schedule** logged *"Publishing changes from within view updates is not allowed,
+this will cause undefined behavior."*
+
+`AppController.config` is `@Published` with a `didSet` that runs `evaluate()` **synchronously**,
+and `evaluate()` writes other `@Published` properties (`status`, `devices`, `standDown`). So
+any binding write to `config` mutates observable state; if that write happens inside SwiftUI's
+update pass, this is exactly the warning. A `Picker` writes its selection *during* that pass —
+a `Button`'s action closure does not, which is the only reason the three buttons this replaced
+never tripped it. **The defect was latent for every text field, toggle and stepper in the
+settings window**; the picker just made it fire.
+
+Fixed in two places, because two different mutations were in play:
+
+- `configChanged()` now defers `evaluate()` one runloop turn (`scheduleEvaluate()`, coalesced
+  with a pending flag). This covers every control that writes `config` — and incidentally
+  fixes the "full synchronous CoreAudio enumeration on every keystroke" noted under
+  2026-07-27, since a burst of edits now collapses into one evaluation.
+- The mode binding hops before calling `followSchedule()`/`startNow()`/`stopNow()`, since
+  those also write `standDown` directly, before any `config` mutation.
+
+**Worth keeping in view:** `Task { @MainActor in }` here is a *correctness* requirement, not
+style. Anything that mutates controller state from a `Binding` setter needs the same hop.
+
+**Verified.** `swift test` (45 tests) and `xcodebuild build` clean on macOS 26 / Swift 6.3.3;
+settings window driven by hand (chips toggle visibly, summary tracks). The popover **could not
+be driven from a script** — three attempts to open it via System Events (`click` and `AXPress`
+on the status item) reported success and opened nothing, because `NSStatusItem` + `NSPopover`
+wants a real mouse event. So the runtime warning's *absence* after this fix is reasoned, not
+observed: re-click the segments in Xcode to confirm. An honest note, per the rule above about
+first runs.
+
+**Unrelated observation from that launch, recorded because it may matter:** the app logged
+`5 input device(s)` on a MacBook Pro with no external audio hardware attached.
 
 ---
 

@@ -59,6 +59,7 @@ final class AppController: ObservableObject {
     private var retryTimer: Timer?
     private var retryAfter: Date?
     private var retryBackoff: TimeInterval = 2
+    private var evaluatePending = false
 
     init() {
         self.config = store.load()
@@ -133,7 +134,30 @@ final class AppController: ObservableObject {
 
     private func configChanged() {
         store.save(config)
-        evaluate()
+        scheduleEvaluate()
+    }
+
+    /// Re-evaluate on the next runloop turn rather than inside this `didSet`.
+    ///
+    /// `config` is `@Published` and every settings control writes it through a `Binding`, so
+    /// this `didSet` can run **inside SwiftUI's view-update pass** — and `evaluate()` mutates
+    /// other `@Published` state (`status`, `devices`, `standDown`). That combination is what
+    /// "Publishing changes from within view updates is not allowed, this will cause undefined
+    /// behavior" is complaining about. A segmented `Picker` is what finally tripped it (it
+    /// writes its selection during the update pass, where a `Button` action closure would
+    /// not), but the defect was latent for every text field, toggle and stepper in the
+    /// settings window.
+    ///
+    /// Hopping to the next turn also coalesces bursts: every keystroke in the settings window
+    /// is a config mutation, and `evaluate()` does a full synchronous CoreAudio device
+    /// enumeration.
+    private func scheduleEvaluate() {
+        guard !evaluatePending else { return }
+        evaluatePending = true
+        Task { @MainActor in
+            evaluatePending = false
+            evaluate()
+        }
     }
 
     /// Decide whether we should be running and reconcile the capture/publish lifecycle.

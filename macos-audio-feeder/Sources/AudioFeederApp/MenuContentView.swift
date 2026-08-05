@@ -121,14 +121,23 @@ struct MenuContentView: View {
     /// Routes through the controller's existing methods rather than writing `manualOverride`
     /// directly: `startNow()` and `followSchedule()` also clear a stand-down, and skipping
     /// that would leave the feeder standing down in a mode that says it shouldn't be.
+    ///
+    /// The hop off the current runloop turn is required, not stylistic. SwiftUI writes a
+    /// `Picker`'s selection through this binding **during its view-update pass**, and all
+    /// three of these methods mutate `@Published` state on the controller (`standDown` here,
+    /// `config` → `status` downstream) — which is "Publishing changes from within view
+    /// updates is not allowed". A `Button`'s action closure runs outside that pass, which is
+    /// why the three buttons this replaced never tripped it.
     private var modeBinding: Binding<ManualOverride> {
         Binding(
             get: { controller.config.manualOverride },
             set: { mode in
-                switch mode {
-                case .off: controller.followSchedule()
-                case .forceOn: controller.startNow()
-                case .forceOff: controller.stopNow()
+                Task { @MainActor in
+                    switch mode {
+                    case .off: controller.followSchedule()
+                    case .forceOn: controller.startNow()
+                    case .forceOff: controller.stopNow()
+                    }
                 }
             })
     }
