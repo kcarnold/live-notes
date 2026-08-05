@@ -10,6 +10,61 @@ cause, the fix.
 
 ---
 
+## 2026-08-05 — the weekday chips were invisible state
+
+**Symptom.** On an older macOS, clicking a day in **Settings → Schedule** changed nothing on
+screen. On a newer one it did highlight, but you still couldn't tell which appearance meant
+"the feeder will run this day" — nor, from that row, whether it would run at all.
+
+**Cause.** The row was seven `Button`s styled `.bordered` and differentiated *only* by
+`.tint(on ? .accentColor : .gray)`. `tint` is a **hint**: AppKit's bordered push button is
+free to ignore it, and older systems do exactly that, so both states rendered as the same
+grey push button. Where it is honoured, the difference is accent-tinted vs grey-tinted — a
+colour difference with no shape, no glyph and no label saying which one is "on". The state
+was there in the config the whole time; the UI just never committed to showing it.
+
+**Fix, two halves.**
+
+- **Draw the state ourselves.** `WeekdayButton` is a `.buttonStyle(.plain)` chip with its own
+  fill, border, weight and glyph: filled accent + checkmark + semibold when scheduled,
+  outlined + dash + regular when skipped. Nothing about it is a hint, so it renders the same
+  on every system we deploy to, and it survives the loss of colour (colour-blind operator,
+  washed-out booth monitor). It also gained a tooltip and proper accessibility label/value —
+  it was previously an unlabelled `Sun` with no selected state exposed at all.
+- **Say the outcome in words.** `Schedule.summary` renders one sentence — *"Runs Sun,
+  10:00–12:00."* — under the times, orange when the schedule can never fire. This is the half
+  that answers the second complaint, because *no* chip appearance can distinguish these three
+  do-nothing configurations, which look identical in the row:
+
+  | Configuration | Chip row shows | Summary says |
+  |---|---|---|
+  | `enabled == false` | a full week of chips | Schedule off — the feeder runs only when you press Start now. |
+  | `days.isEmpty` | nothing selected | No days selected — the schedule will never start the feeder. |
+  | `startMinute == stopMinute` | a full week of chips | Start and stop are the same time — the schedule will never start the feeder. |
+
+  It also spells out the wrapping window (*"Runs Sat, 23:00–01:00 the next day."*), which is
+  the one place `days` doesn't mean "runs on this day" — `Scheduler.isWithinWindow` anchors a
+  wrapping run to its **start** day, so Sunday 00:30 belongs to Saturday's window. Nothing in
+  the UI had ever said so.
+
+**Where it lives.** The sentence is built in `Schedule` (`AudioFeederCore`), not the view, so
+`swift test` covers it with no Xcode and no UI. `ConfigTests` pins each inert case, and
+`testWillEverRunAgreesWithScheduler` sweeps a full week minute-by-minute through the real
+`Scheduler.shouldRun` to prove that "will never start the feeder" is the truth and not a
+second, drifting opinion about the schedule.
+
+**Rule this earns:** if a control's state is only a `tint`, the app has no state on screen.
+Anything the operator has to read at the booth gets a shape or a glyph, and anything that
+decides whether we go on air gets a sentence.
+
+> **Not verified on a machine.** No Swift toolchain in the environment this was written in —
+> no build, no `swift test`, no run. The logic changes are pure and unit-tested *as written*;
+> the SwiftUI is plain, version-agnostic API (`buttonStyle(.plain)`, `background`, `overlay`,
+> `help`, the `accessibility*` modifiers), but per this notebook's own rule, look at the
+> settings window once before the next service.
+
+---
+
 ## 2026-07-30 — the feeder now notices when it stops publishing (#97)
 
 **Symptom.** The app could stop publishing and never find out. The menu bar kept saying

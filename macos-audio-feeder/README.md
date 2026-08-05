@@ -75,6 +75,23 @@ open AudioFeeder.xcodeproj # then just hit Run
 Re-run `xcodegen generate` after changing `project.yml` (or after adding source files, since
 the file list is captured at generation time).
 
+## Setting the schedule
+
+**Settings → Schedule** picks the days and the daily window. A day chip is **filled, with a
+checkmark**, when the schedule will start the feeder that day; it is **outlined, with a dash**,
+when that day is skipped. (Don't go by colour alone — the row is deliberately readable without
+it, because the old tint-only highlight rendered as no change at all on some macOS versions.)
+
+Under the times, one line states the outcome in words — *"Runs Sun, 10:00–12:00."* — and turns
+orange when the schedule can never start anything. That covers the three configurations that
+look identical in the chip row but do nothing: **Enable schedule** switched off, no days
+selected, and a start time equal to the stop time.
+
+Days are the days the window **starts** on. A window whose stop time is earlier than its start
+time wraps past midnight and finishes the next morning, which the summary spells out
+(*"Runs Sat, 23:00–01:00 the next day."*). Manual **Start now** / **Stop now** always wins over
+whatever the schedule says.
+
 ## Write key
 
 Publishing takes the room's microphone — and because every broadcaster shares the

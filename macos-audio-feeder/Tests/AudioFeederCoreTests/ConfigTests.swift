@@ -36,6 +36,94 @@ final class ConfigTests: XCTestCase {
         XCTAssertNil(Schedule.parseHHMM("10:60"))
     }
 
+    // MARK: - The sentence the settings window shows under the day buttons
+    //
+    // This is the part of the UI that says whether the feeder will actually run, so it is
+    // worth pinning: the highlight on a day button can't distinguish "Wednesday is selected"
+    // from "Wednesday is selected and the schedule is switched off".
+
+    func testWeekdayLabels() {
+        XCTAssertEqual(Schedule.weekdaySymbol(1), "Sun")
+        XCTAssertEqual(Schedule.weekdaySymbol(7), "Sat")
+        XCTAssertEqual(Schedule.weekdayName(4), "Wednesday")
+        // Out of range is a bug elsewhere, but must not trap in a view body.
+        XCTAssertEqual(Schedule.weekdaySymbol(0), "?")
+        XCTAssertEqual(Schedule.weekdayName(8), "?")
+    }
+
+    func testDaysDescriptionCollapsesCommonSets() {
+        func days(_ d: Set<Int>) -> String { Schedule(days: d).daysDescription }
+        XCTAssertEqual(days([1, 2, 3, 4, 5, 6, 7]), "every day")
+        XCTAssertEqual(days([2, 3, 4, 5, 6]), "weekdays")
+        XCTAssertEqual(days([1, 7]), "weekends")
+        XCTAssertEqual(days([]), "no days")
+        // Otherwise: listed, always in Sunday-first calendar order.
+        XCTAssertEqual(days([4, 1]), "Sun, Wed")
+    }
+
+    func testSummaryNamesEveryWayAScheduleCanBeInert() {
+        // Switched off, however full the day row looks.
+        XCTAssertEqual(Schedule(enabled: false, days: [1, 2, 3, 4, 5, 6, 7]).summary,
+                       "Schedule off — the feeder runs only when you press Start now.")
+        XCTAssertFalse(Schedule(enabled: false, days: [1]).willEverRun)
+
+        // Enabled, sane window, but nothing selected.
+        XCTAssertEqual(Schedule(enabled: true, days: []).summary,
+                       "No days selected — the schedule will never start the feeder.")
+        XCTAssertFalse(Schedule(enabled: true, days: []).willEverRun)
+
+        // Enabled, days selected, but an empty window (`Scheduler` treats start == stop as off).
+        let noWindow = Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 600)
+        XCTAssertEqual(noWindow.summary,
+                       "Start and stop are the same time — the schedule will never start the feeder.")
+        XCTAssertFalse(noWindow.willEverRun)
+    }
+
+    func testSummaryDescribesALiveSchedule() {
+        let sunday = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        XCTAssertEqual(sunday.summary, "Runs Sun, 10:00–12:00.")
+        XCTAssertTrue(sunday.willEverRun)
+
+        // A window that wraps past midnight is anchored to its start day, so say so.
+        let overnight = Schedule(enabled: true, days: [7], startMinute: 23 * 60, stopMinute: 60)
+        XCTAssertEqual(overnight.summary, "Runs Sat, 23:00–01:00 the next day.")
+        XCTAssertTrue(overnight.willEverRun)
+    }
+
+    /// `willEverRun` must agree with the thing that actually decides: `Scheduler.shouldRun`.
+    func testWillEverRunAgreesWithScheduler() {
+        // 2024-01-07 is a Sunday, so day 7...13 is one full Sun-to-Sat week.
+        func date(dayOffset: Int, minuteOfDay: Int) -> Date {
+            var c = DateComponents()
+            c.year = 2024; c.month = 1; c.day = 7 + dayOffset
+            c.hour = minuteOfDay / 60; c.minute = minuteOfDay % 60
+            return utc.date(from: c)!
+        }
+
+        let inert = [Schedule(enabled: false, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, stopMinute: 1439),
+                     Schedule(enabled: true, days: [], startMinute: 0, stopMinute: 1439),
+                     Schedule(enabled: true, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 600, stopMinute: 600)]
+        for schedule in inert {
+            XCTAssertFalse(schedule.willEverRun)
+            // Sweep a whole week at minute resolution: nothing anywhere should start it.
+            for dayOffset in 0..<7 {
+                for minute in 0..<(24 * 60) {
+                    XCTAssertFalse(Scheduler.shouldRun(now: date(dayOffset: dayOffset, minuteOfDay: minute),
+                                                       schedule: schedule,
+                                                       manualOverride: .off,
+                                                       calendar: utc),
+                                   "\(schedule) claimed inert but runs on day \(dayOffset) at minute \(minute)")
+                }
+            }
+        }
+
+        // And the converse: a schedule that says it will run, does.
+        let live = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        XCTAssertTrue(live.willEverRun)
+        XCTAssertTrue(Scheduler.shouldRun(now: date(dayOffset: 0, minuteOfDay: 11 * 60),
+                                          schedule: live, manualOverride: .off, calendar: utc))
+    }
+
     func testConfigCodableRoundTrip() throws {
         let cfg = FeederConfig(serverURL: "https://example.org",
                                docIDOverride: "doc-x",
