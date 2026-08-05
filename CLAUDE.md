@@ -167,24 +167,44 @@ The app uses **Yjs** for real-time collaborative state management:
 
 1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status, gated on a write key (an unauthorized editor request is downgraded to read-only, not refused)
 2. **Shared Y.Doc** per session: Each session (identified by `?doc=doc-YYYY-MM-DD`) has a shared Yjs document
-3. **Key shared data structures**:
-   - `translatedText-{language}` (Y.Text): Translated output for each language
-   - `meta` (Y.Map): Metadata (unused currently)
-   - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
-   - `proclaimPresentations` (Y.Map): Maps itemId → presentation data (title, slides)
-   - `proclaimStatus` (Y.Map): Current Proclaim status (itemId, slideIndex)
+3. **Key shared data structures** (the header comment in [sessionExport.ts](sessionExport.ts) is
+   the canonical description — it has to read all of them):
+   - `sourceBlocks` (Y.Array of block Y.Maps): the notes being taken
+   - `notesTranslationCache` (Y.Map): `${language}:${content}` → translated string, so unchanged
+     text is never re-translated
+   - `proclaimPresentations` (Y.Map): itemId → `{title, itemId, slides: string[]}`
+   - `proclaimServiceOrder` (Y.Map): `order` → itemId[]
+   - `proclaimStatus` (Y.Map): current Proclaim status (itemId, slideIndex)
+   - `slideTranslations` (Y.Map): `slideTranslationKey(language, text)` → translation entry
+   - `liveTranscriptSegments-{code}` (Y.Array): live-speech utterances per language, written by
+     the server-side bridge (see [src/transcriptKeys.ts](src/transcriptKeys.ts); older sessions
+     have a `liveTranscript-{code}` Y.Text instead)
+   - `slideConversations` (Y.Map), `status` (Y.Map): the slide Q&A panel, and per-service status
+     reporting (e.g. the Proclaim service's `proclaimService` entry)
+
+   Note the two language namespaces: notes/slides use display names (`French`), live-audio
+   transcripts use BCP-47 codes (`fr`).
 
 ### Translation Pipeline
 
-The translation system is sophisticated with caching and incremental updates:
+The unit of translation is a **block**, not a line of markdown — everything in
+[translationUtils.ts](src/translationUtils.ts) takes `TranslationBlock[]` (`type`, `level`,
+`content`), and `fetchAndCacheTranslations` is the entry point ([useTranslationManager.ts](src/useTranslationManager.ts)
+drives it). Translation is incremental: only blocks with no cache entry are sent.
 
-1. **Chunking** ([translationUtils.ts:53-90](translationUtils.ts#L53-L90)): Source text is split into chunks (lines), with whitespace handling
-2. **Decomposition** ([translationUtils.ts:30-42](translationUtils.ts#L30-L42)): Each chunk is decomposed into `format` (markdown syntax), `content`, and `trailingWhitespace`
-3. **Cache lookup** ([translationUtils.ts:112-164](translationUtils.ts#L112-L164)): Check which chunks need translation using `translationCache`
-4. **Context provision**: Untranslated chunks get 3 lines of context from already-translated chunks
-5. **Batch translation** ([server.ts:104-118](server.ts#L104-L118)): Server endpoint processes batches via Gemini
-6. **Cache update** ([translationUtils.ts:166-185](translationUtils.ts#L166-L185)): New translations are cached in the shared Y.Map
-7. **Reconstruction** ([translationUtils.ts:187-204](translationUtils.ts#L187-L204)): Final text is reassembled from cached translations with original formatting
+1. **Cache lookup** (`getBlockTranslationTodos` / `buildBlockTranslationRequests`): empty blocks are
+   dropped, and each block's *trimmed* content is looked up under `${language}:${content}`
+2. **Context provision**: up to 3 already-translated blocks before each untranslated run are marked
+   as context and sent along, rendered back to markdown (`blockToMarkdownLine`) so the model sees
+   the heading/bullet structure
+3. **Grouping** (`findContiguousBlocks`): contiguous runs become one `TranslationTodo` per request
+4. **Batch translation**: `POST /api/requestTranslatedBlocks` ([server.ts](server.ts)) runs the
+   batches through Gemini
+5. **Cache update** (`updateTranslationCache`): results are written into the shared
+   `notesTranslationCache` Y.Map, so every viewer gets them without re-asking
+
+There is no reassembly step: viewers render per block, looking each one up in the cache
+([BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx)).
 
 ### Text-to-Speech (TTS) System
 
@@ -200,11 +220,12 @@ The TTS system uses a two-layer architecture that separates "how to speak" from 
 - Provides callbacks for completion and errors
 - No knowledge of which line to play next - just plays what it's told
 
-**Layer 2: Playback logic** ([TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx))
+**Layer 2: Playback logic** ([BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx))
 - Decides which lines to play and when
 - Manages playhead cursor and auto-play mode
 - Responds to user interactions (clicks, auto-mode toggle)
-- Pure component (accepts `lines[]` prop), Yjs integration in container
+- Pure component (accepts `blocks[]` + `translations`), Yjs integration in
+  [BilingualBlockViewerContainer.tsx](src/BilingualBlockViewerContainer.tsx)
 
 **Backend** ([server.ts](server.ts))
 - ElevenLabs API integration
@@ -284,20 +305,28 @@ The app includes a **block-based collaborative editor** ([BlockEditor.tsx](src/B
 - **Parent-child structure**: `BlockEditor` manages state, `BlockItem` components handle individual blocks
 
 #### Block Structure
-Each block is a `Y.Map` with:
+Blocks live in the `sourceBlocks` Y.Array. Each is a `Y.Map` with ([blockTypes.ts](src/blockTypes.ts)):
 - `id`: UUID for stable identity
-- `type`: 'paragraph' | 'heading' | 'listItem'
+- `type`: 'heading' | 'bullet' (only two — there is no paragraph type)
 - `position`: Fractional-index string for ordering
-- `indent`: 0-3 (max indent level)
-- `text`: Y.Text for collaborative editing
+- `level`: 0-5 (`MAX_INDENT_LEVEL`); on a heading it selects the heading depth, on a bullet the indent
+- `content`: Y.Text for collaborative editing (the `Block` interface exposes it as a plain
+  string snapshot for rendering)
 
 #### Features
 - **Live collaboration**: Multiple users can edit different blocks simultaneously via Yjs
-- **Markdown serialization**: Blocks convert to markdown (headings, lists with indentation)
-- **Keyboard shortcuts**:
-  - `Enter`: Create new block below
-  - `Backspace` at start: Delete empty block or merge with previous
-  - `Tab/Shift-Tab`: Indent/dedent (for lists)
+  (each textarea is bound to its Y.Text with `y-textarea`)
+- **Markdown serialization**: Blocks convert to markdown — `level + 2` `#`s for headings,
+  two-space indentation for bullets
+- **Keyboard shortcuts** (all in `handleKeyDown`, [BlockEditor.tsx](src/BlockEditor.tsx)):
+  - `Enter`: Split at the cursor into a new block below (a heading splits into a bullet)
+  - `Cmd/Ctrl+Enter`: Trigger translation
+  - `Backspace` at start: Demote — dedent, then heading→bullet, then delete if empty
+  - `#` at start: Promote bullet→heading, or deepen the heading level
+  - `Tab` / `Shift-Tab`: Indent / dedent
+  - `Cmd/Ctrl+H`: Toggle heading
+  - `Cmd/Ctrl+↑` / `Cmd/Ctrl+↓`: Move the block up/down
+  - `↑` at start / `↓` at end: Move focus to the previous/next block
 - **Empty block filtering**: Empty blocks aren't serialized to markdown
 
 #### Textarea Auto-sizing
@@ -335,8 +364,8 @@ The Python service syncs to two Yjs data structures:
 
 #### React Components
 
-- **CurrentSlideViewer** ([CurrentSlideViewer.tsx:18-95](CurrentSlideViewer.tsx#L18-L95)): Pure component displaying current slide with optional context (previous/next slides)
-- **CurrentSlideViewerContainer** ([CurrentSlideViewer.tsx:100-146](CurrentSlideViewer.tsx#L100-L146)): Yjs connector that reads presentation data and passes to pure component
+- **CurrentSlideViewer** ([src/CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx)): Pure component displaying current slide with optional context (previous/next slides)
+- **CurrentSlideViewerContainer** ([src/CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx)): Yjs connector that reads presentation data and passes to pure component
 
 The viewer shows:
 - Header with presentation title and progress (slide X of Y)
@@ -384,14 +413,25 @@ Details in [PROCLAIM_SERVICE_SETUP.md](PROCLAIM_SERVICE_SETUP.md#automatic-updat
 
 ### Layout System
 
-The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395)):
+The UI uses a **URL-based layout system** (`PagePart` in [App.tsx](src/App.tsx) resolves each name):
 
 - Layouts are encoded in the URL path: `/sourceText|translatedText-French,currentSlide`
 - Format: rows separated by `|`, columns separated by `,`
-- Components: `sourceText`, `translatedText-{language}`, `bilingual-{language}`, `currentSlide`
+- Components:
+  - `sourceText` — the block editor + translation controls
+  - `translatedText-{language}` — translation only
+  - `bilingual-{language}` — original + translation
+  - `currentSlide`, `slideTranslation-{language}` — the live Proclaim slide, untranslated / translated
+  - `slideReview` — pre-service review of slide translations
+  - `listen-{bcp47Code}` — live speech translation for a listener (audio + transcript)
+  - `broadcast` — the speaker's mic/broadcast pane (editors only)
+  - `status` — the service status dashboard
+- Note the two namespaces: the text components take a display name (`French`), `listen-` takes a
+  BCP-47 code (`fr`) from the larger Gemini Live set ([listenLanguages.ts](src/listenLanguages.ts))
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
 - Example with Proclaim: `/translatedText-French,currentSlide` shows translation and current slide side-by-side
+- Unknown names render a "Unknown component" card rather than failing the page
 
 ### Editor vs Viewer Mode
 
@@ -432,16 +472,27 @@ The app has two modes determined by URL hash (`#editor`):
 - [BlockEditor.tsx](src/BlockEditor.tsx) - Block-based collaborative editor with Yjs backing
 - [blockTypes.ts](src/blockTypes.ts) - Block data structures and utilities
 - [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
-- [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer with TTS controls and auto-play logic
-- [TranslatedTextViewerContainer.tsx](src/TranslatedTextViewerContainer.tsx) - Yjs connector for TranslatedTextViewer
-- [BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx) - Shows blocks with original text and translation side-by-side
+- [BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx) - The reading view for translated notes: blocks
+  with translation (and optionally the original), plus the TTS controls and playhead/auto-play logic
 - [BilingualBlockViewerContainer.tsx](src/BilingualBlockViewerContainer.tsx) - Yjs connector for BilingualBlockViewer
 - [CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx) - Proclaim slide viewer with pure component and Yjs container
+- [SlideTranslationViewer.tsx](src/SlideTranslationViewer.tsx) - Current slide's translation for a language
+- [SlideReview.tsx](src/SlideReview.tsx) / [SlideReviewContainer.tsx](src/SlideReviewContainer.tsx) - Pre-service
+  review and editing of slide translations
+- [StatusView.tsx](src/StatusView.tsx) / [TranscriptHealth.tsx](src/TranscriptHealth.tsx) - The `/status` dashboard
+- [useFitText.ts](src/useFitText.ts) / [SlideText.tsx](src/SlideText.tsx) - Binary-search text fitting for slide display
+
+### Live Audio (LiveKit + Gemini Live)
+Lazily imported in [App.tsx](src/App.tsx) so the LiveKit SDK stays out of the main bundle.
+- [ListenViewer.tsx](src/ListenViewer.tsx) - Listener pane: opt-in audio, translator-bot lifecycle, status light
+- [BroadcastControl.tsx](src/BroadcastControl.tsx) - Speaker pane: mic publishing, level meter, listener dashboard
+- [LiveTranscript.tsx](src/LiveTranscript.tsx) - Transcript for one language code, read from Yjs (no LiveKit dependency)
+- [transcriptKeys.ts](src/transcriptKeys.ts) / [useTranscriptSegments.ts](src/useTranscriptSegments.ts) - Doc keys and the read hook
 
 ### TTS System
 - [useTTS.ts](src/useTTS.ts) - Low-level TTS hook managing audio playback lifecycle
-- [useTTS.test.ts](src/useTTS.test.ts) - Comprehensive tests for useTTS hook (12 tests)
-- [TranslatedTextViewer.test.tsx](src/TranslatedTextViewer.test.tsx) - Component tests for playhead and auto-play (15 tests)
+- [useTTS.test.ts](src/useTTS.test.ts) - Comprehensive tests for useTTS hook
+- [BilingualBlockViewer.test.tsx](src/BilingualBlockViewer.test.tsx) - Component tests for playhead and auto-play
 
 ## Important Patterns
 
@@ -473,7 +524,7 @@ UI strings are localized via [src/strings.ts](src/strings.ts) and [src/useLocale
 
 ### Translation Cache Keys
 
-Translation cache keys combine language and content ([translationUtils.ts:106-110](translationUtils.ts#L106-L110)):
+Translation cache keys combine language and content ([src/translationUtils.ts](src/translationUtils.ts)):
 ```typescript
 translationCacheKey(language, chunkText) // Returns "{language}:{chunkText}"
 ```
@@ -483,7 +534,7 @@ translationCacheKey(language, chunkText) // Returns "{language}:{chunkText}"
 The codebase favors **separating pure components from Yjs concerns** to enable comprehensive testing:
 
 **Pattern**:
-1. **Pure component**: Accepts plain props (`lines: string[]`), no Yjs dependencies
+1. **Pure component**: Accepts plain props (e.g. `blocks: Block[]`), no Yjs dependencies
 2. **Container component**: Connects to Yjs and passes props to pure component
 3. **Tests**: Focus on pure component with mock data
 
@@ -493,18 +544,22 @@ The codebase favors **separating pure components from Yjs concerns** to enable c
 - Easy to reason about component behavior
 - Fast test execution
 
-**Example**: `TranslatedTextViewer` (pure) + `TranslatedTextViewerContainer` (Yjs connector)
+**Example**: `BilingualBlockViewer` (pure) + `BilingualBlockViewerContainer` (Yjs connector);
+`CurrentSlideViewer` and `SlideReview` follow the same split.
 
 ```typescript
 // Pure component - easy to test
-function TranslatedTextViewer({ lines, language }: Props) {
-  // All logic works with plain arrays
+function BilingualBlockViewer({ blocks, translations, language }: Props) {
+  // All logic works with plain arrays/maps
 }
 
-// Container - handles Yjs
-function TranslatedTextViewerContainer({ language }: ContainerProps) {
-  const lines = useYText(...); // Get data from Yjs
-  return <TranslatedTextViewer lines={lines} language={language} />;
+// Container - handles Yjs: observe the doc, convert to plain data
+function BilingualBlockViewerContainer({ language }: ContainerProps) {
+  const sourceBlocks = ydoc.getArray<BlockYMap>('sourceBlocks'); // observeDeep -> bump a version
+  const translationCache = useMap('notesTranslationCache');      // observe   -> bump a version
+  const blocks = /* yMapToBlock + sort by position */;
+  const translations = /* Y.Map -> plain Map */;
+  return <BilingualBlockViewer blocks={blocks} translations={translations} language={language} />;
 }
 ```
 
@@ -519,7 +574,7 @@ function TranslatedTextViewerContainer({ language }: ContainerProps) {
 
 **Examples**:
 - [useTTS.test.ts](src/useTTS.test.ts) - Low-level hook tests (race conditions, callbacks, error handling)
-- [TranslatedTextViewer.test.tsx](src/TranslatedTextViewer.test.tsx) - Component tests (playhead, auto-play, user interactions)
+- [BilingualBlockViewer.test.tsx](src/BilingualBlockViewer.test.tsx) - Component tests (playhead, auto-play, user interactions)
 - [blockTypes.test.ts](src/blockTypes.test.ts) - Pure utility function tests
 
 **Test Infrastructure**:
