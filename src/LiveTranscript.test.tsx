@@ -4,6 +4,8 @@
 // the threshold itself in transcriptKeys.test.ts.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { Provider, createStore } from 'jotai';
+import { fontSizeAtom } from './configAtoms';
 import { TRANSCRIPT_PAUSE_MS, type TranscriptSegment } from './transcriptKeys';
 
 const segments = vi.hoisted(() => ({ current: [] as TranscriptSegment[] }));
@@ -83,5 +85,49 @@ describe('LiveTranscript pause indicators', () => {
 
     expect(screen.getByText('Waiting for translated speech…')).toBeTruthy();
     expect(pauseLabels()).toEqual([]);
+  });
+});
+
+// The transcript reads the same `fontSizeAtom` the translated/bilingual views do, so
+// the −/+ controls in any pane's header resize it too.
+describe('LiveTranscript font size', () => {
+  const renderAtSize = (px: number) => {
+    const store = createStore();
+    store.set(fontSizeAtom, px);
+    return render(
+      <Provider store={store}>
+        <LiveTranscript langCode="en" />
+      </Provider>
+    );
+  };
+
+  it('renders the text column at the shared reading size', () => {
+    segments.current = [{ text: 'Good morning.' }];
+
+    renderAtSize(28);
+
+    const column = screen.getByText('Good morning.').parentElement;
+    expect(column?.style.fontSize).toBe('28px');
+  });
+
+  it('follows the atom when the size changes', () => {
+    segments.current = [{ text: 'Good morning.' }];
+
+    const store = createStore();
+    store.set(fontSizeAtom, 16);
+    const { rerender } = render(
+      <Provider store={store}>
+        <LiveTranscript langCode="en" />
+      </Provider>
+    );
+    expect(screen.getByText('Good morning.').parentElement?.style.fontSize).toBe('16px');
+
+    store.set(fontSizeAtom, 30);
+    rerender(
+      <Provider store={store}>
+        <LiveTranscript langCode="en" />
+      </Provider>
+    );
+    expect(screen.getByText('Good morning.').parentElement?.style.fontSize).toBe('30px');
   });
 });

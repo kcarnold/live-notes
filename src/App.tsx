@@ -9,6 +9,7 @@ import "./App.css";
 
 import { useAtom } from "jotai";
 import { editorDeniedAtom, fontSizeAtom, isEditorAtom, languages } from "./configAtoms";
+import { FontSizeControls } from "./FontSizeControls";
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
 import {
   LISTEN_LANGUAGE_CODES,
@@ -174,7 +175,7 @@ function HomePage() {
 }
 
 function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace: (newName: string) => void }) {
-  const [fontSize, setFontSize] = useAtom(fontSizeAtom);
+  const [fontSize] = useAtom(fontSizeAtom);
   const ydoc = useYDoc();
   // eslint-disable-next-line react-hooks/immutability, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
   (window as any).ydoc = ydoc; // Expose YDoc on window for debugging
@@ -187,29 +188,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 
   const langDisplayNames = new Intl.DisplayNames([locale], { type: 'language' });
 
-  const fontSizeControls = (
-    <>
-      <div className="flex-1" />
-      <button
-        type="button"
-        aria-label={s.decreaseFontSize}
-        onClick={() => setFontSize(Math.max(10, (fontSize || 16) - 2))}
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" role="img" aria-label={s.decreaseFontSize}>
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        aria-label={s.increaseFontSize}
-        onClick={() => setFontSize(Math.min(32, (fontSize || 16) + 2))}
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" role="img" aria-label={s.increaseFontSize}>
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-        </svg>
-      </button>
-    </>
-  );
+  const fontSizeControls = <FontSizeControls />;
 
   const languageSelector = (prefix: string, language: string) => (
     <select
@@ -324,6 +303,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
         <div className="flex items-center">
           <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.listenLive}</h2>
           {listenLanguageSelector(validLanguage)}
+          {fontSizeControls}
         </div>
         <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-gray-400">{s.connecting}</div>}>
           <ListenViewer key={validLanguage} language={validLanguage} />

@@ -14,6 +14,8 @@
 // broadcaster — because reading it needs only the Yjs connection, not the audio
 // room.
 import { Fragment, useRef, useState } from "react";
+import { useAtomValue } from "jotai";
+import { fontSizeAtom } from "./configAtoms";
 import { useStrings, resolveLocale } from "./useLocale";
 import { useTranscriptSegments } from "./useTranscriptSegments";
 import { formatPauseGap, isLongPause, type TranscriptSegment } from "./transcriptKeys";
@@ -49,6 +51,11 @@ function PauseDivider({ gapMs }: { gapMs: number }) {
 export function LiveTranscript({ langCode }: { langCode: string }) {
   const s = useStrings();
   const segments: TranscriptSegment[] = useTranscriptSegments(langCode);
+  // The one reading size, shared with the translated/bilingual views (FontSizeControls
+  // writes it). Set on the text column rather than baked into a class, so the −/+
+  // buttons in this pane's header move the transcript too — the measure is in `ch`,
+  // so the line length holds as the size changes.
+  const fontSize = useAtomValue(fontSizeAtom);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -71,7 +78,7 @@ export function LiveTranscript({ langCode }: { langCode: string }) {
         className="flex-1 overflow-auto text-gray-800 dark:text-gray-100"
       >
         {hasContent ? (
-          <div className="mx-auto max-w-[60ch] text-lg leading-relaxed">
+          <div className="mx-auto max-w-[60ch] leading-relaxed" style={{ fontSize }}>
             {segments.map((seg, i) => {
               // Fragment, not a wrapper element: the paragraphs' vertical margins
               // collapse against each other, and boxing each one would double the gaps.

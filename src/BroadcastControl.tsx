@@ -16,6 +16,7 @@ import { LocalAudioTrack, Track } from "livekit-client";
 import { isEditorAtom } from "./configAtoms";
 import { useStrings } from "./useLocale";
 import { LiveTranscript } from "./LiveTranscript";
+import { FontSizeControls } from "./FontSizeControls";
 import { getDocId } from "./getDocId";
 import { apiFetch } from "./writeKey";
 
@@ -110,9 +111,12 @@ function BroadcastDashboard({ docId }: { docId: string }) {
         </span>
       </div>
       <MicLevelMeter />
-      <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
-        {s.englishTranscript}
-      </h3>
+      <div className="flex items-center">
+        <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
+          {s.englishTranscript}
+        </h3>
+        <FontSizeControls />
+      </div>
       <LiveTranscript langCode={SOURCE_TRANSCRIPT_CODE} />
       <div className="overflow-auto max-h-40">
         <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300 mb-1">
