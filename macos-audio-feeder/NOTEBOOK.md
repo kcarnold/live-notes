@@ -57,6 +57,13 @@ second, drifting opinion about the schedule.
 Anything the operator has to read at the booth gets a shape or a glyph, and anything that
 decides whether we go on air gets a sentence.
 
+**The same sentence went into the menu-bar popover**, which had the identical gap one level
+up: it said what the feeder was doing *now* ("Idle") and never whether anything would change
+that. An install with the schedule switched off sits at "Idle" indefinitely and looks exactly
+like one that is five minutes from going live. It turns orange only when the schedule is both
+inert *and* in charge — under a manual override the schedule isn't governing, and the override
+has its own controls two lines below.
+
 > **Not verified on a machine.** No Swift toolchain in the environment this was written in —
 > no build, no `swift test`, no run. The logic changes are pure and unit-tested *as written*;
 > the SwiftUI is plain, version-agnostic API (`buttonStyle(.plain)`, `background`, `overlay`,

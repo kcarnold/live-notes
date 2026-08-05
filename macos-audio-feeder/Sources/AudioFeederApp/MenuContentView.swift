@@ -32,6 +32,7 @@ struct MenuContentView: View {
             }
 
             deviceSummary
+            scheduleSummary
 
             Divider()
 
@@ -103,6 +104,30 @@ struct MenuContentView: View {
             }
         }
         .font(.caption)
+    }
+
+    /// What the schedule will do next, in the place the operator actually looks.
+    ///
+    /// The popover shows what the feeder is doing *now* ("Idle") but never said whether
+    /// anything was going to change that. An install with the schedule switched off, or with
+    /// no days picked, sits at "Idle" forever and looks exactly like one that's five minutes
+    /// from going live — which is the wrong thing to discover at a service.
+    private var scheduleSummary: some View {
+        HStack(spacing: 6) {
+            Image(systemName: scheduleIsStranded ? "calendar.badge.exclamationmark" : "calendar")
+            Text(controller.config.schedule.summary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.caption)
+        .foregroundStyle(scheduleIsStranded ? Color.orange : Color.secondary)
+        .help(controller.config.schedule.summary)
+    }
+
+    /// The schedule can't fire *and* it's the only thing in charge — so nothing will start
+    /// the feeder until a person does. Under a manual override the schedule isn't governing,
+    /// so an inert one isn't news; the override has its own controls right below.
+    private var scheduleIsStranded: Bool {
+        controller.config.manualOverride == .off && !controller.config.schedule.willEverRun
     }
 
     private var statusColor: Color {
