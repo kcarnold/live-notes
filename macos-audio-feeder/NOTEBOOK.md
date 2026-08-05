@@ -123,15 +123,24 @@ Fixed in two places, because two different mutations were in play:
 style. Anything that mutates controller state from a `Binding` setter needs the same hop.
 
 **Verified.** `swift test` (45 tests) and `xcodebuild build` clean on macOS 26 / Swift 6.3.3;
-settings window driven by hand (chips toggle visibly, summary tracks). The popover **could not
-be driven from a script** — three attempts to open it via System Events (`click` and `AXPress`
-on the status item) reported success and opened nothing, because `NSStatusItem` + `NSPopover`
-wants a real mouse event. So the runtime warning's *absence* after this fix is reasoned, not
-observed: re-click the segments in Xcode to confirm. An honest note, per the rule above about
-first runs.
+settings window and popover both driven by hand, and the warning is gone after the fix.
 
-**Unrelated observation from that launch, recorded because it may matter:** the app logged
-`5 input device(s)` on a MacBook Pro with no external audio hardware attached.
+Note for whoever automates this later: the popover **cannot be driven from a script** the
+obvious way. Three attempts via System Events (`click` and `AXPress` on the status item)
+reported success and opened nothing — `NSStatusItem` + `NSPopover` wants a real mouse event.
+A human clicked it.
+
+**Still open, separate from all of the above:** the **channel count** reported for the
+built-in microphone grows across repeated start/stop cycles (a 1-channel mic showing 3). Not
+the *device* count — a MacBook with virtual audio drivers installed legitimately enumerates
+several input devices, so `5 input device(s)` in the log is expected and not a symptom.
+Suspects, in order: `AudioCapture` setting `kAudioOutputUnitProperty_CurrentDevice` on the
+shared AUHAL (which binds both input and output scopes — see 2026-07-27), and
+`DeviceMonitor.stopMonitoring()` passing a *different* block to
+`AudioObjectRemovePropertyListenerBlock` than was added, so the listener is never actually
+removed and stale registrations accumulate. That second one is listed under 2026-07-27 as
+"currently harmless — nothing calls it"; a channel count that only grows *after cycling* is
+reason to re-check that assumption rather than trust it.
 
 ---
 
