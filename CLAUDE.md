@@ -13,6 +13,7 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
 - **Live speech translation**: LiveKit rooms + Gemini Live ([live-audio/](live-audio/)) — a broadcaster publishes mic audio; per-language translator bots stream it through Gemini Live and publish translated audio + live transcripts
+- **macOS Audio Feeder** ([macos-audio-feeder/](macos-audio-feeder/)): a **native Swift/SwiftUI menu-bar app** — the only non-web, non-Python component in the repo. It takes one channel off the sound board and publishes it to the LiveKit room on a schedule, as an unattended alternative to the browser broadcast page. Built and tested with `swift test` / Xcode, **not** `npm test`
 
 **Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the component map (what runs where, who writes what into the shared Yjs doc). [docs/README.md](docs/README.md) is the docs index; [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) is the manual pre-service smoke checklist — PR descriptions should declare which of its sections they touch.
 
@@ -92,6 +93,30 @@ npm start
 - Always run `npm install` before building or testing, especially in fresh environments. The build will fail with module resolution errors if dependencies aren't installed.
 - When running tests via tools/agents, use `--no-color` flag to disable ANSI color codes in output.
 - The root `tsconfig.json` is a solution-style config (`files: []` + `references`), so plain `tsc --noEmit -p .` silently checks nothing. Use `npm run typecheck` (or `tsc -b`) to actually type-check.
+
+### Swift (macOS Audio Feeder)
+
+[macos-audio-feeder/](macos-audio-feeder/) is a native macOS menu-bar app. **Nothing in the
+npm or uv toolchain touches it** — searching only `*.ts`/`*.tsx`/`*.py` will miss it entirely.
+
+```bash
+cd macos-audio-feeder
+swift test                 # AudioFeederCore: pure logic, fast, no Xcode needed
+xcodegen generate          # regenerate AudioFeeder.xcodeproj (source list is captured here,
+                           # so re-run after ADDING or REMOVING files)
+xcodebuild -project AudioFeeder.xcodeproj -scheme AudioFeederApp build
+```
+
+The split is deliberate: `AudioFeederCore` holds pure, dependency-free logic (schedule
+decisions, config, level metering, channel extraction, the LiveKit token contract) so it is
+covered by `swift test`; `AudioFeederApp` holds everything needing CoreAudio/LiveKit/SwiftUI.
+**Put new decision logic in the Core and test it there** — the app half has no test target.
+The `.xcodeproj` is generated from `project.yml` and not checked in; that YAML is the
+reviewable source of truth.
+
+Read [macos-audio-feeder/NOTEBOOK.md](macos-audio-feeder/NOTEBOOK.md) before touching
+packaging, entitlements, or connect/retry logic — it records failures that cost a service
+(the App Sandbox blocking WebRTC's UDP sockets, silent disconnects) and the rules they earned.
 
 ### Python (Proclaim service)
 

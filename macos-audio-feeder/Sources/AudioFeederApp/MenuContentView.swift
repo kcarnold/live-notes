@@ -32,21 +32,11 @@ struct MenuContentView: View {
             }
 
             deviceSummary
-            scheduleSummary
 
             Divider()
 
-            // Manual override controls (your "manual + scheduled" choice).
-            HStack {
-                Button("Start now") { controller.startNow() }
-                    .disabled(controller.config.manualOverride == .forceOn)
-                Button("Stop now") { controller.stopNow() }
-                    .disabled(controller.config.manualOverride == .forceOff)
-                if controller.config.manualOverride != .off {
-                    Button("Follow schedule") { controller.followSchedule() }
-                }
-            }
-            .font(.callout)
+            modePicker
+            modeSummary
 
             // A stand-down waits for a person, so it needs a person-shaped way out. "Start
             // now" can't serve: it's disabled whenever the override is already .forceOn,
@@ -106,28 +96,61 @@ struct MenuContentView: View {
         .font(.caption)
     }
 
-    /// What the schedule will do next, in the place the operator actually looks.
+    /// What decides whether the feeder runs — as a control whose selection *is* the state.
     ///
-    /// The popover shows what the feeder is doing *now* ("Idle") but never said whether
-    /// anything was going to change that. An install with the schedule switched off, or with
-    /// no days picked, sits at "Idle" forever and looks exactly like one that's five minutes
-    /// from going live — which is the wrong thing to discover at a service.
-    private var scheduleSummary: some View {
+    /// This replaced three buttons ("Start now" / "Stop now" / "Follow schedule", the last
+    /// appearing only while an override was active). Two problems with that: the mode was
+    /// never on screen, only inferable from which button was disabled; and "Follow schedule"
+    /// read as a *sibling* of Settings' "Enable schedule" checkbox, when it is actually the
+    /// outer switch — it decides whether the schedule is consulted at all, and changes
+    /// nothing about the schedule itself. Segments make the mode visible, and make it clear
+    /// there are exactly three ways this can go.
+    private var modePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("When to publish").font(.caption).foregroundStyle(.secondary)
+            Picker("When to publish", selection: modeBinding) {
+                Text("Schedule").tag(ManualOverride.off)
+                Text("Always on").tag(ManualOverride.forceOn)
+                Text("Always off").tag(ManualOverride.forceOff)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+    }
+
+    /// Routes through the controller's existing methods rather than writing `manualOverride`
+    /// directly: `startNow()` and `followSchedule()` also clear a stand-down, and skipping
+    /// that would leave the feeder standing down in a mode that says it shouldn't be.
+    private var modeBinding: Binding<ManualOverride> {
+        Binding(
+            get: { controller.config.manualOverride },
+            set: { mode in
+                switch mode {
+                case .off: controller.followSchedule()
+                case .forceOn: controller.startNow()
+                case .forceOff: controller.stopNow()
+                }
+            })
+    }
+
+    /// What the selected mode will actually do — including the cases where it will do nothing.
+    ///
+    /// The popover said what the feeder was doing *now* ("Idle") but never whether anything
+    /// would change that. An install in Schedule mode with the schedule switched off sits at
+    /// "Idle" indefinitely and looks exactly like one that is five minutes from going live.
+    private var modeSummary: some View {
         HStack(spacing: 6) {
-            Image(systemName: scheduleIsStranded ? "calendar.badge.exclamationmark" : "calendar")
-            Text(controller.config.schedule.summary)
+            Image(systemName: controller.config.willStartUnattended
+                  ? "calendar" : "calendar.badge.exclamationmark")
+            Text(controller.config.modeSummary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption)
-        .foregroundStyle(scheduleIsStranded ? Color.orange : Color.secondary)
-        .help(controller.config.schedule.summary)
-    }
-
-    /// The schedule can't fire *and* it's the only thing in charge — so nothing will start
-    /// the feeder until a person does. Under a manual override the schedule isn't governing,
-    /// so an inert one isn't news; the override has its own controls right below.
-    private var scheduleIsStranded: Bool {
-        controller.config.manualOverride == .off && !controller.config.schedule.willEverRun
+        // Orange only when nothing will start the feeder on its own. "Always off" earns it
+        // too: it is a deliberate choice, but it is also the one an unattended install can
+        // be left in by accident after a service.
+        .foregroundStyle(controller.config.willStartUnattended ? Color.secondary : Color.orange)
+        .help(controller.config.modeSummary)
     }
 
     private var statusColor: Color {

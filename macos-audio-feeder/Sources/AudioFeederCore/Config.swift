@@ -103,7 +103,10 @@ public struct Schedule: Codable, Equatable, Sendable {
     /// day-button row: turned off, no days picked, or a zero-length window.
     public var summary: String {
         guard enabled else {
-            return "Schedule off — the feeder runs only when you press Start now."
+            // Deliberately doesn't name the way out: this sentence shows in both the settings
+            // window (where the checkbox is right there) and the menu bar (where the mode
+            // picker is), and naming one of them would be wrong in the other place.
+            return "Schedule off — nothing will start the feeder on its own."
         }
         if activeDays.isEmpty {
             return "No days selected — the schedule will never start the feeder."
@@ -163,5 +166,34 @@ public struct FeederConfig: Codable, Equatable, Sendable {
         }
         let c = calendar.dateComponents([.year, .month, .day], from: now)
         return String(format: "doc-%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
+    /// One sentence for what will actually govern the feeder, override included.
+    ///
+    /// Two separate controls decide this — the schedule's own **Enable schedule**, and the
+    /// menu bar's **mode** (this `manualOverride`) — and they are easy to confuse, because
+    /// each can independently stop the feeder from ever starting. The mode is the outer one:
+    /// it decides *whether the schedule is consulted at all*, and only `.off` (mode
+    /// "Schedule") hands the decision to `Schedule`. So: read the mode first, and only then
+    /// does the schedule's own summary mean anything.
+    public var modeSummary: String {
+        switch manualOverride {
+        case .forceOn:
+            return "Always on — publishing regardless of the schedule."
+        case .forceOff:
+            return "Always off — the schedule is ignored until you switch back to Schedule."
+        case .off:
+            return schedule.summary
+        }
+    }
+
+    /// Whether anything will start the feeder without a person clicking — the question that
+    /// matters for an unattended install, and one neither control answers on its own.
+    public var willStartUnattended: Bool {
+        switch manualOverride {
+        case .forceOn: return true
+        case .forceOff: return false
+        case .off: return schedule.willEverRun
+        }
     }
 }

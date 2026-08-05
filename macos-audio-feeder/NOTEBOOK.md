@@ -38,7 +38,7 @@ was there in the config the whole time; the UI just never committed to showing i
 
   | Configuration | Chip row shows | Summary says |
   |---|---|---|
-  | `enabled == false` | a full week of chips | Schedule off — the feeder runs only when you press Start now. |
+  | `enabled == false` | a full week of chips | Schedule off — nothing will start the feeder on its own. |
   | `days.isEmpty` | nothing selected | No days selected — the schedule will never start the feeder. |
   | `startMinute == stopMinute` | a full week of chips | Start and stop are the same time — the schedule will never start the feeder. |
 
@@ -60,15 +60,48 @@ decides whether we go on air gets a sentence.
 **The same sentence went into the menu-bar popover**, which had the identical gap one level
 up: it said what the feeder was doing *now* ("Idle") and never whether anything would change
 that. An install with the schedule switched off sits at "Idle" indefinitely and looks exactly
-like one that is five minutes from going live. It turns orange only when the schedule is both
-inert *and* in charge — under a manual override the schedule isn't governing, and the override
-has its own controls two lines below.
+like one that is five minutes from going live.
 
-> **Not verified on a machine.** No Swift toolchain in the environment this was written in —
-> no build, no `swift test`, no run. The logic changes are pure and unit-tested *as written*;
-> the SwiftUI is plain, version-agnostic API (`buttonStyle(.plain)`, `background`, `overlay`,
-> `help`, the `accessibility*` modifiers), but per this notebook's own rule, look at the
-> settings window once before the next service.
+### Then the same bug turned out to be in the popover's controls (same day, on review)
+
+First run on a real Mac produced the right question: *what does "Follow schedule" do, and why
+is it separate from the "Enable schedule" checkbox?*
+
+It's a fair question because the UI never answered it. There are two switches, and the
+popover's three buttons hid which one they were:
+
+| | Where | Decides |
+|---|---|---|
+| **When to publish** (`manualOverride`) | popover | whether the schedule is consulted **at all** |
+| **Enable schedule** + days + times | settings | what "Schedule" mode *does* |
+
+The mode is the **outer** switch, and "Follow schedule" read like a sibling of "Enable
+schedule" instead — same words, opposite level. Worse, the mode was never displayed: you
+inferred it from which of `Start now` / `Stop now` was greyed out, and `Follow schedule`
+appeared *only* while an override was active, so the state you were in was the one thing the
+control couldn't show you. That is the exact defect this entry started with, one level up.
+
+Replaced by a segmented **When to publish**: `Schedule | Always on | Always off`. The
+selection *is* the state, there are visibly exactly three of them, and the sentence beneath
+now describes the effective mode (`FeederConfig.modeSummary`), not just the schedule — because
+"Runs Sun, 10:00–12:00" is actively misleading while the mode is *Always off*. It routes
+through the controller's existing `startNow()` / `stopNow()` / `followSchedule()` rather than
+writing `manualOverride`, since two of those also clear a stand-down.
+
+`FeederConfig.willStartUnattended` answers the question neither control answers alone — *will
+anything start this without a person?* — and it is what colours the line orange. For a feeder
+whose whole job is running unattended, that's the sentence worth having.
+
+**Also:** on macOS 26 the grouped-form text fields have no visible bezel, so a field holding a
+value is indistinguishable from a label holding a value — nothing said "you can type here".
+`.textFieldStyle(.roundedBorder)` on the `Form`. Same disease as the weekday chips, third
+instance in one screen: **state and affordance both have to be drawn, not implied.**
+
+**Verified.** `swift test` (45 tests) and `xcodebuild build` both clean on macOS 26 / Swift
+6.3.3, and the settings window was driven by hand: chips toggle visibly, the summary tracks.
+The popover's new mode picker is compiled and tested but **not yet clicked** — nobody launched
+the app to work it, because launching a second feeder takes the room's microphone from
+whoever has it. Work it once before the next service.
 
 ---
 
@@ -303,7 +336,8 @@ home is a real signal.
    `com.apple.security.network.server` must be present.
 4. Launch it, grant the microphone prompt, pick the board and channel.
 5. With `log stream --predicate 'subsystem == "org.kenarnold.audio-feeder"' --style compact`
-   running, hit **Start now** and watch for, in order: `starting pipeline`, an input format
+   running, set **When to publish** to *Always on* (this step said "hit Start now" before the
+   2026-08-05 entry replaced those buttons) and watch for, in order: `starting pipeline`, an input format
    with a plausible sample rate and channel count, `token OK`, `room connected`,
    `publishing as organizer-host`.
 6. Join the session in a browser and confirm you can hear the board.

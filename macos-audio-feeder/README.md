@@ -89,8 +89,25 @@ selected, and a start time equal to the stop time.
 
 Days are the days the window **starts** on. A window whose stop time is earlier than its start
 time wraps past midnight and finishes the next morning, which the summary spells out
-(*"Runs Sat, 23:00–01:00 the next day."*). Manual **Start now** / **Stop now** always wins over
-whatever the schedule says.
+(*"Runs Sat, 23:00–01:00 the next day."*).
+
+### Schedule vs. the menu bar's "When to publish"
+
+These are two different switches and it's worth being clear which is which:
+
+| Control | Where | What it decides |
+|---|---|---|
+| **When to publish**: Schedule / Always on / Always off | menu-bar popover | Whether the schedule is consulted **at all** |
+| **Enable schedule** + days + times | Settings → Schedule | What "Schedule" mode *does*, when it's selected |
+
+**When to publish** is the outer switch. *Always on* publishes continuously and ignores
+everything in the Schedule section; *Always off* stays down and ignores it too; only
+*Schedule* hands the decision to the settings above. So a perfectly good schedule does nothing
+if the mode is *Always off*, and a completely blank one is irrelevant if the mode is
+*Always on*. The line under the picker always states which of those you're in.
+
+(This replaced three buttons — *Start now* / *Stop now* / *Follow schedule* — that set the same
+three modes without ever showing which one you were in.)
 
 ## Write key
 

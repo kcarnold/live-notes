@@ -12,6 +12,9 @@ struct ConfigView: View {
             Text("Audio Feeder Settings").font(.headline).padding()
             Divider()
             Form {
+                // Recent macOS draws form text fields without a visible bezel, so a field
+                // holding a value looks exactly like a label holding a value — nothing says
+                // "you can type here". `.roundedBorder` puts the box back.
                 Section("Server") {
                     TextField("Server URL", text: $controller.config.serverURL)
                     TextField("Doc id (blank = today's doc-YYYY-MM-DD)",
@@ -58,8 +61,15 @@ struct ConfigView: View {
                         .font(.caption)
                         .foregroundStyle(controller.config.schedule.willEverRun ? Color.secondary : Color.orange)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Manual override always wins over the schedule.")
+                    // The two controls people confuse. Say the relationship in the place the
+                    // second one isn't: this checkbox only matters in Schedule mode.
+                    Text("""
+                         The menu bar's “When to publish” decides whether this schedule is \
+                         used at all — it must be set to Schedule. Always on and Always off \
+                         ignore everything above.
+                         """)
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Section("Service") {
@@ -72,6 +82,7 @@ struct ConfigView: View {
                 }
             }
             .formStyle(.grouped)
+            .textFieldStyle(.roundedBorder)
 
             Divider()
             HStack {

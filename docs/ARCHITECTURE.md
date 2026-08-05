@@ -10,10 +10,10 @@ derived data) drives the testing/replay strategy.
  sound booth / stage                      server (docker compose)              external SaaS
 ┌────────────────────┐                  ┌──────────────────────────┐
 │ Broadcaster        │── mic (WebRTC) ─▶│ LiveKit room             │
-│ (BroadcastControl, │                  │   ▲            │         │
-│  future macOS      │                  │   │ translated │ source  │
-│  ingest service)   │                  │   │ audio      ▼ audio   │
-└────────────────────┘                  │ translation-bridge ──────┼──▶ Gemini Live
+│ (BroadcastControl  │                  │   ▲            │         │
+│  in a browser, OR  │                  │   │ translated │ source  │
+│  the macOS Audio   │                  │   │ audio      ▼ audio   │
+│  Feeder app)       │                  │ translation-bridge ──────┼──▶ Gemini Live
 ┌────────────────────┐                  │  (per language, spawned  │    (translate speech)
 │ Proclaim Mac       │                  │   on listener demand by  │
 │ proclaim_service.py│─┐                │   translation-session-   │
@@ -49,6 +49,18 @@ derived data) drives the testing/replay strategy.
   That threshold is the feature's only switch: unset, it is −Infinity, every frame reads as
   voice, and nothing can suspend. It affects only what a bridge does while nobody speaks —
   *which* bridges exist is decided independently (see the supervisor below).
+- **macOS Audio Feeder** (`macos-audio-feeder/`): a native menu-bar app (Swift/SwiftUI) that
+  takes one channel off the sound board and publishes it to the LiveKit room on a schedule, so
+  a service doesn't depend on someone opening the browser broadcast page. It joins as the
+  *same* identity that page uses (`organizer-host`), and LiveKit permits one participant per
+  identity, so **the app and the browser page are mutually exclusive** — whichever connects
+  last evicts the other (handled deliberately: `DisconnectPolicy`). Split into
+  `AudioFeederCore` (pure logic — schedule, config, levels, channel extraction, token
+  contract; `swift test`, no Xcode) and `AudioFeederApp` (CoreAudio capture, LiveKit publish,
+  UI; built by an XcodeGen-generated project). Publishing spends the room's microphone, so it
+  carries a write key like everything else. Its own `README.md` covers operation and
+  `NOTEBOOK.md` records why it looks the way it does — read the notebook before changing
+  packaging, entitlements, or the connect/retry logic.
 - **proclaim_service.py**: polls Proclaim's local HTTP API (~1 s) and reads its SQLite DB,
   pushes presentations + slide status into Yjs. Internally decoupled into a **slide feed**
   (`ProclaimFeed`, the source) and **consumers** (a Yjs publisher + a translation worker),
