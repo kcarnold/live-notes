@@ -110,7 +110,19 @@ writer once each component announces its clientID (planned: via the status heart
   it down, so "nothing is translating" can also mean "nobody is speaking" — preflight then
   needs non-silent audio, not just a connection.
 - **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
-  show's scheduled date), so a service's state lives in one doc per date.
+  show's scheduled date), so a service's state lives in one doc per date. Four components
+  derive that id independently, three of them from *their own machine's* local date —
+  browser, Proclaim service, audio feeder (`FeederConfig.resolvedDocID`). They agree only as
+  far as the machines' clocks do.
+- **Nobody owns creating the doc — the first arrival does.** Y-Sweet has no "create today's
+  session" step: `/api/ys-auth` calls `getOrCreateDocAndToken`, so whichever component shows
+  up first brings the doc into being, and the rest join it. That used to be a person opening
+  the editor, which made it invisible. It no longer is: the audio feeder can go live on a
+  schedule with no human present. So **server-side Yjs writers must create-or-get too**
+  (`ysDocToken.ts` — the transcript writer and the slide-conversation store), because plain
+  `getClientToken` 404s on a doc that doesn't exist yet, and the unattended path is exactly
+  where it would. The corollary to check when something looks wrong: a component pointed at
+  the wrong date doesn't error, it *creates* that doc and works perfectly, alone.
 - **Editor vs viewer** is enforced server-side via Y-Sweet token scope. The `#editor` request
   states an intent; whether it is honored depends on a shared per-device write key
   (`writeAuth.ts`, [WRITE_KEYS.md](WRITE_KEYS.md)) — as does taking the microphone, and the

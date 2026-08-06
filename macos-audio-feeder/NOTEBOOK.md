@@ -10,6 +10,39 @@ cause, the fix.
 
 ---
 
+## 2026-08-06 — the feeder can create the room it publishes into (and that is the risk)
+
+**Symptom (server-side, not the app).** The feeder came up before anyone had opened the day's
+page and the server logged, per bridge, `Failed to get client token _YSweetError: ServerError:
+Server responded with 404 Not Found. URL: .../doc/doc-2026-08-06/auth`.
+
+**Cause.** Y-Sweet has no "create today's session" step: whichever component arrives first
+creates the doc, via `getOrCreateDocAndToken` behind `/api/ys-auth`. Every attended path does
+that — browser, Proclaim service. The server's own in-process Yjs writers used plain
+`getClientToken`, which 404s on a doc that doesn't exist, so they only worked when someone
+else had already been there. That assumption held for years of human-first services and broke
+on the first feeder-first one. Fixed server-side in `ysDocToken.ts` (`5ea5f12`); nothing in
+the app was wrong.
+
+**Why it belongs in this notebook anyway.** The fix removed the only evidence. Before it, a
+feeder pointed at a doc nobody opens announced itself with a 404; now it connects, publishes,
+and meters audio into an empty room it created itself, and the failure is indistinguishable
+from a good service until someone notices the viewers see nothing. The feeder is the only
+component that can reach that state unsupervised, and the room comes from *this Mac's* clock
+(`resolvedDocID`), so a wrong system date on the booth machine produces it exactly.
+
+**What changed here.** The popover now shows the room, with a `pinned` badge when
+`docIDOverride` is set — Settings already showed it, but an unattended install is judged from
+the popover, and a pin is set for one service and then outlives the reason for it.
+`pinnedDocID` also trims the override, which the raw path didn't: `" doc-x "` used to reach
+LiveKit with its spaces, looking correct in the settings field and matching nothing.
+
+**Verified.** `swift test` (49) and `xcodebuild build` clean. The popover was **not** clicked
+on a real Mac — the desk pass was already spent when this was written, so treat the line's
+appearance as compiled, not observed, and check it on the next install pass.
+
+---
+
 ## 2026-08-05 — the weekday chips were invisible state
 
 **Symptom.** On an older macOS, clicking a day in **Settings → Schedule** changed nothing on
@@ -379,7 +412,9 @@ home is a real signal.
    2026-08-05 entry replaced those buttons) and watch for, in order: `starting pipeline`, an input format
    with a plausible sample rate and channel count, `token OK`, `room connected`,
    `publishing as organizer-host`.
-6. Join the session in a browser and confirm you can hear the board.
+6. Join the session in a browser — **the room named in the popover**, not the one you assume
+   — and confirm you can hear the board. Since the server creates a doc on first arrival, a
+   feeder in the wrong room sounds like silence at the viewer and looks like success here.
 7. Set the schedule, quit, relaunch, and confirm it comes back up on its own.
 
 ---

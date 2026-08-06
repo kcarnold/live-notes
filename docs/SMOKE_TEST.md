@@ -17,6 +17,11 @@ an incident happens that this list would not have caught, add a line.
 - [ ] Open the editor URL (`/...#editor`) on one device, a viewer URL on a second device
       (ideally a phone on cellular, not the LAN).
 
+> **Note the assumption this makes.** Opening the editor first *creates* today's doc, which
+> hides every "who creates the doc" bug from the rest of this list — see §8, which is
+> deliberately run against a cold doc, before this step, on any Sunday the feeder is expected
+> to start on its own.
+
 ## 1. Collaboration & editor
 
 - [ ] Type in the block editor; text appears on the second device within ~1 s.
@@ -123,3 +128,26 @@ Skip entirely when `WRITE_KEYS` is unset (the server logs `write authorization i
       stopping …` in server logs) — no orphaned Gemini sessions burning quota. (With the cost
       path enabled, closing listeners is not enough: the default translator stays up for the
       transcript until the broadcaster also leaves.)
+
+## 8. The unattended start (macOS Audio Feeder)
+
+Only when the feeder is expected to start a service on its own. **Run this before the Setup
+step above**, on a doc no browser has opened yet — that is the whole point of the section,
+and opening the editor first destroys it. The feeder's own desk checklist (build, entitlements,
+device, first connect) lives in
+[macos-audio-feeder/NOTEBOOK.md](../macos-audio-feeder/NOTEBOOK.md#pre-service-checklist);
+this section is only about what the *server* does when the feeder is the first thing to arrive.
+
+- [ ] The room shown in the feeder's menu-bar popover is the doc you intend to run — and reads
+      as today's date, not `pinned`. A pinned room is right only if you pinned it for this
+      service; it is the one setting whose being wrong looks exactly like everything working.
+- [ ] With no editor open and the Proclaim service stopped, let the feeder go live (or set
+      **When to publish** → *Always on*). Server logs show `[SessionManager] Supervisor
+      starting …` and **no** `Failed to get client token … 404 Not Found` — the writers
+      create-or-get the doc (`ysDocToken.ts`), so being first is legal. (The 2026-08-06 bug:
+      they didn't, and the feeder-first path was the only one that hit it.)
+- [ ] Speak into the board for ~30 s, *then* open a viewer for the first time: the transcript
+      is already there, with history, rather than starting from the moment you joined. This is
+      the check that proves the writer reached Yjs and not just its own in-memory doc.
+- [ ] Start the Proclaim service afterwards; it lands in the *same* doc (slides appear next to
+      the transcript). Two docs here means two machines disagree about the date.

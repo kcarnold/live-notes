@@ -28,6 +28,45 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(cfg.resolvedDocID(now: now, calendar: utc), "doc-2025-12-31")
     }
 
+    func testOverrideIsTrimmedNotPassedThroughRaw() {
+        // A stray space would otherwise reach LiveKit intact: the settings field looks right
+        // and the feeder publishes into a room name no viewer can type.
+        let cfg = FeederConfig(docIDOverride: "  doc-special  ")
+        XCTAssertEqual(cfg.resolvedDocID(), "doc-special")
+        XCTAssertEqual(cfg.pinnedDocID, "doc-special")
+    }
+
+    func testPinnedDocIDIsNilWhenTheFieldIsBlank() {
+        XCTAssertNil(FeederConfig(docIDOverride: nil).pinnedDocID)
+        XCTAssertNil(FeederConfig(docIDOverride: "").pinnedDocID)
+        XCTAssertNil(FeederConfig(docIDOverride: "   ").pinnedDocID)
+    }
+
+    // MARK: - The room line in the popover
+
+    func testRoomSummarySaysWhetherTheRoomFollowsTheDate() {
+        var c = DateComponents(); c.year = 2026; c.month = 8; c.day = 6
+        let now = utc.date(from: c)!
+
+        XCTAssertEqual(FeederConfig(docIDOverride: nil).roomSummary(now: now, calendar: utc),
+                       "Publishing into doc-2026-08-06 — follows today's date.")
+        XCTAssertEqual(FeederConfig(docIDOverride: "doc-special").roomSummary(now: now, calendar: utc),
+                       "Publishing into doc-special — pinned, so it will not follow the date.")
+    }
+
+    /// The summary must never name a different room than the feeder will actually join —
+    /// that would be worse than showing nothing, since the point of the line is to be trusted.
+    func testRoomSummaryAgreesWithResolvedDocID() {
+        var c = DateComponents(); c.year = 2026; c.month = 8; c.day = 6
+        let now = utc.date(from: c)!
+        for override in [nil, "", "   ", "doc-special", "  doc-padded  "] as [String?] {
+            let cfg = FeederConfig(docIDOverride: override)
+            let room = cfg.resolvedDocID(now: now, calendar: utc)
+            XCTAssertTrue(cfg.roomSummary(now: now, calendar: utc).contains(room),
+                          "summary for override \(String(describing: override)) omits \(room)")
+        }
+    }
+
     func testHHMMRoundTrip() {
         XCTAssertEqual(Schedule.formatHHMM(10 * 60 + 5), "10:05")
         XCTAssertEqual(Schedule.parseHHMM("10:05"), 10 * 60 + 5)

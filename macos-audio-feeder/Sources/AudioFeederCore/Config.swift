@@ -159,13 +159,39 @@ public struct FeederConfig: Codable, Equatable, Sendable {
         self.manualOverride = manualOverride
     }
 
+    /// The override, normalized: nil unless it is a non-blank string, and trimmed when it is.
+    ///
+    /// Both halves matter. A cleared text field leaves `""` or `"   "` behind, which has to
+    /// mean "no override" rather than "publish into a room named nothing"; and a stray space
+    /// around a real id would otherwise reach LiveKit intact, putting the feeder in a room
+    /// whose name looks right in the settings field and matches nothing a viewer opens.
+    public var pinnedDocID: String? {
+        guard let trimmed = docIDOverride?.trimmingCharacters(in: .whitespaces),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
     /// The effective doc id / LiveKit room name for `now`, honoring an override.
     public func resolvedDocID(now: Date = Date(), calendar: Calendar = .current) -> String {
-        if let override = docIDOverride, !override.trimmingCharacters(in: .whitespaces).isEmpty {
-            return override
-        }
+        if let pinned = pinnedDocID { return pinned }
         let c = calendar.dateComponents([.year, .month, .day], from: now)
         return String(format: "doc-%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
+    /// One sentence naming the room this will publish into, and saying whether that room
+    /// follows the date or has been pinned.
+    ///
+    /// The room is the one setting whose being wrong looks exactly like everything working:
+    /// the feeder connects, publishes, and meters audio into a room nobody opens. Since the
+    /// server creates a session doc on first arrival (`ysDocToken.ts`), the feeder can be the
+    /// thing that creates the empty one — there is no error anywhere to notice. So the room
+    /// has to be legible without opening Settings, and a pin has to announce itself: it is
+    /// set once for a one-off and then outlives the reason for it.
+    public func roomSummary(now: Date = Date(), calendar: Calendar = .current) -> String {
+        let room = resolvedDocID(now: now, calendar: calendar)
+        return pinnedDocID == nil
+            ? "Publishing into \(room) — follows today's date."
+            : "Publishing into \(room) — pinned, so it will not follow the date."
     }
 
     /// One sentence for what will actually govern the feeder, override included.
