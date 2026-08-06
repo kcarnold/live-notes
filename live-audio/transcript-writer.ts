@@ -28,6 +28,7 @@ import * as Y from "yjs";
 import { createYjsProvider, type YSweetProvider } from "@y-sweet/client";
 import type { DocumentManager } from "@y-sweet/sdk";
 
+import { serverDocTokenCallback } from "../ysDocToken.ts";
 import {
   TRANSCRIPT_ENDED_AT_RESOLUTION_MS,
   TRANSCRIPT_PAUSE_MS,
@@ -135,7 +136,7 @@ export class TranscriptWriter {
     this.provider = createYjsProvider(
       this.doc,
       docId,
-      () => documentManager.getClientToken(docId),
+      serverDocTokenCallback(documentManager, docId),
       { connect: true }
     );
   }

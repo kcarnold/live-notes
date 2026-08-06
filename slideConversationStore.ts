@@ -19,6 +19,7 @@ import { createYjsProvider, type YSweetProvider } from '@y-sweet/client';
 import type { DocumentManager } from '@y-sweet/sdk';
 import type { Content } from '@google/genai';
 import type { TokenUsage } from './nlp.ts';
+import { serverDocTokenCallback } from './ysDocToken.ts';
 
 export type SlideConversationStatus = 'running' | 'idle' | 'error';
 
@@ -145,7 +146,7 @@ export class SlideConversationStore {
       const provider = createYjsProvider(
         doc,
         docId,
-        () => this.documentManager.getClientToken(docId),
+        serverDocTokenCallback(this.documentManager, docId),
         { connect: true },
       );
       // `sync` fires when the initial sync completes (and on reconnects). Resolve at once if
