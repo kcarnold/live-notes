@@ -15,7 +15,7 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Live speech translation**: LiveKit rooms + Gemini Live ([live-audio/](live-audio/)) — a broadcaster publishes mic audio; per-language translator bots stream it through Gemini Live and publish translated audio + live transcripts
 - **macOS Audio Feeder** ([macos-audio-feeder/](macos-audio-feeder/)): a **native Swift/SwiftUI menu-bar app** — the only non-web, non-Python component in the repo. It takes one channel off the sound board and publishes it to the LiveKit room on a schedule, as an unattended alternative to the browser broadcast page. Built and tested with `swift test` / Xcode, **not** `npm test`
 
-**Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the component map (what runs where, who writes what into the shared Yjs doc). [docs/README.md](docs/README.md) is the docs index; [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) is the manual pre-service smoke checklist — PR descriptions should declare which of its sections they touch.
+**Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the component map (what runs where, who writes what into the shared Yjs doc). [docs/README.md](docs/README.md) is the docs index; [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) is the manual pre-service smoke checklist — PR descriptions should declare which of its sections they touch. [docs/llm-providers.md](docs/llm-providers.md) covers provider choice for the text/agent paths (AI SDK + OpenRouter) and what routing costs; run the side-by-side comparison with [bench/](bench/README.md).
 
 ## Development Commands
 
@@ -46,6 +46,7 @@ Optional environment variables:
   Sized to stop a script, not a congregation — see [rateLimit.ts](rateLimit.ts).
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
 - `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+- `OPENROUTER_API_KEY` - OpenRouter key. Not used by the running server yet; it authenticates the provider bench ([bench/README.md](bench/README.md)) and the AI SDK provider layer ([llm/modelSpec.ts](llm/modelSpec.ts)). See [docs/llm-providers.md](docs/llm-providers.md).
 - `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
 - `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
 - `POSTHOG_CLI_TOKEN` - PostHog CLI token (for sourcemap uploads during Docker build)
@@ -88,6 +89,21 @@ npm run build
 # Start production server (serves built files)
 npm start
 ```
+
+### Provider comparison bench
+
+An offline, one-off comparison of how different models handle this app's actual workloads
+(slide-translation agent, reviewer follow-up, incremental notes). Not part of the running app.
+Needs `OPENROUTER_API_KEY` and/or `GEMINI_API_KEY`; see [bench/README.md](bench/README.md).
+
+```bash
+# Run the workloads against a few models, then turn the results into a report
+npm run bench -- --models openrouter:google/gemini-3-pro,openrouter:anthropic/claude-sonnet-4.5
+npm run bench:report -- --in bench/results/<file>.json
+```
+
+The harness itself is covered by tests that use scripted fake models, so it can be verified
+without spending anything: `npm test -- bench --run`.
 
 **Important**:
 - Always run `npm install` before building or testing, especially in fresh environments. The build will fail with module resolution errors if dependencies aren't installed.
@@ -477,7 +493,16 @@ The app has two modes determined by URL hash (`#editor`):
 
 ### Backend
 - [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
-- [nlp.ts](nlp.ts) - Gemini API integration for translation
+- [nlp.ts](nlp.ts) - Gemini API integration for translation. Also the single source of truth for the prompts and tool declarations both provider paths use — the tool descriptions are load-bearing prompt text, not documentation.
+- Provider-neutral LLM layer (AI SDK), not yet wired into `server.ts` — see [docs/llm-providers.md](docs/llm-providers.md):
+  - [llm/modelSpec.ts](llm/modelSpec.ts) - resolves `"provider:model"` to an AI SDK model (OpenRouter or direct Google), plus the PostHog tracing wrap
+  - [llm/messages.ts](llm/messages.ts) - Gemini `Content[]` ↔ AI SDK `ModelMessage[]`, so the stored conversation format and the review screen are unaffected by a provider swap
+  - [llm/schema.ts](llm/schema.ts) - Gemini `FunctionDeclaration` → JSON Schema, so one tool definition serves every provider
+  - [llm/slideAgent.ts](llm/slideAgent.ts) - the slide-translation agent loop on `generateText`
+  - [llm/notesBlock.ts](llm/notesBlock.ts) - the incremental notes path on `Output.object`
+  - [llm/telemetry.ts](llm/telemetry.ts) - LLM tracing as OpenTelemetry, exported to PostHog. The only file that names a telemetry vendor; whether PostHog honours our conversation/person grouping over this path is an open question with a documented check in [docs/llm-providers.md](docs/llm-providers.md)
+  - [llm/testing.ts](llm/testing.ts) - scripted fake models, so all of the above is testable offline
+- [bench/](bench/README.md) - offline side-by-side comparison of models on the real workloads (see [bench/README.md](bench/README.md))
 - Proclaim → Yjs sync (Python), decoupled into a slide feed + consumers:
   - [proclaim_service.py](proclaim_service.py) - thin entrypoint: env/config, telemetry, and wiring
   - [slide_feed.py](slide_feed.py) - the seam: `FeedSnapshot` (serializable), `SlideFeed` Protocol, `SnapshotBus`

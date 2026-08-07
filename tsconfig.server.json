@@ -27,6 +27,8 @@
     "slideLibrary.ts",
     "slideConversationStore.ts",
     "dump-docs.ts",
-    "*.test.ts"
+    "*.test.ts",
+    "llm/**/*.ts",
+    "bench/**/*.ts"
   ]
 }
