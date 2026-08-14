@@ -61,13 +61,15 @@ def test_status_announcer_writes_version_and_identity():
     })
     doc = Doc()
 
-    announce(doc)
+    announce(doc, "doc-2026-08-16")
 
     entry = doc.get("status", type=Map)["proclaimService"]
     assert entry["role"] == "proclaim-service"
     assert entry["gitShaShort"] == "aaaaaaa"
     assert entry["updatePending"] is True
     assert entry["clientId"] == doc.client_id
+    # Which doc the service thinks it's writing into — the fact #111 had no record of.
+    assert entry["docId"] == "doc-2026-08-16"
     assert entry["startedAt"] and entry["connectedAt"]
 
 
@@ -79,8 +81,10 @@ def test_status_announcer_reannounces_onto_a_new_doc():
     })
 
     first, second = Doc(), Doc()
-    announce(first)
-    announce(second)
+    announce(first, "doc-2026-08-16")
+    announce(second, "doc-2026-08-17")
 
     assert first.get("status", type=Map)["proclaimService"]["clientId"] == first.client_id
     assert second.get("status", type=Map)["proclaimService"]["clientId"] == second.client_id
+    assert first.get("status", type=Map)["proclaimService"]["docId"] == "doc-2026-08-16"
+    assert second.get("status", type=Map)["proclaimService"]["docId"] == "doc-2026-08-17"

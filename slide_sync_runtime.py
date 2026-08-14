@@ -55,8 +55,9 @@ class SlideSyncRuntime:
         doc_id: Optional[str] = None,
         timing: Optional[RuntimeTiming] = None,
         report_exception: Optional[Callable[[Exception], None]] = None,
-        on_session_start: Optional[Callable[[Doc], None]] = None,
+        on_session_start: Optional[Callable[[Doc, str], None]] = None,
         write_key: Optional[str] = None,
+        follow_show_date: bool = False,
     ):
         self.feed = feed
         self.publisher = publisher
@@ -66,12 +67,17 @@ class SlideSyncRuntime:
         # (writable) Y-Sweet token. Optional: while the server runs in observe mode a
         # keyless request is recorded and still served.
         self.write_key = write_key
+        # Whether the on-air show's own date (Proclaim's DateGiven) may choose the doc.
+        # Off by default (#111): browsers resolve the doc from wall-clock today and know
+        # nothing about DateGiven, so a show-dated doc is one no viewer is looking at.
+        self.follow_show_date = follow_show_date
         self.timing = timing or RuntimeTiming()
         self._report_exception = report_exception or (lambda _e: None)
-        # Called with the freshly connected Doc at the start of every session — the seam the
-        # entrypoint uses to announce itself into the shared `status` map (#73). Per-session,
-        # not per-process: a doc rollover makes a new Doc that needs its own announcement.
-        self._on_session_start = on_session_start or (lambda _doc: None)
+        # Called with the freshly connected Doc and the doc id at the start of every session —
+        # the seam the entrypoint uses to announce itself into the shared `status` map (#73).
+        # Per-session, not per-process: a doc rollover makes a new Doc that needs its own
+        # announcement, under a doc id that may differ from the last one.
+        self._on_session_start = on_session_start or (lambda _doc, _doc_id: None)
 
         if doc_id is None:
             self.use_date_based_doc_id = True
@@ -96,15 +102,25 @@ class SlideSyncRuntime:
         return f'doc-{(d or date.today()).isoformat()}'
 
     def _resolve_doc_for_session(self, session: Optional[SessionInfo]) -> None:
-        """Point the date-based doc id at the on-air show's date before connecting.
+        """Choose the date-based doc id for the session about to start.
 
-        Uses the session's date when known, otherwise wall-clock today. Recreates the Doc
-        when the id changes. No-op under an explicit doc_id override.
+        Wall-clock today, unless ``follow_show_date`` is on and the source reports the
+        show's own date. Recreates the Doc when the id changes. No-op under an explicit
+        doc_id override.
+
+        Why today wins by default (#111): the doc id is decided independently by three
+        parties, and only this one can see DateGiven. Browsers use wall-clock today
+        (``src/getDocId.ts``), so following a show's date puts the slides in a doc nobody
+        is reading — and because the resolve happens once per Y-Sweet session, opening
+        last week's deck for a moment could pin the whole service there for the morning.
+        Ignoring the show date makes today's doc the answer no matter which deck goes on
+        air. Pre-staging a future-dated show still works with ``follow_show_date``, but
+        every browser then needs a matching ``?doc=``.
         """
         if not self.use_date_based_doc_id:
             return
 
-        show_date = session.session_date if session else None
+        show_date = session.session_date if (self.follow_show_date and session) else None
         new_date = show_date if show_date is not None else date.today()
         self.doc_date_from_show = show_date is not None
         new_doc_id = self._get_date_based_doc_id(new_date)
@@ -228,7 +244,7 @@ class SlideSyncRuntime:
             logger.info("Connected to Y-Sweet")
             # Force a full re-push of current state onto the freshly connected server.
             self.publisher.bind(self.ydoc)
-            self._on_session_start(self.ydoc)
+            self._on_session_start(self.ydoc, self.doc_id)
 
             bus = SnapshotBus()
             async with anyio.create_task_group() as session_tg:

@@ -43,10 +43,13 @@ def make_runtime(feed, doc_id="doc-test", on_session_start=None):
     return rt
 
 
-def make_date_based_runtime(feed):
+def make_date_based_runtime(feed, follow_show_date=False):
     pub = YjsSlidePublisher()
     tr = SlideTranslator(mock.AsyncMock(return_value=None), ["French"], 0.001)
-    return SlideSyncRuntime(feed, pub, tr, "http://localhost:8000", timing=fast_timing())
+    return SlideSyncRuntime(
+        feed, pub, tr, "http://localhost:8000", timing=fast_timing(),
+        follow_show_date=follow_show_date,
+    )
 
 
 async def test_wait_until_on_air_holds_no_connection():
@@ -163,7 +166,7 @@ async def test_fresh_connection_runs_the_session_start_hook():
     """Every session announces onto the freshly connected doc (#73's version report)."""
     feed = FakeFeed([on_air_snap()])
     seen = []
-    rt = make_runtime(feed, on_session_start=seen.append)
+    rt = make_runtime(feed, on_session_start=lambda doc, doc_id: seen.append((doc, doc_id)))
     ws = FakeWebSocket(fail_ping_after=1)
 
     with patched_connection(ws):
@@ -171,12 +174,51 @@ async def test_fresh_connection_runs_the_session_start_hook():
             with anyio.fail_after(2):
                 await rt._run_session()
 
-    assert seen == [rt.ydoc]
+    # The doc id travels with the Doc so the announcement can record where it landed (#111).
+    assert seen == [(rt.ydoc, "doc-test")]
 
 
-def test_resolve_doc_uses_show_date():
-    """Date-based doc is anchored to the on-air show's date, with a fresh Doc."""
+def test_resolve_doc_ignores_show_date_by_default():
+    """A show's own date must not choose the doc (#111).
+
+    Last week's deck going on air for a moment is the whole bug: it used to repoint the
+    service at last week's doc, where no browser was looking, for the rest of the morning.
+    """
     rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+    old_doc = rt.ydoc
+    today_doc = SlideSyncRuntime._get_date_based_doc_id(date.today())
+
+    rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
+
+    assert rt.doc_id == today_doc
+    assert rt.doc_date_from_show is False
+    assert rt.current_doc_date == date.today()
+    # Nothing changed, so the Doc (and everything bound to it) is left alone.
+    assert rt.ydoc is old_doc
+
+
+def test_resolve_doc_is_stable_across_a_deck_switch():
+    """Switching to a differently-dated deck mid-morning can't move the doc.
+
+    The resolve runs once per Y-Sweet session, so the guarantee that matters is that
+    *every* session resolves to the same id regardless of which deck is on air.
+    """
+    rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+    today_doc = SlideSyncRuntime._get_date_based_doc_id(date.today())
+
+    for session in (
+        SessionInfo("last-week", date(2026, 8, 2)),
+        SessionInfo("this-week", date(2026, 8, 9)),
+        SessionInfo("undated", None),
+        None,
+    ):
+        rt._resolve_doc_for_session(session)
+        assert rt.doc_id == today_doc
+
+
+def test_resolve_doc_uses_show_date_when_opted_in():
+    """follow_show_date restores show-dated docs for deliberate pre-staging."""
+    rt = make_date_based_runtime(FakeFeed([off_air_snap()]), follow_show_date=True)
     old_doc = rt.ydoc
 
     rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
@@ -189,8 +231,8 @@ def test_resolve_doc_uses_show_date():
 
 
 def test_resolve_doc_falls_back_to_today_without_show_date():
-    """A session with no date falls back to today and stays midnight-rollable."""
-    rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+    """An opted-in session with no date falls back to today and stays midnight-rollable."""
+    rt = make_date_based_runtime(FakeFeed([off_air_snap()]), follow_show_date=True)
 
     rt._resolve_doc_for_session(SessionInfo("pres-1", None))
 
@@ -233,7 +275,7 @@ def test_recreate_doc_resets_publisher_translator_and_feed():
 def test_translator_tracks_the_runtime_doc_id_across_rollover():
     """The translator forwards docId to /api/translateItem, so its bound id must follow every
     doc_id change — otherwise a rolled-over day writes conversations into yesterday's doc."""
-    rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+    rt = make_date_based_runtime(FakeFeed([off_air_snap()]), follow_show_date=True)
     assert rt.translator.doc_id == rt.doc_id
 
     rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))

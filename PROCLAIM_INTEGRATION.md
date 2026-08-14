@@ -43,10 +43,8 @@ uv sync
 
 ```bash
 # Make sure Proclaim is running
-# Start the service. By default it targets doc-YYYY-MM-DD using the on-air show's
-# scheduled date (Proclaim's DateGiven), falling back to today's date if the show
-# has no date. This means you can pre-stage a future-dated show: bring it on air in
-# Proclaim and the service syncs to that date's doc automatically.
+# Start the service. By default it targets doc-YYYY-MM-DD for *today* — the same doc
+# id browsers compute — no matter which show is on air.
 uv run proclaim_service.py
 
 # Or specify a custom doc ID (disables date-based selection entirely)
@@ -59,6 +57,9 @@ Environment variables:
 - `PROCLAIM_POLL_INTERVAL` - Polling interval in seconds while on air (default: `0.5`)
 - `PROCLAIM_POLL_INTERVAL_OFF_AIR` - Polling interval while off air (default: `10`)
 - `PROCLAIM_DOC_ID` - Document ID (overridden by command line arg)
+- `PROCLAIM_FOLLOW_SHOW_DATE` - Set to `1` to let the on-air show's own date (Proclaim's
+  `DateGiven`) choose the doc instead of today's date. Off by default; see "Which document"
+  below.
 
 Connection robustness tuning (rarely need changing):
 - `PROCLAIM_OFF_AIR_DISCONNECT_AFTER` - Seconds off air before dropping the Y-Sweet connection (default: `60`)
@@ -84,11 +85,31 @@ reconnects:
 - **Active health checks.** The service pings the websocket each poll so a silently
   dropped connection is detected promptly and triggers a reconnect (the underlying
   library otherwise swallows the disconnect).
-- **Show-dated documents.** When using the default date-based doc, the service anchors
-  the doc to the on-air show's scheduled date (Proclaim's `DateGiven`), so a show
-  prepared the night before still syncs to its own date's doc. When a show has no usable
-  date it falls back to today's date and rolls over at midnight (with a fresh doc) without
-  needing an external restart.
+- **Today's document.** The date-based doc is `doc-<today>`, rolling over at midnight with
+  a fresh doc and no external restart. Which show is on air does not affect it.
+
+### Which document (issue #111)
+
+Three parties decide the doc id independently: browsers ([src/getDocId.ts](src/getDocId.ts))
+use `?doc=` or wall-clock today; this service uses its override or wall-clock today; the
+LiveKit room follows whatever the browser passed. Only this service can see Proclaim's
+`DateGiven`, so a show-dated doc is one **no browser will be looking at** unless every
+viewer is also given a matching `?doc=`.
+
+That is why `DateGiven` is ignored by default. It used to win, and the resolve happened
+once per Y-Sweet session — so opening last week's deck for a moment on a Sunday morning
+pinned the service to last week's doc for the rest of the service, while the congregation
+watched an empty one.
+
+To pre-stage a future-dated show deliberately, either:
+
+- pin the doc explicitly: `uv run proclaim_service.py doc-2026-08-16` (or `PROCLAIM_DOC_ID`),
+  and open browsers on `?doc=doc-2026-08-16`; or
+- set `PROCLAIM_FOLLOW_SHOW_DATE=1` to restore the old show-date behavior, accepting that
+  every browser needs the matching `?doc=`.
+
+The service records the doc it connected to in the session's `status` map under
+`proclaimService.docId`, so an export shows after the fact where the slides went.
 
 ### 3. View Current Slide in Browser
 

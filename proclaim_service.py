@@ -72,6 +72,9 @@ TRANSLATION_SCAN_INTERVAL = float(os.getenv('PROCLAIM_TRANSLATION_SCAN_INTERVAL'
 # Target languages to pre-translate slides into (must match the frontend's configured
 # languages). The translator asks the server to translate the active item into these and
 # writes the reviewed-or-auto results into the per-day slideTranslations map.
+# Let the on-air show's own date (Proclaim's DateGiven) choose the doc, instead of using
+# wall-clock today. Off by default (#111) — see SlideSyncRuntime._resolve_doc_for_session.
+FOLLOW_SHOW_DATE = os.getenv('PROCLAIM_FOLLOW_SHOW_DATE', '').strip().lower() in ('1', 'true', 'yes')
 SLIDE_TRANSLATION_LANGUAGES = [
     lang.strip()
     for lang in os.getenv('SLIDE_TRANSLATION_LANGUAGES', 'French,Haitian Creole,Spanish').split(',')
@@ -168,7 +171,7 @@ def service_version_info(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]
 
 def make_status_announcer(
     version_info: Optional[Dict[str, Any]] = None,
-) -> Callable[[Doc], None]:
+) -> Callable[[Doc, str], None]:
     """Build the runtime's per-session announcement into the shared `status` map (#72/#73).
 
     The version is resolved once, at startup: the launch wrapper's fetch is what makes
@@ -177,15 +180,21 @@ def make_status_announcer(
     Doc, so each session needs its own announcement). The clientId lets a delta recorder
     attribute updates to this writer; the version fields drive the status view's
     "update pending: restart the service" flag.
+
+    ``docId`` records which doc the service believes it is writing into. It is redundant
+    for whoever reads the entry (it's in that doc already) and that is the point: #111 was
+    the service writing into a doc nobody was reading, and the exported session is where
+    that becomes checkable after the fact.
     """
     info = service_version_info() if version_info is None else version_info
     started_at = datetime.now(timezone.utc).isoformat()
 
-    def announce(doc: Doc) -> None:
+    def announce(doc: Doc, doc_id: str) -> None:
         entry = {
             **info,
             'role': 'proclaim-service',
             'clientId': doc.client_id,
+            'docId': doc_id,
             'host': socket.gethostname(),
             'startedAt': started_at,
             'connectedAt': datetime.now(timezone.utc).isoformat(),
@@ -196,7 +205,7 @@ def make_status_announcer(
         pending = ' (update pending — restart to pick it up)' if entry['updatePending'] else ''
         logger.info(
             f"Reporting version {entry['gitShaShort'] or 'unknown'} "
-            f"on {entry['gitBranch'] or 'unknown'}{pending}"
+            f"on {entry['gitBranch'] or 'unknown'} into {doc_id}{pending}"
         )
 
     return announce
@@ -324,6 +333,7 @@ def build_runtime(
         doc_id=doc_id, timing=timing, report_exception=report_exception,
         on_session_start=make_status_announcer(),
         write_key=WRITE_KEY,
+        follow_show_date=FOLLOW_SHOW_DATE,
     )
 
 
@@ -379,6 +389,14 @@ async def main():
     # enforces keys, "no write key configured" is the whole explanation for a service that
     # connects but silently can't write.
     logger.info(f"Write key: {'configured' if WRITE_KEY else 'NOT configured'}")
+    if doc_id:
+        logger.info(f"Doc: {doc_id} (explicit override)")
+    else:
+        logger.info(
+            "Doc: doc-YYYY-MM-DD from "
+            + ("the on-air show's date, falling back to today" if FOLLOW_SHOW_DATE
+               else "today (set PROCLAIM_FOLLOW_SHOW_DATE=1 to use the show's date)")
+        )
     version_info = service_version_info()
     logger.info(
         f"Version: {version_info['gitShaShort'] or 'unknown'} "
