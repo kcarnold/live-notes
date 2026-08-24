@@ -26,36 +26,36 @@ final class SchedulerTests: XCTestCase {
     // MARK: - The window itself (unchanged semantics; these predate the hold)
 
     func testDisabledScheduleNeverRuns() {
-        let s = Schedule(enabled: false, days: [1], startMinute: 0, stopMinute: 1440 - 1)
+        let s = Schedule(isEnabled: false, days: [1], startMinute: 0, stopMinute: 1440 - 1)
         XCTAssertFalse(isOn(1, 12, 0, s))
     }
 
     func testInsideSameDayWindow() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         XCTAssertTrue(isOn(1, 10, 0, s))
         XCTAssertTrue(isOn(1, 11, 59, s))
     }
 
     func testWindowBoundariesAreHalfOpen() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         XCTAssertTrue(isOn(1, 10, 0, s))    // start inclusive
         XCTAssertFalse(isOn(1, 12, 0, s))   // stop exclusive
         XCTAssertFalse(isOn(1, 9, 59, s))   // before start
     }
 
     func testWrongDayDoesNotRun() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         XCTAssertFalse(isOn(2, 11, 0, s))
     }
 
     func testEmptyWindowNeverRuns() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 600)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 600, stopMinute: 600)
         XCTAssertFalse(isOn(1, 10, 0, s))
     }
 
     func testWrapPastMidnight() {
         // Sunday 23:00 -> Monday 01:00, anchored to Sunday(1).
-        let s = Schedule(enabled: true, days: [1], startMinute: 23 * 60, stopMinute: 1 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 23 * 60, stopMinute: 1 * 60)
         XCTAssertTrue(isOn(1, 23, 30, s))    // Sunday late night: inside
         XCTAssertTrue(isOn(2, 0, 30, s))     // Monday early: belongs to Sunday's window
         XCTAssertFalse(isOn(2, 1, 0, s))     // Monday after stop: out
@@ -104,9 +104,9 @@ final class SchedulerTests: XCTestCase {
     }
 
     func testEdgesAgreeWithASweptWeek() {
-        let sameDay = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
-        let wrapping = Schedule(enabled: true, days: [7], startMinute: 23 * 60, stopMinute: 1 * 60)
-        let manyDays = Schedule(enabled: true, days: [2, 4, 6], startMinute: 9 * 60, stopMinute: 17 * 60)
+        let sameDay = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let wrapping = Schedule(isEnabled: true, days: [7], startMinute: 23 * 60, stopMinute: 1 * 60)
+        let manyDays = Schedule(isEnabled: true, days: [2, 4, 6], startMinute: 9 * 60, stopMinute: 17 * 60)
 
         // Probe from a spread of starting points: before, inside and after a window, and from
         // the wrapping window's early-morning tail.
@@ -122,16 +122,16 @@ final class SchedulerTests: XCTestCase {
 
     func testEdgesAreNilForAnInertSchedule() {
         let from = date(weekday: 1, hour: 9, minute: 0)
-        for inert in [Schedule(enabled: false, days: [1], startMinute: 600, stopMinute: 720),
-                      Schedule(enabled: true, days: [], startMinute: 600, stopMinute: 720),
-                      Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 600)] {
+        for inert in [Schedule(isEnabled: false, days: [1], startMinute: 600, stopMinute: 720),
+                      Schedule(isEnabled: true, days: [], startMinute: 600, stopMinute: 720),
+                      Schedule(isEnabled: true, days: [1], startMinute: 600, stopMinute: 600)] {
             XCTAssertNil(inert.nextStart(after: from, calendar: utc))
             XCTAssertNil(inert.nextStop(after: from, calendar: utc))
         }
     }
 
     func testEdgesAreStrictlyAfterTheGivenInstant() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         // Standing exactly on an edge must yield the *next* one, a week away — not this one.
         XCTAssertEqual(s.nextStart(after: date(weekday: 1, hour: 10, minute: 0), calendar: utc),
                        utc.date(byAdding: .day, value: 7, to: date(weekday: 1, hour: 10, minute: 0)))
@@ -142,12 +142,12 @@ final class SchedulerTests: XCTestCase {
     // MARK: - Holds
 
     func testStartEarlyRunsIntoTheScheduledWindow() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         let hold = RunHold.starting(true, at: date(weekday: 1, hour: 9, minute: 40),
                                     schedule: s, calendar: utc)
         // The hold itself only reaches the scheduled start...
         XCTAssertEqual(hold.endsAt, date(weekday: 1, hour: 10, minute: 0))
-        XCTAssertFalse(hold.capped)
+        XCTAssertFalse(hold.isCapped)
 
         func on(_ h: Int, _ m: Int) -> Bool {
             Scheduler.shouldRun(now: date(weekday: 1, hour: h, minute: m),
@@ -160,7 +160,7 @@ final class SchedulerTests: XCTestCase {
     }
 
     func testStopEarlyEndsThisRunOnly() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         let hold = RunHold.starting(false, at: date(weekday: 1, hour: 11, minute: 15),
                                     schedule: s, calendar: utc)
         XCTAssertEqual(hold.endsAt, date(weekday: 1, hour: 12, minute: 0))
@@ -180,7 +180,7 @@ final class SchedulerTests: XCTestCase {
     /// window closes again inside the hold's lifetime, and a state-comparing rule would read
     /// that as the hold applying once more.
     func testHoldDoesNotResurrectWhenTheWindowClosesAgain() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 11 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 11 * 60)
         let hold = RunHold.starting(true, at: date(weekday: 1, hour: 9, minute: 40),
                                     schedule: s, calendar: utc)
         XCTAssertFalse(Scheduler.shouldRun(now: date(weekday: 1, hour: 11, minute: 30),
@@ -188,10 +188,10 @@ final class SchedulerTests: XCTestCase {
     }
 
     func testHoldIsCappedWhenNoEdgeIsNear() {
-        let off = Schedule(enabled: false)
+        let off = Schedule(isEnabled: false)
         let setAt = date(weekday: 4, hour: 14, minute: 0)
         let hold = RunHold.starting(true, at: setAt, schedule: off, calendar: utc)
-        XCTAssertTrue(hold.capped)
+        XCTAssertTrue(hold.isCapped)
         XCTAssertEqual(hold.endsAt, setAt.addingTimeInterval(RunHold.maxDuration))
         XCTAssertTrue(Scheduler.shouldRun(now: date(weekday: 4, hour: 17, minute: 59),
                                           schedule: off, hold: hold, calendar: utc))
@@ -201,17 +201,17 @@ final class SchedulerTests: XCTestCase {
 
     /// A far-off schedule must not stretch a hold: the next start is days away, so the cap wins.
     func testDistantScheduleStillCapsTheHold() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         let setAt = date(weekday: 4, hour: 14, minute: 0)   // Wednesday afternoon
         let hold = RunHold.starting(true, at: setAt, schedule: s, calendar: utc)
-        XCTAssertTrue(hold.capped)
+        XCTAssertTrue(hold.isCapped)
         XCTAssertEqual(hold.endsAt, setAt.addingTimeInterval(RunHold.maxDuration))
     }
 
     // MARK: - Editing the schedule under a live hold
 
     func testExtendingTheWindowKeepsAStoppedRunStopped() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         let setAt = date(weekday: 1, hour: 11, minute: 15)
         let hold = RunHold.starting(false, at: setAt, schedule: s, calendar: utc)
 
@@ -226,7 +226,7 @@ final class SchedulerTests: XCTestCase {
     }
 
     func testRecomputeKeepsTheCapAnchoredToThePress() {
-        let off = Schedule(enabled: false)
+        let off = Schedule(isEnabled: false)
         let setAt = date(weekday: 4, hour: 14, minute: 0)
         var hold = RunHold.starting(true, at: setAt, schedule: off, calendar: utc)
 
@@ -236,7 +236,7 @@ final class SchedulerTests: XCTestCase {
     }
 
     func testShorteningTheWindowIntoThePastEndsTheHold() {
-        let s = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 14 * 60)
+        let s = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 14 * 60)
         let setAt = date(weekday: 1, hour: 10, minute: 30)
         let hold = RunHold.starting(false, at: setAt, schedule: s, calendar: utc)
 

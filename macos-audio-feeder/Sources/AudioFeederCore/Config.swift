@@ -6,20 +6,27 @@ import Foundation
 /// than `startMinute` the window is same-day `[start, stop)`; if it is less, the window
 /// wraps past midnight (anchored to the start day); if equal, the window is empty.
 public struct Schedule: Codable, Equatable, Sendable {
-    public var enabled: Bool
+    public var isEnabled: Bool
     /// Calendar weekdays the window starts on: 1 = Sunday ... 7 = Saturday (matches `Calendar`).
     public var days: Set<Int>
     public var startMinute: Int
     public var stopMinute: Int
 
-    public init(enabled: Bool = false,
+    public init(isEnabled: Bool = false,
                 days: Set<Int> = [1, 2, 3, 4, 5, 6, 7],
                 startMinute: Int = 10 * 60,
                 stopMinute: Int = 12 * 60) {
-        self.enabled = enabled
+        self.isEnabled = isEnabled
         self.days = days
         self.startMinute = startMinute
         self.stopMinute = stopMinute
+    }
+
+    /// The property follows Swift's `isX` convention; the **key stays `enabled`** so configs
+    /// written by earlier builds keep loading. Covered by the round-trip test in ConfigTests.
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled = "enabled"
+        case days, startMinute, stopMinute
     }
 
     /// `"HH:mm"` for a minutes-since-midnight value, clamped to a valid range.
@@ -73,7 +80,7 @@ public struct Schedule: Codable, Equatable, Sendable {
     /// Whether this schedule can ever start the feeder on its own. False for all three inert
     /// shapes: switched off, no days picked, or a zero-length window.
     public var willEverRun: Bool {
-        enabled && !activeDays.isEmpty && startMinute != stopMinute
+        isEnabled && !activeDays.isEmpty && startMinute != stopMinute
     }
 
     /// The selected days as a phrase: `"every day"`, `"weekdays"`, `"weekends"`,
@@ -92,7 +99,7 @@ public struct Schedule: Codable, Equatable, Sendable {
     /// Names every way a schedule can be inert, because each of them looks identical in the
     /// day-button row: turned off, no days picked, or a zero-length window.
     public var summary: String {
-        guard enabled else {
+        guard isEnabled else {
             // Deliberately doesn't name the way out: this sentence shows in both the settings
             // window (where the checkbox is right there) and, via `RunPlan`, the menu bar
             // (where it isn't), and naming the checkbox would be wrong in the second place.

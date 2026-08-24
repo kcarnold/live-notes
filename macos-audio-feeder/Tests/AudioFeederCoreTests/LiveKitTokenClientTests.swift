@@ -48,6 +48,6 @@ final class LiveKitTokenClientTests: XCTestCase {
         let json = Data(#"{"token":"jwt.abc","serverUrl":"wss://lk.example.com"}"#.utf8)
         let token = try JSONDecoder().decode(LiveKitToken.self, from: json)
         XCTAssertEqual(token.token, "jwt.abc")
-        XCTAssertEqual(token.serverUrl, "wss://lk.example.com")
+        XCTAssertEqual(token.serverURL, "wss://lk.example.com")
     }
 }

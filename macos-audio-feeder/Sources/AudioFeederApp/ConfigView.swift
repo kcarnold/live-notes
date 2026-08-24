@@ -49,7 +49,7 @@ struct ConfigView: View {
                 }
 
                 Section("Schedule") {
-                    Toggle("Enable schedule", isOn: $controller.config.schedule.enabled)
+                    Toggle("Enable schedule", isOn: $controller.config.schedule.isEnabled)
                     weekdayPicker
                     MinuteField(label: "Start", minute: $controller.config.schedule.startMinute)
                     MinuteField(label: "Stop", minute: $controller.config.schedule.stopMinute)

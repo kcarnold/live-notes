@@ -27,34 +27,34 @@ public struct RunHold: Equatable, Sendable {
     /// Four hours covers setup plus a long service.
     public static let maxDuration: TimeInterval = 4 * 60 * 60
 
-    public let publish: Bool
+    public let shouldPublish: Bool
     public let setAt: Date
     public let endsAt: Date
     /// True when `maxDuration` ended the hold rather than a scheduled edge. The decision doesn't
     /// care, but the UI does: it changes which time the sentence should name.
-    public let capped: Bool
+    public let isCapped: Bool
 
-    public init(publish: Bool, setAt: Date, endsAt: Date, capped: Bool) {
-        self.publish = publish
+    public init(shouldPublish: Bool, setAt: Date, endsAt: Date, isCapped: Bool) {
+        self.shouldPublish = shouldPublish
         self.setAt = setAt
         self.endsAt = endsAt
-        self.capped = capped
+        self.isCapped = isCapped
     }
 
-    /// Hold `publish` from `now` until the schedule's next edge of the kind it preempts, or
+    /// Hold `shouldPublish` from `now` until the schedule's next edge of the kind it preempts, or
     /// `maxDuration` after `now`, whichever comes first.
-    public static func starting(_ publish: Bool,
+    public static func starting(_ shouldPublish: Bool,
                                 at now: Date,
                                 schedule: Schedule,
                                 calendar: Calendar = .current) -> RunHold {
         let capEnd = now.addingTimeInterval(maxDuration)
-        let edge = publish
+        let edge = shouldPublish
             ? schedule.nextStart(after: now, calendar: calendar)
             : schedule.nextStop(after: now, calendar: calendar)
         if let edge, edge <= capEnd {
-            return RunHold(publish: publish, setAt: now, endsAt: edge, capped: false)
+            return RunHold(shouldPublish: shouldPublish, setAt: now, endsAt: edge, isCapped: false)
         }
-        return RunHold(publish: publish, setAt: now, endsAt: capEnd, capped: true)
+        return RunHold(shouldPublish: shouldPublish, setAt: now, endsAt: capEnd, isCapped: true)
     }
 
     /// The same rule re-applied from `setAt` against an edited schedule.
@@ -64,7 +64,7 @@ public struct RunHold: Equatable, Sendable {
     /// `endsAt` would put the feeder back on air at 12:00 — partway through a run the operator
     /// had just opted out of.
     public func recomputed(for schedule: Schedule, calendar: Calendar = .current) -> RunHold {
-        RunHold.starting(publish, at: setAt, schedule: schedule, calendar: calendar)
+        RunHold.starting(shouldPublish, at: setAt, schedule: schedule, calendar: calendar)
     }
 
     /// Whether this hold has anything to say at `now`.

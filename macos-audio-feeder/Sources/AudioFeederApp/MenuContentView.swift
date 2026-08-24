@@ -141,14 +141,14 @@ struct MenuContentView: View {
     private var planSummary: some View {
         let plan = controller.runPlan
         return HStack(spacing: 6) {
-            Image(systemName: plan.warns ? "calendar.badge.exclamationmark" : "calendar")
+            Image(systemName: plan.isInert ? "calendar.badge.exclamationmark" : "calendar")
             Text(plan.summary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption)
         // Orange only when nothing will start the feeder on its own — the state an unattended
         // install can be left in by accident, and the one nothing resolves on its own.
-        .foregroundStyle(plan.warns ? Color.orange : Color.secondary)
+        .foregroundStyle(plan.isInert ? Color.orange : Color.secondary)
         // The line names the next event; the tooltip carries the whole schedule, which it no
         // longer repeats.
         .help(controller.config.schedule.summary)

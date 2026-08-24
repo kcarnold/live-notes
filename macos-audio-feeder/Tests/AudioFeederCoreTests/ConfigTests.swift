@@ -63,29 +63,29 @@ final class ConfigTests: XCTestCase {
 
     func testSummaryNamesEveryWayAScheduleCanBeInert() {
         // Switched off, however full the day row looks.
-        XCTAssertEqual(Schedule(enabled: false, days: [1, 2, 3, 4, 5, 6, 7]).summary,
+        XCTAssertEqual(Schedule(isEnabled: false, days: [1, 2, 3, 4, 5, 6, 7]).summary,
                        "Schedule off — nothing will start the feeder on its own.")
-        XCTAssertFalse(Schedule(enabled: false, days: [1]).willEverRun)
+        XCTAssertFalse(Schedule(isEnabled: false, days: [1]).willEverRun)
 
         // Enabled, sane window, but nothing selected.
-        XCTAssertEqual(Schedule(enabled: true, days: []).summary,
+        XCTAssertEqual(Schedule(isEnabled: true, days: []).summary,
                        "No days selected — the schedule will never start the feeder.")
-        XCTAssertFalse(Schedule(enabled: true, days: []).willEverRun)
+        XCTAssertFalse(Schedule(isEnabled: true, days: []).willEverRun)
 
         // Enabled, days selected, but an empty window (`Scheduler` treats start == stop as off).
-        let noWindow = Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 600)
+        let noWindow = Schedule(isEnabled: true, days: [1], startMinute: 600, stopMinute: 600)
         XCTAssertEqual(noWindow.summary,
                        "Start and stop are the same time — the schedule will never start the feeder.")
         XCTAssertFalse(noWindow.willEverRun)
     }
 
     func testSummaryDescribesALiveSchedule() {
-        let sunday = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let sunday = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         XCTAssertEqual(sunday.summary, "Runs Sun, 10:00–12:00.")
         XCTAssertTrue(sunday.willEverRun)
 
         // A window that wraps past midnight is anchored to its start day, so say so.
-        let overnight = Schedule(enabled: true, days: [7], startMinute: 23 * 60, stopMinute: 60)
+        let overnight = Schedule(isEnabled: true, days: [7], startMinute: 23 * 60, stopMinute: 60)
         XCTAssertEqual(overnight.summary, "Runs Sat, 23:00–01:00 the next day.")
         XCTAssertTrue(overnight.willEverRun)
     }
@@ -100,9 +100,9 @@ final class ConfigTests: XCTestCase {
             return utc.date(from: c)!
         }
 
-        let inert = [Schedule(enabled: false, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, stopMinute: 1439),
-                     Schedule(enabled: true, days: [], startMinute: 0, stopMinute: 1439),
-                     Schedule(enabled: true, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 600, stopMinute: 600)]
+        let inert = [Schedule(isEnabled: false, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, stopMinute: 1439),
+                     Schedule(isEnabled: true, days: [], startMinute: 0, stopMinute: 1439),
+                     Schedule(isEnabled: true, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 600, stopMinute: 600)]
         for schedule in inert {
             XCTAssertFalse(schedule.willEverRun)
             // Sweep a whole week at minute resolution: nothing anywhere should start it.
@@ -118,7 +118,7 @@ final class ConfigTests: XCTestCase {
         }
 
         // And the converse: a schedule that says it will run, does.
-        let live = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        let live = Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         XCTAssertTrue(live.willEverRun)
         XCTAssertTrue(Scheduler.shouldRun(now: date(dayOffset: 0, minuteOfDay: 11 * 60),
                                           schedule: live, hold: nil, calendar: utc))
@@ -127,8 +127,8 @@ final class ConfigTests: XCTestCase {
     // MARK: - Will anything start this on its own?
 
     func testWillStartUnattendedIsTheScheduleAlone() {
-        let live = Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 720)
-        let off = Schedule(enabled: false, days: [1], startMinute: 600, stopMinute: 720)
+        let live = Schedule(isEnabled: true, days: [1], startMinute: 600, stopMinute: 720)
+        let off = Schedule(isEnabled: false, days: [1], startMinute: 600, stopMinute: 720)
 
         // There is no longer a second control that can override this answer — which is the
         // whole point: a hold is transient and can't leave an install silently parked.
@@ -145,8 +145,8 @@ final class ConfigTests: XCTestCase {
             c.hour = minuteOfDay / 60; c.minute = minuteOfDay % 60
             return utc.date(from: c)!
         }
-        let configs = [FeederConfig(schedule: Schedule(enabled: false)),
-                       FeederConfig(schedule: Schedule(enabled: true, days: [],
+        let configs = [FeederConfig(schedule: Schedule(isEnabled: false)),
+                       FeederConfig(schedule: Schedule(isEnabled: true, days: [],
                                                        startMinute: 0, stopMinute: 1439))]
         for config in configs {
             XCTAssertFalse(config.willStartUnattended)
@@ -166,7 +166,7 @@ final class ConfigTests: XCTestCase {
                                docIDOverride: "doc-x",
                                deviceUID: "AppleUSBAudioEngine:...:1",
                                channelIndex: 7,
-                               schedule: Schedule(enabled: true, days: [1, 4], startMinute: 600, stopMinute: 720))
+                               schedule: Schedule(isEnabled: true, days: [1, 4], startMinute: 600, stopMinute: 720))
         let data = try JSONEncoder().encode(cfg)
         let decoded = try JSONDecoder().decode(FeederConfig.self, from: data)
         XCTAssertEqual(cfg, decoded)
@@ -181,6 +181,6 @@ final class ConfigTests: XCTestCase {
         """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(FeederConfig.self, from: json)
         XCTAssertEqual(decoded.channelIndex, 2)
-        XCTAssertTrue(decoded.schedule.enabled)
+        XCTAssertTrue(decoded.schedule.isEnabled)
     }
 }

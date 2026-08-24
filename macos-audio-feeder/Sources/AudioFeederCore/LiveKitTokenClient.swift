@@ -6,7 +6,14 @@ import FoundationNetworking
 /// What `POST /api/livekit/token` returns: a LiveKit JWT plus the LiveKit ws server URL.
 public struct LiveKitToken: Decodable, Sendable, Equatable {
     public let token: String
-    public let serverUrl: String
+    public let serverURL: String
+
+    /// The server sends `serverUrl` (see the browser's BroadcastControl.tsx); only the Swift
+    /// spelling is normalized here.
+    private enum CodingKeys: String, CodingKey {
+        case token
+        case serverURL = "serverUrl"
+    }
 }
 
 public enum LiveKitTokenError: Error, CustomStringConvertible {
@@ -87,7 +94,7 @@ public struct LiveKitTokenClient: Sendable {
         guard let decoded = try? JSONDecoder().decode(LiveKitToken.self, from: data) else {
             throw LiveKitTokenError.malformedResponse
         }
-        guard !decoded.token.isEmpty, !decoded.serverUrl.isEmpty else {
+        guard !decoded.token.isEmpty, !decoded.serverURL.isEmpty else {
             throw LiveKitTokenError.missingFields
         }
         return decoded

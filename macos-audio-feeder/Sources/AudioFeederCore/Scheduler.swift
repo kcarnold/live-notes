@@ -15,7 +15,7 @@ public enum Scheduler {
                                  schedule: Schedule,
                                  hold: RunHold?,
                                  calendar: Calendar = .current) -> Bool {
-        if let hold, hold.isLive(at: now) { return hold.publish }
+        if let hold, hold.isLive(at: now) { return hold.shouldPublish }
         return schedule.isActive(at: now, calendar: calendar)
     }
 
@@ -70,7 +70,7 @@ extension Schedule {
 
     /// Whether the schedule (ignoring any hold) has the feeder on at `date`.
     public func isActive(at date: Date, calendar: Calendar = .current) -> Bool {
-        guard enabled else { return false }
+        guard isEnabled else { return false }
         let comps = calendar.dateComponents([.weekday, .hour, .minute], from: date)
         guard let weekday = comps.weekday, let hour = comps.hour, let minute = comps.minute else {
             return false

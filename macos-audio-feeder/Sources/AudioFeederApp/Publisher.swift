@@ -120,7 +120,7 @@ final class Publisher {
             let token = try await LiveKitTokenClient(serverURL: serverURL, writeKey: writeKey)
                 .fetchToken(room: docID)
             guard isCurrent(id) else { return }
-            Log.publisher.notice("token OK; connecting to \(token.serverUrl, privacy: .public)")
+            Log.publisher.notice("token OK; connecting to \(token.serverURL, privacy: .public)")
 
             let room = Room()
             pending = room
@@ -132,7 +132,7 @@ final class Publisher {
             self.observer = observer
             room.add(delegate: observer)
 
-            try await room.connect(url: token.serverUrl, token: token.token)
+            try await room.connect(url: token.serverURL, token: token.token)
             guard isCurrent(id) else { await room.disconnect(); return }
             Log.publisher.notice("room connected")
 

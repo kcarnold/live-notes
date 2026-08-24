@@ -18,7 +18,7 @@ public struct RunPlan: Equatable, Sendable {
     public let summary: String
     /// Nothing will start the feeder on its own. Worth a colour: it is the state an unattended
     /// install can be left in by accident, and the one nothing resolves on its own.
-    public let warns: Bool
+    public let isInert: Bool
 
     public static func evaluate(now: Date,
                                 schedule: Schedule,
@@ -26,13 +26,13 @@ public struct RunPlan: Equatable, Sendable {
                                 calendar: Calendar = .current) -> RunPlan {
         let live = hold.flatMap { $0.isLive(at: now) ? $0 : nil }
         let isOn = Scheduler.shouldRun(now: now, schedule: schedule, hold: live, calendar: calendar)
-        let warns = !schedule.willEverRun
+        let isInert = !schedule.willEverRun
 
         return RunPlan(isOn: isOn,
                        isHeld: live != nil,
                        summary: sentence(now: now, schedule: schedule, hold: live,
                                          isOn: isOn, calendar: calendar),
-                       warns: warns)
+                       isInert: isInert)
     }
 
     private static func sentence(now: Date,
@@ -45,7 +45,7 @@ public struct RunPlan: Equatable, Sendable {
             // end. Otherwise the run ends where the schedule ends it — which is true whether the
             // hold started it early or the schedule did, because the hold expires at the start
             // edge and hands over mid-run.
-            let end: Date? = (hold?.capped == true)
+            let end: Date? = (hold?.isCapped == true)
                 ? hold?.endsAt
                 : schedule.nextStop(after: now, calendar: calendar)
             guard let end else { return "Running — no scheduled stop." }

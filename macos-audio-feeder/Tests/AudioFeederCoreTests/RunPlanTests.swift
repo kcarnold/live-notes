@@ -26,18 +26,18 @@ final class RunPlanTests: XCTestCase {
     }
 
     private var sundayMorning: Schedule {
-        Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
+        Schedule(isEnabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
     }
 
     func testOffAndWaitingNamesTheNextRun() {
         let p = plan(date(weekday: 1, hour: 9, minute: 0), sundayMorning)
         XCTAssertFalse(p.isOn)
-        XCTAssertFalse(p.warns)
+        XCTAssertFalse(p.isInert)
         XCTAssertEqual(p.summary, "Next run Sun 10:00–12:00.")
     }
 
     func testAWrappingNextRunSaysWhichDayItEndsOn() {
-        let overnight = Schedule(enabled: true, days: [7], startMinute: 23 * 60, stopMinute: 60)
+        let overnight = Schedule(isEnabled: true, days: [7], startMinute: 23 * 60, stopMinute: 60)
         XCTAssertEqual(plan(date(weekday: 1, hour: 9, minute: 0), overnight).summary,
                        "Next run Sat 23:00–01:00 the next day.")
     }
@@ -70,14 +70,14 @@ final class RunPlanTests: XCTestCase {
     }
 
     func testACappedHoldNamesItsOwnEnd() {
-        let off = Schedule(enabled: false)
+        let off = Schedule(isEnabled: false)
         let setAt = date(weekday: 4, hour: 14, minute: 0)
         let hold = RunHold.starting(true, at: setAt, schedule: off, calendar: utc)
         let p = plan(date(weekday: 4, hour: 14, minute: 5), off, hold)
         XCTAssertTrue(p.isOn)
         XCTAssertEqual(p.summary, "Started early — runs until 18:00.")
         // Still orange: nothing will start this again once the four hours are up.
-        XCTAssertTrue(p.warns)
+        XCTAssertTrue(p.isInert)
     }
 
     func testAnExpiredHoldStopsBeingMentioned() {
@@ -93,24 +93,24 @@ final class RunPlanTests: XCTestCase {
     /// identical in the settings window's day-button row otherwise.
     func testInertSchedulesKeepTheirOwnSentences() {
         let cases: [(Schedule, String)] = [
-            (Schedule(enabled: false, days: [1], startMinute: 600, stopMinute: 720),
+            (Schedule(isEnabled: false, days: [1], startMinute: 600, stopMinute: 720),
              "Schedule off — nothing will start the feeder on its own."),
-            (Schedule(enabled: true, days: [], startMinute: 600, stopMinute: 720),
+            (Schedule(isEnabled: true, days: [], startMinute: 600, stopMinute: 720),
              "No days selected — the schedule will never start the feeder."),
-            (Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 600),
+            (Schedule(isEnabled: true, days: [1], startMinute: 600, stopMinute: 600),
              "Start and stop are the same time — the schedule will never start the feeder."),
         ]
         for (schedule, expected) in cases {
             let p = plan(date(weekday: 1, hour: 9, minute: 0), schedule)
             XCTAssertEqual(p.summary, expected)
-            XCTAssertTrue(p.warns, "\(schedule) should warn")
+            XCTAssertTrue(p.isInert, "\(schedule) should warn")
             XCTAssertEqual(p.summary, schedule.summary, "must stay the settings window's wording")
         }
     }
 
     func testWarnsTracksWillStartUnattended() {
-        XCTAssertFalse(plan(date(weekday: 1, hour: 9, minute: 0), sundayMorning).warns)
-        XCTAssertEqual(plan(date(weekday: 1, hour: 9, minute: 0), sundayMorning).warns,
+        XCTAssertFalse(plan(date(weekday: 1, hour: 9, minute: 0), sundayMorning).isInert)
+        XCTAssertEqual(plan(date(weekday: 1, hour: 9, minute: 0), sundayMorning).isInert,
                        !FeederConfig(schedule: sundayMorning).willStartUnattended)
     }
 }

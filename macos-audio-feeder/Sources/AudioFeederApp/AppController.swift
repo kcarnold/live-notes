@@ -122,9 +122,9 @@ final class AppController: ObservableObject {
     private func setHold(_ newHold: RunHold) {
         hold = newHold
         Log.controller.notice("""
-            hold: \(newHold.publish ? "on" : "off", privacy: .public) until \
+            hold: \(newHold.shouldPublish ? "on" : "off", privacy: .public) until \
             \(newHold.endsAt.description(with: .current), privacy: .public)\
-            \(newHold.capped ? " (4h cap)" : "", privacy: .public)
+            \(newHold.isCapped ? " (4h cap)" : "", privacy: .public)
             """)
         scheduleEvaluate()
     }

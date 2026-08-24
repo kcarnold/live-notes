@@ -42,7 +42,7 @@ final class ScheduleDSTTests: XCTestCase {
     }
 
     private var daily: Schedule {
-        Schedule(enabled: true, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 10 * 60, stopMinute: 12 * 60)
+        Schedule(isEnabled: true, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 10 * 60, stopMinute: 12 * 60)
     }
 
     // MARK: - The schedule keeps wall-clock time
@@ -67,7 +67,7 @@ final class ScheduleDSTTests: XCTestCase {
     /// this is the case where `Calendar.nextDate`'s matching policy decides the answer, and the
     /// wrong one silently reports a start a week later.
     func testStartInsideTheSpringForwardGap() {
-        let schedule = Schedule(enabled: true, days: [1], startMinute: 2 * 60 + 30, stopMinute: 4 * 60)
+        let schedule = Schedule(isEnabled: true, days: [1], startMinute: 2 * 60 + 30, stopMinute: 4 * 60)
         let midnight = local(2026, 3, 8, 0, 0)
 
         let edge = daily.isActive(at: midnight, calendar: eastern)
@@ -77,7 +77,7 @@ final class ScheduleDSTTests: XCTestCase {
     }
 
     func testWindowSpanningTheGapIsShorterInRealTime() {
-        let schedule = Schedule(enabled: true, days: [1], startMinute: 1 * 60, stopMinute: 4 * 60)
+        let schedule = Schedule(isEnabled: true, days: [1], startMinute: 1 * 60, stopMinute: 4 * 60)
         let midnight = local(2026, 3, 8, 0, 0)
         let start = firstMinute(true, from: midnight, schedule: schedule)!
         let stop = firstMinute(false, from: start, schedule: schedule)!
@@ -92,8 +92,8 @@ final class ScheduleDSTTests: XCTestCase {
 
     func testCapIsFourRealHoursAcrossTheGap() {
         let setAt = local(2026, 3, 8, 1, 30)
-        let hold = RunHold.starting(true, at: setAt, schedule: Schedule(enabled: false), calendar: eastern)
-        XCTAssertTrue(hold.capped)
+        let hold = RunHold.starting(true, at: setAt, schedule: Schedule(isEnabled: false), calendar: eastern)
+        XCTAssertTrue(hold.isCapped)
         XCTAssertEqual(hold.endsAt.timeIntervalSince(setAt), RunHold.maxDuration)
         // Four hours of real time reads as five on the wall: 06:30, not 05:30.
         XCTAssertEqual(wallClock(hold.endsAt), "03-08 06:30")
@@ -110,7 +110,7 @@ final class ScheduleDSTTests: XCTestCase {
     /// once a year, on a feeder whose schedule runs Sunday mornings. A special case here would
     /// cost more than it saves — but it should be a decision, not a surprise.
     func testFallBackRepeatsAnEarlyMorningWindow() {
-        let schedule = Schedule(enabled: true, days: [1], startMinute: 30, stopMinute: 60 + 30)
+        let schedule = Schedule(isEnabled: true, days: [1], startMinute: 30, stopMinute: 60 + 30)
         let midnight = local(2026, 11, 1, 0, 0)
 
         let start = firstMinute(true, from: midnight, schedule: schedule)!
