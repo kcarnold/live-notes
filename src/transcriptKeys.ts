@@ -3,9 +3,11 @@
 // live-audio/transcript-writer.ts); both the client (LiveTranscript,
 // TranscriptHealth) and the server-side session export need to agree on that
 // namespace, on the segment shape, and on how to label a code. Kept free of any
-// runtime dependency (the Y import is type-only) so either side can import it
-// without pulling the other's bundle in.
+// third-party runtime dependency (the Y import is type-only; liveAudioConfig is
+// dependency-free in the same way) so either side can import it without pulling the
+// other's bundle in.
 import type * as Y from 'yjs';
+import { readSourceLanguage } from './liveAudioConfig';
 
 /**
  * Legacy prefix: transcripts used to be one flat, append-only Y.Text per language,
@@ -185,9 +187,6 @@ export function formatPauseGap(gapMs: number, locale: string): string {
   return seconds < 90 ? format(seconds, 'second') : format(Math.round(seconds / 60), 'minute');
 }
 
-/** Code of the English source transcript (matches TranslationBridge.SOURCE_CODE). */
-export const LIVE_TRANSCRIPT_SOURCE_CODE = 'en';
-
 const liveTranscriptDisplayNames = new Intl.DisplayNames(['en'], { type: 'language' });
 
 /** Localized display name for a transcript's BCP-47 code, falling back to the code itself. */
@@ -200,11 +199,14 @@ export function liveTranscriptLabel(code: string): string {
 }
 
 /**
- * Scan a doc's root types for the transcript codes present, English source first.
- * Both namespaces count: a session recorded before segments existed has only the
- * legacy Y.Text, and `readTranscriptSegments` will read it.
+ * Scan a doc's root types for the transcript codes present, the spoken language
+ * first. Which code that is comes from the doc itself (see liveAudioConfig.ts), so a
+ * session spoken in Spanish leads with Spanish and an older English one still leads
+ * with English. Both namespaces count: a session recorded before segments existed has
+ * only the legacy Y.Text, and `readTranscriptSegments` will read it.
  */
 export function liveTranscriptCodes(doc: Y.Doc): string[] {
+  const sourceCode = readSourceLanguage(doc);
   const codes = new Set<string>();
   for (const key of doc.share.keys()) {
     // Order matters: `liveTranscriptSegments-` is not a `liveTranscript-` key
@@ -217,8 +219,8 @@ export function liveTranscriptCodes(doc: Y.Doc): string[] {
     }
   }
   return [...codes].sort((a, b) => {
-    const aSource = a === LIVE_TRANSCRIPT_SOURCE_CODE;
-    const bSource = b === LIVE_TRANSCRIPT_SOURCE_CODE;
+    const aSource = a === sourceCode;
+    const bSource = b === sourceCode;
     if (aSource !== bSource) return aSource ? -1 : 1;
     return liveTranscriptLabel(a).localeCompare(liveTranscriptLabel(b));
   });

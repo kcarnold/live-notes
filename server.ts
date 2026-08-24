@@ -30,8 +30,9 @@ import { buildSessionExport, renderSessionHtml, sessionExportFilename } from './
 
 import { AccessToken } from 'livekit-server-sdk';
 import { SimulateScenarioKind } from '@livekit/rtc-node';
-import TranslationSessionManager from './live-audio/translation-session-manager.ts';
+import TranslationSessionManager, { SPEAKS_ATTRIBUTE } from './live-audio/translation-session-manager.ts';
 import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
+import { normalizeSourceLanguage } from './src/liveAudioConfig.ts';
 import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
 import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
 import { limitFromEnv, makeRateLimit } from './rateLimit.ts';
@@ -306,6 +307,12 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
 // which bridges exist, only what an existing one does while nobody is speaking.
 const SILENCE_THRESHOLD_DBFS = parseSilenceThresholdDbfs(process.env.LIVE_AUDIO_SILENCE_THRESHOLD_DBFS);
 
+// What a session is assumed to be spoken in when its broadcaster doesn't declare a
+// language — an older client, or the unattended macOS audio feeder, which publishes as
+// organizer with no UI to ask. Browsers say so per session (see src/liveAudioConfig.ts);
+// this is the deployment-wide fallback, and `en` keeps every existing install as it was.
+const DEFAULT_SOURCE_LANGUAGE_ENV = normalizeSourceLanguage(process.env.LIVE_AUDIO_SOURCE_LANGUAGE);
+
 // Give the translation manager what it needs to persist transcripts into Yjs and
 // reap idle translator bots. No-op for transcript/reaper if LiveKit is unconfigured.
 {
@@ -316,7 +323,9 @@ const SILENCE_THRESHOLD_DBFS = parseSilenceThresholdDbfs(process.env.LIVE_AUDIO_
       livekit: lk,
       telemetry: phClient,
       silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
+      defaultSourceLanguage: DEFAULT_SOURCE_LANGUAGE_ENV,
     });
+    console.log(`[server] Live-audio default spoken language: ${DEFAULT_SOURCE_LANGUAGE_ENV}`);
     console.log(
       `[server] Live-audio silence gating (cost path): ${
         Number.isFinite(SILENCE_THRESHOLD_DBFS) ? `${SILENCE_THRESHOLD_DBFS} dBFS` : 'disabled'
@@ -340,6 +349,10 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
     // presence — no refcount, no beacon. Optional: attribute-less listeners still get
     // the default bridge, and their /translate request stamps their language.
     const listenLanguage = req.body?.listenLanguage as string | undefined;
+    // The language the broadcaster is speaking (BCP-47), from the broadcast pane. Rides
+    // into the room as the `speaks` attribute so the translation supervisor reads it
+    // from the same presence snapshot it reads everything else from.
+    const speakLanguage = req.body?.speakLanguage as string | undefined;
     if (!room || !identity) {
       return res.status(400).json({ error: 'Missing room or identity' });
     }
@@ -353,7 +366,10 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
       name: identity,
       ttl: '4h',
       attributes: isOrganizer
-        ? { role: 'organizer' }
+        ? {
+            role: 'organizer',
+            ...(speakLanguage ? { [SPEAKS_ATTRIBUTE]: speakLanguage } : {}),
+          }
         : listenLanguage
           ? { listen: listenLanguage }
           : undefined,
@@ -366,6 +382,13 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
       canPublishData: isOrganizer,
     });
     const token = await at.toJwt();
+
+    // Tell the supervisor now rather than waiting for the broadcaster to appear in a
+    // presence snapshot: a listener's /translate can land first, and a bridge started
+    // before the language is known would file the transcript under the wrong one.
+    if (isOrganizer) {
+      TranslationSessionManager.getInstance().setSourceLanguage(room, speakLanguage);
+    }
 
     // A token request means room presence is about to change — poke the translation
     // supervisor so it reconciles this room within seconds instead of on its next
