@@ -8,7 +8,6 @@ import XCTest
 /// forever. Testing it here means it can be checked without Xcode, a room, or a sound board.
 final class RunPlanTests: XCTestCase {
 
-
     /// 2024-01-07 is a Sunday, so weekday 1...7 maps to 2024-01-07...13.
     private func date(weekday: Int, hour: Int, minute: Int) -> Date {
         var c = DateComponents()

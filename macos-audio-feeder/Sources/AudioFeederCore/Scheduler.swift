@@ -26,17 +26,21 @@ public enum Scheduler {
         let start = schedule.startMinute
         let stop = schedule.stopMinute
         if start == stop { return false }
+        // `activeDays`, not `days`: every other reader of the schedule discards out-of-range
+        // weekdays, and one function disagreeing about which set is authoritative is how the
+        // next edit here becomes a bug.
+        let days = schedule.activeDays
 
         if start < stop {
             // Same-day window [start, stop).
-            return schedule.days.contains(weekday) && minuteOfDay >= start && minuteOfDay < stop
+            return days.contains(weekday) && minuteOfDay >= start && minuteOfDay < stop
         } else {
             // Window wraps past midnight; the run is anchored to its start day.
-            if schedule.days.contains(weekday) && minuteOfDay >= start {
+            if days.contains(weekday) && minuteOfDay >= start {
                 return true
             }
             // Early-morning tail belongs to the previous day's window.
-            if schedule.days.contains(previousWeekday(weekday)) && minuteOfDay < stop {
+            if days.contains(previousWeekday(weekday)) && minuteOfDay < stop {
                 return true
             }
             return false

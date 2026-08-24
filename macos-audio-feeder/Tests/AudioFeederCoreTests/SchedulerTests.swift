@@ -3,7 +3,6 @@ import XCTest
 
 final class SchedulerTests: XCTestCase {
 
-
     /// Build a Date at a given UTC weekday/time. 2024-01-07 is a Sunday.
     private func date(weekday: Int, hour: Int, minute: Int) -> Date {
         // 2024-01-07 = Sunday(1) ... 2024-01-13 = Saturday(7).

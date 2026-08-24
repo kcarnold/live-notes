@@ -3,7 +3,6 @@ import XCTest
 
 final class ConfigTests: XCTestCase {
 
-
     func testResolvedDocIDDefaultsToDatedDoc() {
         var c = DateComponents(); c.year = 2025; c.month = 3; c.day = 5
         let now = utc.date(from: c)!

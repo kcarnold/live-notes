@@ -105,5 +105,4 @@ final class AudioCapture {
         Log.capture.notice("capture stopped")
     }
 
-    var isRunning: Bool { running }
 }
