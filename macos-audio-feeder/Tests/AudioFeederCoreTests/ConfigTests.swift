@@ -3,11 +3,6 @@ import XCTest
 
 final class ConfigTests: XCTestCase {
 
-    private var utc: Calendar {
-        var c = Calendar(identifier: .gregorian)
-        c.timeZone = TimeZone(identifier: "UTC")!
-        return c
-    }
 
     func testResolvedDocIDDefaultsToDatedDoc() {
         var c = DateComponents(); c.year = 2025; c.month = 3; c.day = 5

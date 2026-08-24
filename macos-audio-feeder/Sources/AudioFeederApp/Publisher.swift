@@ -78,7 +78,7 @@ final class Publisher {
 
     /// Connect to `room` (the doc id) and publish. Idempotent while connected/connecting.
     func start(room docID: String) {
-        guard case .disconnected = state else { return }
+        guard state == .disconnected else { return }
         sessionID &+= 1
         let id = sessionID
         state = .connecting
@@ -87,7 +87,7 @@ final class Publisher {
 
     /// Feed one captured mono buffer to the publish mixer. No-op until connected.
     func capture(_ buffer: AVAudioPCMBuffer) {
-        guard case .connected = state else { return }
+        guard state == .connected else { return }
         AudioManager.shared.mixer.capture(appAudio: buffer)
     }
 
@@ -170,10 +170,10 @@ final class Publisher {
 
         switch event {
         case .reconnecting:
-            guard case .connected = state else { return }
+            guard state == .connected else { return }
             state = .reconnecting
         case .reconnected:
-            guard case .reconnecting = state else { return }
+            guard state == .reconnecting else { return }
             state = .connected
         case let .dropped(cause):
             Log.publisher.error("room dropped: \(cause.description, privacy: .public)")
@@ -215,8 +215,10 @@ private final class RoomObserver: NSObject, RoomDelegate {
         onEvent(.dropped(Self.cause(for: error)))
     }
 
-    /// `LiveKitErrorType` is an open enum that grows between SDK releases, so unrecognized
-    /// values deliberately fall through to `.unknown`, which `DisconnectPolicy` retries.
+    /// The `default` arm is deliberate rather than an oversight: `LiveKitErrorType` has ~35
+    /// cases, all but a handful of them irrelevant here. It costs the compile error an SDK
+    /// upgrade would otherwise raise — the trade is made knowingly, and anything new lands on
+    /// `.unknown`, which `DisconnectPolicy` retries.
     private static func cause(for error: LiveKitError?) -> DisconnectCause {
         guard let error else {
             // `Room.disconnect()` cleans up with no error. Reaching here means a disconnect

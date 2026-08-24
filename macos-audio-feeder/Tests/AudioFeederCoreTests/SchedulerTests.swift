@@ -3,11 +3,6 @@ import XCTest
 
 final class SchedulerTests: XCTestCase {
 
-    private var utc: Calendar {
-        var c = Calendar(identifier: .gregorian)
-        c.timeZone = TimeZone(identifier: "UTC")!
-        return c
-    }
 
     /// Build a Date at a given UTC weekday/time. 2024-01-07 is a Sunday.
     private func date(weekday: Int, hour: Int, minute: Int) -> Date {
