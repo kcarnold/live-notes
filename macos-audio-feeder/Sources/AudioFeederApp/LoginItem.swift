@@ -21,7 +21,13 @@ enum LoginItem {
                 }
             }
         } catch {
-            NSLog("LoginItem toggle failed: \(error)")
+            // Not NSLog: a failed registration is exactly the thing that stops an unattended
+            // Mac coming back after a reboot, and it has to be visible to the `log stream`
+            // predicate in README.md like everything else.
+            Log.controller.error("""
+                login item \(enabled ? "register" : "unregister", privacy: .public) failed: \
+                \(error.localizedDescription, privacy: .public)
+                """)
         }
     }
 }
