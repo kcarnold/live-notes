@@ -11,12 +11,14 @@ public struct LiveKitToken: Decodable, Sendable, Equatable {
 
 public enum LiveKitTokenError: Error, CustomStringConvertible {
     case badStatus(Int, String)
+    case badServerURL(String)
     case malformedResponse
     case missingFields
 
     public var description: String {
         switch self {
         case let .badStatus(code, body): return "token endpoint returned HTTP \(code): \(body)"
+        case let .badServerURL(url): return "server URL is not a valid URL: \(url)"
         case .malformedResponse: return "token endpoint returned a non-JSON response"
         case .missingFields: return "token response missing token/serverUrl (is LIVEKIT_* configured?)"
         }
@@ -57,7 +59,9 @@ public struct LiveKitTokenClient: Sendable {
                             role: String = "organizer") throws -> URLRequest {
         let base = serverURL.hasSuffix("/") ? String(serverURL.dropLast()) : serverURL
         guard let url = URL(string: "\(base)/api/livekit/token") else {
-            throw LiveKitTokenError.malformedResponse
+            // The likeliest operator mistake in this field is a typo, and `.malformedResponse`
+            // would blame the server for it — in the menu-bar status line, on site.
+            throw LiveKitTokenError.badServerURL(serverURL)
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
