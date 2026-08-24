@@ -103,7 +103,7 @@ final class Publisher {
         state = .disconnected
         Task {
             try? AudioManager.shared.setManualRenderingMode(false)
-            try? await room?.disconnect()
+            await room?.disconnect()
         }
     }
 
@@ -133,12 +133,12 @@ final class Publisher {
             room.add(delegate: observer)
 
             try await room.connect(url: token.serverUrl, token: token.token)
-            guard isCurrent(id) else { try? await room.disconnect(); return }
+            guard isCurrent(id) else { await room.disconnect(); return }
             Log.publisher.notice("room connected")
 
             try AudioManager.shared.setManualRenderingMode(true)
             try await room.localParticipant.setMicrophone(enabled: true)
-            guard isCurrent(id) else { try? await room.disconnect(); return }
+            guard isCurrent(id) else { await room.disconnect(); return }
             Log.publisher.notice("publishing as \(LiveKitTokenClient.organizerIdentity, privacy: .public)")
 
             // The room can drop while we are still setting up — the observer has already
@@ -158,7 +158,7 @@ final class Publisher {
             Log.publisher.error("connect failed: \(String(describing: error), privacy: .public)")
             // Release the half-built room; leaving it connected would hold the
             // `organizer-host` identity against the retry that is about to follow.
-            try? await pending?.disconnect()
+            await pending?.disconnect()
             guard isCurrent(id) else { return }
             observer = nil
             state = .failed("\(error)")
