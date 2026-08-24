@@ -110,7 +110,7 @@ final class ConfigTests: XCTestCase {
                 for minute in 0..<(24 * 60) {
                     XCTAssertFalse(Scheduler.shouldRun(now: date(dayOffset: dayOffset, minuteOfDay: minute),
                                                        schedule: schedule,
-                                                       manualOverride: .off,
+                                                       hold: nil,
                                                        calendar: utc),
                                    "\(schedule) claimed inert but runs on day \(dayOffset) at minute \(minute)")
                 }
@@ -121,38 +121,19 @@ final class ConfigTests: XCTestCase {
         let live = Schedule(enabled: true, days: [1], startMinute: 10 * 60, stopMinute: 12 * 60)
         XCTAssertTrue(live.willEverRun)
         XCTAssertTrue(Scheduler.shouldRun(now: date(dayOffset: 0, minuteOfDay: 11 * 60),
-                                          schedule: live, manualOverride: .off, calendar: utc))
+                                          schedule: live, hold: nil, calendar: utc))
     }
 
-    // MARK: - Mode (the override) vs the schedule's own switch
-    //
-    // These are the two controls that get confused for each other, so pin which one wins:
-    // the mode decides whether the schedule is consulted at all.
+    // MARK: - Will anything start this on its own?
 
-    func testModeSummaryReportsTheOverrideNotTheSchedule() {
-        // A live schedule says nothing about what happens while an override is in force.
-        let live = Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 720)
-        XCTAssertEqual(FeederConfig(schedule: live, manualOverride: .forceOn).modeSummary,
-                       "Always on — publishing regardless of the schedule.")
-        XCTAssertEqual(FeederConfig(schedule: live, manualOverride: .forceOff).modeSummary,
-                       "Always off — the schedule is ignored until you switch back to Schedule.")
-        // Only in Schedule mode does the schedule get to speak.
-        XCTAssertEqual(FeederConfig(schedule: live, manualOverride: .off).modeSummary,
-                       live.summary)
-    }
-
-    func testWillStartUnattendedCombinesBothControls() {
+    func testWillStartUnattendedIsTheScheduleAlone() {
         let live = Schedule(enabled: true, days: [1], startMinute: 600, stopMinute: 720)
         let off = Schedule(enabled: false, days: [1], startMinute: 600, stopMinute: 720)
 
-        // Force-on runs even with no usable schedule at all; force-off never runs, however
-        // good the schedule is. This is the asymmetry the old UI never showed.
-        XCTAssertTrue(FeederConfig(schedule: off, manualOverride: .forceOn).willStartUnattended)
-        XCTAssertFalse(FeederConfig(schedule: live, manualOverride: .forceOff).willStartUnattended)
-
-        // In Schedule mode it defers entirely to the schedule.
-        XCTAssertTrue(FeederConfig(schedule: live, manualOverride: .off).willStartUnattended)
-        XCTAssertFalse(FeederConfig(schedule: off, manualOverride: .off).willStartUnattended)
+        // There is no longer a second control that can override this answer — which is the
+        // whole point: a hold is transient and can't leave an install silently parked.
+        XCTAssertTrue(FeederConfig(schedule: live).willStartUnattended)
+        XCTAssertFalse(FeederConfig(schedule: off).willStartUnattended)
     }
 
     /// `willStartUnattended` must not become a second opinion: if it says nothing will start
@@ -164,16 +145,16 @@ final class ConfigTests: XCTestCase {
             c.hour = minuteOfDay / 60; c.minute = minuteOfDay % 60
             return utc.date(from: c)!
         }
-        let allWeek = Schedule(enabled: true, days: [1, 2, 3, 4, 5, 6, 7], startMinute: 0, stopMinute: 1439)
-        let configs = [FeederConfig(schedule: allWeek, manualOverride: .forceOff),
-                       FeederConfig(schedule: Schedule(enabled: false), manualOverride: .off)]
+        let configs = [FeederConfig(schedule: Schedule(enabled: false)),
+                       FeederConfig(schedule: Schedule(enabled: true, days: [],
+                                                       startMinute: 0, stopMinute: 1439))]
         for config in configs {
             XCTAssertFalse(config.willStartUnattended)
             for dayOffset in 0..<7 {
                 for minute in stride(from: 0, to: 24 * 60, by: 7) {
                     XCTAssertFalse(Scheduler.shouldRun(now: date(dayOffset: dayOffset, minuteOfDay: minute),
                                                        schedule: config.schedule,
-                                                       manualOverride: config.manualOverride,
+                                                       hold: nil,
                                                        calendar: utc))
                 }
             }
@@ -185,10 +166,21 @@ final class ConfigTests: XCTestCase {
                                docIDOverride: "doc-x",
                                deviceUID: "AppleUSBAudioEngine:...:1",
                                channelIndex: 7,
-                               schedule: Schedule(enabled: true, days: [1, 4], startMinute: 600, stopMinute: 720),
-                               manualOverride: .forceOn)
+                               schedule: Schedule(enabled: true, days: [1, 4], startMinute: 600, stopMinute: 720))
         let data = try JSONEncoder().encode(cfg)
         let decoded = try JSONDecoder().decode(FeederConfig.self, from: data)
         XCTAssertEqual(cfg, decoded)
+    }
+
+    /// The deployed config predates the hold and still carries a `manualOverride` key. Decoding
+    /// must ignore it rather than throw, so an existing install comes up on its schedule.
+    func testLegacyConfigWithAModeStillDecodes() throws {
+        let json = """
+        {"serverURL":"https://example.org","channelIndex":2,"manualOverride":"forceOn",
+         "schedule":{"enabled":true,"days":[1],"startMinute":600,"stopMinute":720}}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(FeederConfig.self, from: json)
+        XCTAssertEqual(decoded.channelIndex, 2)
+        XCTAssertTrue(decoded.schedule.enabled)
     }
 }

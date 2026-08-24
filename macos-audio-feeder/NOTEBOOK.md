@@ -10,6 +10,75 @@ cause, the fix.
 
 ---
 
+## 2026-08-24 — the mode picker answered a temporary question permanently
+
+**Symptom.** *"The mode picker is weird."* What an operator wants at the sound board is to
+start a few minutes early, or end a service early, and then have the schedule carry on. The
+picker (`Schedule | Always on | Always off`, from the 2026-08-05 entry below) couldn't express
+either. Starting early meant switching to **Always on** — which doesn't mean "start now", it
+means "ignore the schedule until further notice" — and then remembering to switch back. Nobody
+remembers, so the install spends the following week on Always on, or worse, parked on Always
+off through a Sunday.
+
+**Cause.** The picker was a faithful rendering of the wrong model. `manualOverride` was an
+*outer switch*, persisted, deciding whether the schedule was consulted at all. That gave four
+independent ways to end up silent — the mode, `schedule.enabled`, no days, a zero-length
+window — all of which look the same from the menu bar. `willStartUnattended` and the orange
+sentence existed to warn about a hazard the control itself created.
+
+**Fix: one durable switch, one transient action.** The schedule (Settings) is the only thing
+that starts the feeder on its own. **Start now** / **Stop now** are a `RunHold`, which lasts
+until *the schedule's next edge of the kind it preempted* — start-now ends at the next
+scheduled start (after which the schedule is on anyway and carries the run to its normal stop),
+stop-now ends at the next scheduled stop — capped at four hours, and then it expires by itself.
+Press Start at 09:40 against a 10:00–12:00 window and the feeder runs 09:40–12:00. There is no
+mode to put back.
+
+The hold is **in memory only**. `FeederConfig` lost `manualOverride` entirely, and a relaunch
+comes back following the schedule — the right answer for an unattended booth Mac, and one less
+piece of persisted state that can be wrong on a Sunday morning. The popover's one line now says
+what happens next (*"Next run Sun 10:00–12:00."*, *"Started early — runs until 12:00."*) rather
+than naming a mode; `willStartUnattended` collapses to `schedule.willEverRun`.
+
+**Three things worth not re-deriving:**
+
+- **`endsAt` is resolved at press time, not recomputed as a state comparison.** The obvious
+  cheaper rule — "the hold expires once the schedule agrees with it" — resurrects. A hold-on at
+  09:40 against a 10:00–11:00 window is satisfied at 10:00, and then at 11:30 the schedule
+  disagrees again and the hold switches the feeder back **on**. Making that safe would rest
+  correctness on the 15s tick having fired. `testHoldDoesNotResurrectWhenTheWindowClosesAgain`
+  is that bug, pinned.
+- **A schedule edit recomputes a live hold** (`RunHold.recomputed`, from the original `setAt`,
+  so the four-hour ceiling can't be walked forward). Without it: stop at 11:15 in a 10:00–12:00
+  window, then extend the stop to 14:00, and the feeder comes back on at 12:00 — partway
+  through a run the operator had just opted out of.
+- **The first draft searched minute-by-minute over the next eight days** for "when does the
+  state next flip". That worked, and it was a hand-rolled reimplementation of
+  `Calendar.nextDate(after:matching:)`. The search was the signal that the *edges*, not the
+  states, were the thing to compute; `Schedule.nextStart`/`nextStop` are now a min over at most
+  seven of those calls. The sweep survives as the **test oracle** it should always have been.
+
+**Two clocks, on purpose.** The schedule is wall-clock ("10:00 means 10:00"); a hold's cap is
+absolute elapsed time, because it bounds airtime and cost rather than naming a clock reading.
+`ScheduleDSTTests` pins both against America/New_York: consecutive scheduled starts are 23 or
+25 hours apart across a transition, a window spanning the spring-forward gap is three hours on
+the wall and two in the room, and a hold set at 01:30 ends at 06:30, not 05:30.
+
+**Known and accepted: the fall-back repeated hour.** Local 01:00–01:59 happens twice each
+November. `isWithinWindow` reads only wall-clock components, so a window ending at 01:30 stops
+and then comes back for the repeated hour. Pinned by
+`testFallBackRepeatsAnEarlyMorningWindow` rather than fixed — the ambiguity is inherent to
+wall-clock scheduling and predates this change, and the blast radius is one extra hour at 01:00
+once a year on a feeder that runs Sunday mornings. A special case would cost more than it
+saves. It should be a decision, though, not a surprise.
+
+**Rule this earns:** a control that sets a *mode* has to be undone; a control that shifts *this
+run* undoes itself. Prefer the second wherever the operator's real request is "just for now" —
+and if a fix requires the operator to remember a second step, the model is wrong, not the
+operator.
+
+---
+
 ## 2026-08-05 — the weekday chips were invisible state
 
 **Symptom.** On an older macOS, clicking a day in **Settings → Schedule** changed nothing on
@@ -375,8 +444,9 @@ home is a real signal.
    `com.apple.security.network.server` must be present.
 4. Launch it, grant the microphone prompt, pick the board and channel.
 5. With `log stream --predicate 'subsystem == "org.kenarnold.audio-feeder"' --style compact`
-   running, set **When to publish** to *Always on* (this step said "hit Start now" before the
-   2026-08-05 entry replaced those buttons) and watch for, in order: `starting pipeline`, an input format
+   running, hit **Start now** — it holds the feeder on for up to four hours and then expires by
+   itself, so there is nothing to switch back afterwards (**Follow schedule** ends it sooner).
+   Watch for, in order: `starting pipeline`, an input format
    with a plausible sample rate and channel count, `token OK`, `room connected`,
    `publishing as organizer-host`.
 6. Join the session in a browser and confirm you can hear the board.

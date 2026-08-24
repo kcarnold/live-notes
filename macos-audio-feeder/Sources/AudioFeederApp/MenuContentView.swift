@@ -35,14 +35,13 @@ struct MenuContentView: View {
 
             Divider()
 
-            modePicker
-            modeSummary
+            runControls
+            planSummary
 
-            // A stand-down waits for a person, so it needs a person-shaped way out. "Start
-            // now" can't serve: it's disabled whenever the override is already .forceOn,
-            // which is exactly the state an always-on install stands down from.
-            // The status line above already says *why* we're stopped; this says what the
-            // button does, because it isn't harmless.
+            // A stand-down waits for a person, so it needs a person-shaped way out. The primary
+            // button can't serve: while standing down we still *want* to run, so it reads "Stop
+            // now" — the opposite of what's needed. The status line above already says *why*
+            // we're stopped; this says what the button does, because it isn't harmless.
             if controller.standDown != nil {
                 HStack(spacing: 8) {
                     Text("Takes the room back from whoever has it.")
@@ -96,70 +95,63 @@ struct MenuContentView: View {
         .font(.caption)
     }
 
-    /// What decides whether the feeder runs — as a control whose selection *is* the state.
+    /// Start or stop *this run* — never a mode.
     ///
-    /// This replaced three buttons ("Start now" / "Stop now" / "Follow schedule", the last
-    /// appearing only while an override was active). Two problems with that: the mode was
-    /// never on screen, only inferable from which button was disabled; and "Follow schedule"
-    /// read as a *sibling* of Settings' "Enable schedule" checkbox, when it is actually the
-    /// outer switch — it decides whether the schedule is consulted at all, and changes
-    /// nothing about the schedule itself. Segments make the mode visible, and make it clear
-    /// there are exactly three ways this can go.
-    private var modePicker: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("When to publish").font(.caption).foregroundStyle(.secondary)
-            Picker("When to publish", selection: modeBinding) {
-                Text("Schedule").tag(ManualOverride.off)
-                Text("Always on").tag(ManualOverride.forceOn)
-                Text("Always off").tag(ManualOverride.forceOff)
+    /// This replaced a segmented `Schedule | Always on | Always off` picker, which replaced
+    /// three buttons before that. The picker's defect wasn't visibility (it fixed that); it was
+    /// offering permanent answers to a temporary question. What an operator wants at the sound
+    /// board is to start a few minutes early or end a service early — and both of those, in the
+    /// old model, meant switching the schedule off entirely and remembering to switch it back.
+    /// Nobody remembers, so an install ends up parked on *Always off* through the next Sunday.
+    ///
+    /// So there is no mode any more: one button that acts on the current run, and a way to take
+    /// it back. The state that used to live in the picker is now the sentence below, which says
+    /// what happens next and when — a strictly more useful thing to show in the same space.
+    private var runControls: some View {
+        HStack {
+            // Pivots on the decision, not on `isPublishing`: while connecting, reconnecting or
+            // standing down we still *want* to run, and offering "Start now" there would be a
+            // no-op button on a feeder that is already trying.
+            Button(controller.wantRun ? "Stop now" : "Start now") {
+                // The hop off the current runloop turn is belt-and-braces here — a `Button`
+                // action already runs outside SwiftUI's update pass, unlike the `Picker`
+                // binding this replaced (see `AppController.scheduleEvaluate`).
+                Task { @MainActor in
+                    if controller.wantRun { controller.stopNow() } else { controller.startNow() }
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            Spacer()
+            // Only meaningful while a hold is in play; the rest of the time the schedule is
+            // already what's being followed, and a button saying so would be a no-op.
+            if controller.hold != nil {
+                Button("Follow schedule") {
+                    Task { @MainActor in controller.followSchedule() }
+                }
+                .font(.callout)
+            }
         }
     }
 
-    /// Routes through the controller's existing methods rather than writing `manualOverride`
-    /// directly: `startNow()` and `followSchedule()` also clear a stand-down, and skipping
-    /// that would leave the feeder standing down in a mode that says it shouldn't be.
-    ///
-    /// The hop off the current runloop turn is required, not stylistic. SwiftUI writes a
-    /// `Picker`'s selection through this binding **during its view-update pass**, and all
-    /// three of these methods mutate `@Published` state on the controller (`standDown` here,
-    /// `config` → `status` downstream) — which is "Publishing changes from within view
-    /// updates is not allowed". A `Button`'s action closure runs outside that pass, which is
-    /// why the three buttons this replaced never tripped it.
-    private var modeBinding: Binding<ManualOverride> {
-        Binding(
-            get: { controller.config.manualOverride },
-            set: { mode in
-                Task { @MainActor in
-                    switch mode {
-                    case .off: controller.followSchedule()
-                    case .forceOn: controller.startNow()
-                    case .forceOff: controller.stopNow()
-                    }
-                }
-            })
-    }
-
-    /// What the selected mode will actually do — including the cases where it will do nothing.
+    /// What happens next, and when.
     ///
     /// The popover said what the feeder was doing *now* ("Idle") but never whether anything
-    /// would change that. An install in Schedule mode with the schedule switched off sits at
-    /// "Idle" indefinitely and looks exactly like one that is five minutes from going live.
-    private var modeSummary: some View {
-        HStack(spacing: 6) {
-            Image(systemName: controller.config.willStartUnattended
-                  ? "calendar" : "calendar.badge.exclamationmark")
-            Text(controller.config.modeSummary)
+    /// would change that. An install whose schedule is switched off sits at "Idle" indefinitely
+    /// and looks exactly like one that is five minutes from going live. The sentence is built in
+    /// `RunPlan` — pure, and pinned by `swift test` rather than by looking at this window.
+    private var planSummary: some View {
+        let plan = controller.runPlan
+        return HStack(spacing: 6) {
+            Image(systemName: plan.warns ? "calendar.badge.exclamationmark" : "calendar")
+            Text(plan.summary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption)
-        // Orange only when nothing will start the feeder on its own. "Always off" earns it
-        // too: it is a deliberate choice, but it is also the one an unattended install can
-        // be left in by accident after a service.
-        .foregroundStyle(controller.config.willStartUnattended ? Color.secondary : Color.orange)
-        .help(controller.config.modeSummary)
+        // Orange only when nothing will start the feeder on its own — the state an unattended
+        // install can be left in by accident, and the one nothing resolves on its own.
+        .foregroundStyle(plan.warns ? Color.orange : Color.secondary)
+        // The line names the next event; the tooltip carries the whole schedule, which it no
+        // longer repeats.
+        .help(controller.config.schedule.summary)
     }
 
     private var statusColor: Color {
