@@ -54,11 +54,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.action = #selector(togglePopover(_:))
         item.button?.target = self
         statusItem = item
-        updateStatusIcon()
+        updateStatusIcon(isPublishing: controller.status == .publishing)
 
-        // Keep the menu-bar glyph in sync with publishing state.
-        statusObserver = controller.$status.sink { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateStatusIcon() }
+        // Keep the menu-bar glyph in sync with publishing state. Draw the status the sink
+        // *delivers*: `@Published` emits in `willSet`, so re-reading `controller.status` here
+        // would always render the value we're replacing — the glyph would lag one transition
+        // behind and sit on "waveform" for the whole live run.
+        statusObserver = controller.$status.sink { [weak self] status in
+            MainActor.assumeIsolated { self?.updateStatusIcon(isPublishing: status == .publishing) }
         }
 
         // The Settings window is the only titled window this app creates (the popover's
@@ -74,8 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func updateStatusIcon() {
-        let symbol = controller.isPublishing ? "dot.radiowaves.left.and.right" : "waveform"
+    private func updateStatusIcon(isPublishing: Bool) {
+        let symbol = isPublishing ? "dot.radiowaves.left.and.right" : "waveform"
         statusItem?.button?.image = NSImage(systemSymbolName: symbol,
                                             accessibilityDescription: "Audio Feeder")
     }
@@ -89,9 +92,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.contentViewController?.view.window?.makeKey()
         }
     }
-}
-
-extension AppController {
-    /// Convenience for the menu-bar glyph.
-    var isPublishing: Bool { if case .publishing = status { return true } else { return false } }
 }

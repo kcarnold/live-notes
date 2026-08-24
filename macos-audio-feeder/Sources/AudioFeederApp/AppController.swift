@@ -40,6 +40,9 @@ final class AppController: ObservableObject {
             Log.controller.notice("status: \(self.status.label, privacy: .public)")
         }
     }
+    /// Live on air. Distinct from "supposed to be running": connecting and reconnecting are not.
+    var isPublishing: Bool { status == .publishing }
+
     @Published private(set) var level: Float = 0          // 0...1 for the meter
     @Published private(set) var devices: [AudioInputDevice] = []
 
