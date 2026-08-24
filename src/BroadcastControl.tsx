@@ -2,7 +2,12 @@
 // joins the session's LiveKit room as the organizer, publishes the microphone,
 // and shows which languages are being translated and how many are listening.
 // Self-contained and opt-in, mirroring ListenViewer's isolation.
-import { useCallback, useEffect, useState } from "react";
+//
+// It is also where the session's *spoken* language is declared — the speaker is the
+// only one who knows it, and everything downstream (which code the transcript is filed
+// under, what "Original" means in the listen picker, which language the always-on
+// bridge translates into) follows from it. See liveAudioConfig.ts.
+import { useEffect, useState } from "react";
 import { useAtom } from "jotai";
 import {
   LiveKitRoom,
@@ -13,16 +18,15 @@ import {
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 import { LocalAudioTrack, Track } from "livekit-client";
+import { useYDoc } from "@y-sweet/react";
 import { isEditorAtom } from "./configAtoms";
-import { useStrings } from "./useLocale";
+import { useStrings, resolveLocale } from "./useLocale";
 import { LiveTranscript } from "./LiveTranscript";
+import { LISTEN_LANGUAGE_CODES } from "./listenLanguages";
+import { writeSourceLanguage } from "./liveAudioConfig";
+import { useSourceLanguage } from "./useSourceLanguage";
 import { getDocId } from "./getDocId";
 import { apiFetch } from "./writeKey";
-
-// The default/primary translator bridge transcribes the speaker's own audio and
-// writes it to the shared Yjs doc under this code, so the broadcaster can read
-// back exactly what's being captured.
-const SOURCE_TRANSCRIPT_CODE = "en";
 
 interface TranslationInfo {
   language: string;
@@ -67,8 +71,15 @@ function MicLevelMeter() {
   );
 }
 
-function BroadcastDashboard({ docId }: { docId: string }) {
+function BroadcastDashboard({
+  docId,
+  sourceLanguage,
+}: {
+  docId: string;
+  sourceLanguage: string;
+}) {
   const s = useStrings();
+  const locale = resolveLocale();
   const remoteParticipants = useRemoteParticipants();
   const [translations, setTranslations] = useState<TranslationInfo[]>([]);
 
@@ -111,9 +122,14 @@ function BroadcastDashboard({ docId }: { docId: string }) {
       </div>
       <MicLevelMeter />
       <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
-        {s.englishTranscript}
+        {s.sourceTranscript} ·{" "}
+        {new Intl.DisplayNames([locale], { type: "language" }).of(sourceLanguage) ??
+          sourceLanguage}
       </h3>
-      <LiveTranscript langCode={SOURCE_TRANSCRIPT_CODE} />
+      {/* The primary bridge transcribes the speaker's own audio under the language
+          they declared below, so this is a direct read-back of what's being captured —
+          and the fastest way to notice a wrong declaration. */}
+      <LiveTranscript langCode={sourceLanguage} />
       <div className="overflow-auto max-h-40">
         <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300 mb-1">
           {s.activeTranslations}
@@ -152,16 +168,37 @@ function BroadcastDashboard({ docId }: { docId: string }) {
 
 export function BroadcastControl() {
   const s = useStrings();
+  const locale = resolveLocale();
   const [isEditor] = useAtom(isEditorAtom);
   const docId = getDocId();
+  const ydoc = useYDoc();
   const [conn, setConn] = useState<{ token: string; serverUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
-  const start = useCallback(async () => {
+  // What the speaker is about to speak. Follows whatever the session already says
+  // until this speaker picks something — so re-opening the pane mid-service shows the
+  // language in force rather than resetting the picker to a default that would then be
+  // published on the next "Start broadcast".
+  const declaredSourceLanguage = useSourceLanguage();
+  const [picked, setPicked] = useState<string | null>(null);
+  const spokenLanguage = picked ?? declaredSourceLanguage;
+
+  const langDisplayNames = new Intl.DisplayNames([locale], { type: "language" });
+  const spokenLanguageOptions = [...LISTEN_LANGUAGE_CODES].sort((a, b) =>
+    (langDisplayNames.of(a) ?? a).localeCompare(langDisplayNames.of(b) ?? b, locale)
+  );
+
+  const start = async () => {
     setError(null);
     setConnecting(true);
     try {
+      // Publish the spoken language before joining, by both routes it travels: the
+      // shared doc (what every viewer and every later export reads) and the organizer
+      // token (what the translation supervisor reads, since it decides from room
+      // presence and can't wait on a doc sync). Doing it here, in the one place a
+      // human states the fact, is what keeps the two copies agreeing.
+      writeSourceLanguage(ydoc, spokenLanguage);
       const tk = (await apiFetch("/api/livekit/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -169,6 +206,7 @@ export function BroadcastControl() {
           room: docId,
           identity: ORGANIZER_IDENTITY,
           role: "organizer",
+          speakLanguage: spokenLanguage,
         }),
       }).then((r) => r.json())) as TokenResp;
       if (tk.error) throw new Error(tk.error);
@@ -179,7 +217,7 @@ export function BroadcastControl() {
     } finally {
       setConnecting(false);
     }
-  }, [docId]);
+  };
 
   if (!isEditor) {
     return (
@@ -208,6 +246,23 @@ export function BroadcastControl() {
   if (!conn) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3">
+        {/* Asked before going live, not after: the language is fixed into the LiveKit
+            token, so changing it means reconnecting. It's also the one question whose
+            wrong answer is invisible — a mislabelled transcript still scrolls. */}
+        <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+          {s.spokenLanguage}
+          <select
+            className="px-2 py-1 rounded text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
+            value={spokenLanguage}
+            onChange={(e) => setPicked(e.target.value)}
+          >
+            {spokenLanguageOptions.map((code) => (
+              <option key={code} value={code}>
+                {langDisplayNames.of(code) ?? code}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="button"
           disabled={connecting}
@@ -229,7 +284,7 @@ export function BroadcastControl() {
       onError={(e) => setError(e.message)}
       className="flex flex-col flex-1 min-h-0"
     >
-      <BroadcastDashboard docId={docId} />
+      <BroadcastDashboard docId={docId} sourceLanguage={spokenLanguage} />
     </LiveKitRoom>
   );
 }

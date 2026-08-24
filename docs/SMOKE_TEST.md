@@ -74,8 +74,18 @@ an incident happens that this list would not have caught, add a line.
       fails, so it can't be provoked by running longer. `scenario` also accepts
       `signalReconnect`, `nodeFailure`, `migration`, `serverLeave`.
 
-- [ ] With **no listener yet**, the English transcript still flows — the default translator
+- [ ] With **no listener yet**, the source transcript still flows — the primary translator
       runs whenever the broadcaster is present, whatever the cost path is set to.
+
+Non-English speaker (only when the service isn't in English):
+
+- [ ] In the broadcast pane, set **Spoken language** before going live. The transcript pane
+      beside it fills with *what the speaker actually said*, in that language — the fastest
+      way to catch a wrong declaration, since a mislabelled transcript still scrolls happily.
+- [ ] In a listen pane, the picker's first entry reads **Original / <that language>**, and
+      **English appears in the language list as an ordinary target**. Choosing English gets a
+      `translator-en` bot and English audio; choosing the spoken language gets the speaker's
+      own voice and no bot (the broadcast dashboard shows no `translator-<spoken>` bridge).
 
 Cost path (only when `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level — off by default; the
 startup log line reports which):

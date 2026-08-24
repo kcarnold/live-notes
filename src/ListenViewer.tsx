@@ -20,7 +20,7 @@ import {
 import "@livekit/components-styles";
 import { Track } from "livekit-client";
 import { LANGUAGE_BCP47, useStrings } from "./useLocale";
-import { LISTEN_ORIGINAL_CODE } from "./listenLanguages";
+import { useSourceLanguage } from "./useSourceLanguage";
 import { LiveTranscript } from "./LiveTranscript";
 import { getDocId } from "./getDocId";
 import { apiFetch } from "./writeKey";
@@ -121,7 +121,7 @@ function ListenAudio({
   }, [needsTranslator, docId, translatorLanguage]);
 
   // Subscribe to the audio we want only while audio is enabled: the translator
-  // bot for a translation, or the speaker's raw mic for "Original / English".
+  // bot for a translation, or the speaker's raw mic on "Original".
   // autoSubscribe is off, so we drive this explicitly. Re-running on participant
   // changes is essential for late joiners — the track is already published, so no
   // per-track event fires for us.
@@ -187,13 +187,17 @@ export function ListenViewer({ language }: { language: string }) {
   const s = useStrings();
   // `language` is a BCP-47 code from the picker; tolerate a legacy display name.
   const langCode = LANGUAGE_BCP47[language] ?? language;
+  const sourceLanguage = useSourceLanguage();
   // The bot this pane needs, or null for original audio — where we listen to the
   // speaker directly and read a transcript the server already writes for every live
   // broadcaster. Null is the whole "original" special case: no /translate request, no
   // demand attribute, nothing to re-request. It used to claim the default language for
   // all three, which spun up a bridge we didn't need and counted us on the broadcaster
   // dashboard as a listener of a language we weren't hearing.
-  const translatorLanguage = langCode === LISTEN_ORIGINAL_CODE ? null : langCode;
+  //
+  // "Original" means the language actually being spoken, whatever that is — asking to
+  // be translated into it would be asking a bot to repeat the speaker back to us.
+  const translatorLanguage = langCode === sourceLanguage ? null : langCode;
   const docId = getDocId();
   const [conn, setConn] = useState<ConnectInfo | null>(null);
   const [error, setError] = useState<string | null>(null);

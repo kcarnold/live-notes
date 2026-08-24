@@ -98,17 +98,25 @@ writer once each component announces its clientID (planned: via the status heart
 - **Bridges are presence-driven**: the supervisor (`translation-session-manager.ts`) derives
   the desired bridge set from who is in the LiveKit room — nothing runs without a broadcaster
   (a listener waiting for the talk costs nothing; bridges start the moment the organizer
-  joins), and with a broadcaster present the default/English-transcript bridge runs
+  joins), and with a broadcaster present the primary/transcript bridge runs
   unconditionally, plus each language named by a listener's `listen` attribute. So connecting
   clients *change* system behavior — preflight checks for a *translation* must include a
   synthetic listener, and "no French audio" is often just "nobody asked for French yet." The
-  English transcript is the exception and needs no listener: a talk is transcribed from the
+  source transcript is the exception and needs no listener: a talk is transcribed from the
   moment the broadcaster goes live, so the first listener to arrive gets history rather than
   a mid-sentence start. Because the loop reconciles (every ~10 s, plus pokes), bridges also
   *come back* by themselves after a server restart or a failed bridge, as long as demand
   persists. With the cost path enabled, a silent mic suspends the socket rather than tearing
   it down, so "nothing is translating" can also mean "nobody is speaking" — preflight then
   needs non-silent audio, not just a connection.
+- **The spoken language is per session, not a constant.** The broadcaster declares it when
+  they go live (`speaks` on their LiveKit token, plus `liveAudioConfig.sourceLanguage` in the
+  doc); everything downstream reads it rather than assuming English — the code the input
+  transcript is filed under, the listen picker's "Original" entry, and which language the
+  always-on bridge targets (English talk → the deployment default `fr`; anything else → `en`).
+  A broadcaster who declares nothing gets `LIVE_AUDIO_SOURCE_LANGUAGE`, default `en`, which is
+  what the macOS audio feeder and any pre-existing client land on. See
+  [src/liveAudioConfig.ts](../src/liveAudioConfig.ts).
 - **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
   show's scheduled date), so a service's state lives in one doc per date.
 - **Editor vs viewer** is enforced server-side via Y-Sweet token scope. The `#editor` request

@@ -45,6 +45,10 @@ Optional environment variables:
   endpoints viewers call and a write key can't protect (defaults 600 / 1200; 0 disables).
   Sized to stop a script, not a congregation — see [rateLimit.ts](rateLimit.ts).
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
+- `LIVE_AUDIO_SOURCE_LANGUAGE` - BCP-47 code a session is assumed to be *spoken* in when
+  nobody declares one (default `en`). The broadcast pane asks the speaker and publishes their
+  answer per session; this is only the fallback, for older clients and the macOS audio feeder.
+  See [src/liveAudioConfig.ts](src/liveAudioConfig.ts).
 - `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 - `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
 - `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
@@ -204,11 +208,22 @@ The app uses **Yjs** for real-time collaborative state management:
    - `liveTranscriptSegments-{code}` (Y.Array): live-speech utterances per language, written by
      the server-side bridge (see [src/transcriptKeys.ts](src/transcriptKeys.ts); older sessions
      have a `liveTranscript-{code}` Y.Text instead)
+   - `liveAudioConfig` (Y.Map): `sourceLanguage` — which of those codes is the speaker's own
+     words rather than a translation ([src/liveAudioConfig.ts](src/liveAudioConfig.ts))
    - `slideConversations` (Y.Map), `status` (Y.Map): the slide Q&A panel, and per-service status
      reporting (e.g. the Proclaim service's `proclaimService` entry)
 
    Note the two language namespaces: notes/slides use display names (`French`), live-audio
    transcripts use BCP-47 codes (`fr`).
+
+   **English is not privileged in the live-audio path.** The spoken language is a per-session
+   value: the broadcaster declares it in the broadcast pane, which writes it to
+   `liveAudioConfig` *and* onto their LiveKit token as the `speaks` attribute (the supervisor
+   decides from room presence and can't wait on a doc sync; the doc copy is what viewers and
+   exports read later). Everything that used to hard-code `en` follows it — which code the
+   input transcript is filed under, what "Original" means in the listen picker, which language
+   the always-on bridge translates into (`primaryTargetLanguage`), and which transcript an
+   export marks as the source.
 
 ### Translation Pipeline
 
@@ -513,6 +528,7 @@ Lazily imported in [App.tsx](src/App.tsx) so the LiveKit SDK stays out of the ma
 - [BroadcastControl.tsx](src/BroadcastControl.tsx) - Speaker pane: mic publishing, level meter, listener dashboard
 - [LiveTranscript.tsx](src/LiveTranscript.tsx) - Transcript for one language code, read from Yjs (no LiveKit dependency)
 - [transcriptKeys.ts](src/transcriptKeys.ts) / [useTranscriptSegments.ts](src/useTranscriptSegments.ts) - Doc keys and the read hook
+- [liveAudioConfig.ts](src/liveAudioConfig.ts) / [useSourceLanguage.ts](src/useSourceLanguage.ts) - The session's spoken language: doc contract and the read hook
 
 ### TTS System
 - [useTTS.ts](src/useTTS.ts) - Low-level TTS hook managing audio playback lifecycle

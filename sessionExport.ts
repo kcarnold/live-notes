@@ -13,6 +13,8 @@
  *   - `slideTranslations`     Y.Map slideTranslationKey(lang, text) -> entry
  *   - `liveTranscriptSegments-{code}` Y.Array of utterances per language (live speech
  *     translation); `liveTranscript-{code}` Y.Text in pre-segments sessions
+ *   - `liveAudioConfig`      Y.Map holding `sourceLanguage` — which of those codes is
+ *     the speaker's own words rather than a translation
  *   - `transcriptDoc`         Y.XmlFragment (legacy Web Speech API transcript)
  *
  * Languages are never hard-coded: each section discovers the languages actually
@@ -27,8 +29,8 @@ import {
   type SlideTranslationEntry,
   type ResolvedSlideTranslation,
 } from './src/slideTranslation.ts';
+import { readSourceLanguage } from './src/liveAudioConfig.ts';
 import {
-  LIVE_TRANSCRIPT_SOURCE_CODE,
   formatPauseGap,
   isLongPause,
   liveTranscriptCodes,
@@ -62,11 +64,16 @@ export interface ExportedPresentation {
 }
 
 export interface ExportedLiveTranscript {
-  /** BCP-47 code the transcript was published under (`en` is the source). */
+  /** BCP-47 code the transcript was published under. */
   code: string;
   /** Localized display name for the code, e.g. "French" (falls back to the code). */
   label: string;
-  /** True for the English source transcript produced by the primary bridge. */
+  /**
+   * True for the transcript of what the speaker actually said, produced by the primary
+   * bridge. Which language that is comes from the doc (see src/liveAudioConfig.ts), so
+   * an export of a Spanish-spoken service marks Spanish as the source; sessions
+   * recorded before that setting existed were English, and still read that way.
+   */
   isSource: boolean;
   /** Utterances in order, each with the silence that preceded it (when recorded). */
   segments: TranscriptSegment[];
@@ -86,7 +93,7 @@ export interface SessionExport {
   notes: ExportedNoteLine[];
   presentations: ExportedPresentation[];
   /**
-   * Live speech-translation transcripts (English source + each target language),
+   * Live speech-translation transcripts (the spoken language + each target language),
    * written by the live-audio pipeline into `liveTranscript-{code}` Y.Text keys.
    */
   liveTranscripts: ExportedLiveTranscript[];
@@ -230,11 +237,12 @@ function extractTranscript(ydoc: Y.Doc): string {
  * Collect the live speech-translation transcripts. The pipeline creates a transcript
  * per language on demand, so which codes exist varies by session — enumerate the
  * doc's root types rather than guessing. `liveTranscriptCodes` already orders them
- * (English source first, then by localized label) and covers pre-segments sessions,
+ * (spoken language first, then by localized label) and covers pre-segments sessions,
  * whose transcripts `readTranscriptSegments` reads from the legacy Y.Text.
  */
 function extractLiveTranscripts(ydoc: Y.Doc): ExportedLiveTranscript[] {
   const transcripts: ExportedLiveTranscript[] = [];
+  const sourceCode = readSourceLanguage(ydoc);
 
   for (const code of liveTranscriptCodes(ydoc)) {
     const segments = readTranscriptSegments(ydoc, code);
@@ -242,7 +250,7 @@ function extractLiveTranscripts(ydoc: Y.Doc): ExportedLiveTranscript[] {
     transcripts.push({
       code,
       label: liveTranscriptLabel(code),
-      isSource: code === LIVE_TRANSCRIPT_SOURCE_CODE,
+      isSource: code === sourceCode,
       segments,
       text: transcriptPlainText(segments),
     });

@@ -365,6 +365,8 @@ class FakeGeminiSocket extends EventEmitter {
 
   readyState = FakeGeminiSocket.OPEN;
   readonly audioFramesReceived: string[] = [];
+  /** Setup messages this socket was handed, so tests can assert what we asked Gemini for. */
+  readonly setups: Record<string, unknown>[] = [];
 
   constructor(readonly url: string) {
     super();
@@ -375,6 +377,7 @@ class FakeGeminiSocket extends EventEmitter {
   send(raw: string): void {
     const msg = JSON.parse(raw);
     if (msg.setup) {
+      this.setups.push(msg.setup);
       // Gemini answers setup with setupComplete; until it does, the bridge won't send audio.
       setTimeout(() => this.emit("message", Buffer.from(JSON.stringify({ setupComplete: {} }))), 0);
       return;
@@ -387,6 +390,11 @@ class FakeGeminiSocket extends EventEmitter {
   close(): void {
     this.readyState = 3;
     this.emit("close", 1000, Buffer.from(""));
+  }
+
+  /** Push a serverContent message at the bridge, as Gemini would. */
+  deliver(message: unknown): void {
+    this.emit("message", Buffer.from(JSON.stringify(message)));
   }
 }
 
@@ -938,6 +946,63 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
 
     await vi.advanceTimersByTimeAsync(45_000); // past the 30s suspend window, no frames at all
     expect(events).not.toContain("gemini_suspended_silence");
+    await bridge.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // Which language the two transcripts are filed under. Getting this wrong is the
+  // quietest failure in the system: everything keeps flowing, and a Spanish talk is
+  // simply recorded — and exported, and labelled in the picker — as English.
+  // -------------------------------------------------------------------------
+
+  it("files the speaker's own words under the language being spoken", async () => {
+    const appended: Array<[string, string]> = [];
+    const writer = {
+      appendDelta: (code: string, text: string) => appended.push([code, text]),
+    };
+    const { bridge } = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      writer: writer as unknown as ConstructorParameters<typeof TranslationBridge>[3]["writer"],
+      writesSourceTranscript: true,
+      sourceLanguage: "es",
+    });
+
+    FakeGeminiSocket.instances[0].deliver({
+      serverContent: {
+        inputTranscription: { text: "Buenos días." },
+        outputTranscription: { text: "Good morning." },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The target transcript goes under the bridge's own language, as always; the input
+    // one goes under what was actually said, not under a hard-coded `en`.
+    expect(appended).toEqual([
+      ["fr", "Good morning."],
+      ["es", "Buenos días."],
+    ]);
+    await bridge.stop();
+  });
+
+  it("asks Gemini to detect the spoken language rather than naming it", async () => {
+    // Gemini Live Translate has no source-language field — it detects the input itself,
+    // which is exactly what lets a non-English speaker work at all. If a future setup
+    // change ever tries to pin it, this is where that shows up.
+    const { bridge } = await boot((room) => room.seatOrganizer(ORGANIZER), {
+      writesSourceTranscript: true,
+      sourceLanguage: "es",
+    });
+
+    const setup = FakeGeminiSocket.instances[0].setups[0];
+    expect(setup).toHaveProperty("inputAudioTranscription");
+    const translationConfig = (setup.generationConfig as { translationConfig: object })
+      .translationConfig;
+    // The target is named; the source is conspicuously absent — no sourceLanguageCode,
+    // no locale hint, nothing that could pin detection to the wrong language.
+    expect(Object.keys(translationConfig).sort()).toEqual([
+      "echoTargetLanguage",
+      "targetLanguageCode",
+    ]);
+    expect((translationConfig as { targetLanguageCode: string }).targetLanguageCode).toBe("fr");
     await bridge.stop();
   });
 });

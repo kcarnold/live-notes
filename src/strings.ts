@@ -59,7 +59,8 @@ export interface AppStrings {
   // Live audio translation (Gemini Live + LiveKit)
   listenLive: string;
   stopAudio: string;
-  englishTranscript: string;
+  sourceTranscript: string;
+  spokenLanguage: string;
   liveListening: string;
   waitingForSpeaker: string;
   restartingTranslation: string;
@@ -170,7 +171,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     transcriptPause: 'Pause',
     listenLive: 'Listen live',
     stopAudio: 'Stop audio',
-    englishTranscript: 'English transcript',
+    sourceTranscript: 'Source transcript',
+    spokenLanguage: 'Spoken language',
     liveListening: 'Listening live',
     waitingForSpeaker: 'Waiting for the speaker…',
     restartingTranslation: 'Restarting translation…',
@@ -184,7 +186,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Active translations',
     noActiveTranslations: 'None yet — listeners can request them',
     broadcastEditorOnly: 'Broadcasting is available in editor mode (#editor).',
-    listenOriginal: 'Original / English',
+    listenOriginal: 'Original',
     favorites: 'Favorites',
     allLanguages: 'All languages',
     micLevel: 'Mic level',
@@ -277,7 +279,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     transcriptPause: 'Pause',
     listenLive: 'Écouter en direct',
     stopAudio: 'Couper le son',
-    englishTranscript: 'Transcription anglaise',
+    sourceTranscript: 'Transcription source',
+    spokenLanguage: 'Langue parlée',
     liveListening: 'Écoute en direct',
     waitingForSpeaker: 'En attente de l’orateur…',
     restartingTranslation: 'Redémarrage de la traduction…',
@@ -291,7 +294,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Traductions actives',
     noActiveTranslations: 'Aucune pour l’instant— les auditeurs peuvent en demander',
     broadcastEditorOnly: 'La diffusion est disponible en mode éditeur (#editor).',
-    listenOriginal: 'Original / Anglais',
+    listenOriginal: 'Original',
     favorites: 'Favoris',
     allLanguages: 'Toutes les langues',
     micLevel: 'Niveau du micro',
@@ -384,7 +387,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     transcriptPause: 'Pausa',
     listenLive: 'Escuchar en vivo',
     stopAudio: 'Detener audio',
-    englishTranscript: 'Transcripción en inglés',
+    sourceTranscript: 'Transcripción de origen',
+    spokenLanguage: 'Idioma hablado',
     liveListening: 'Escuchando en vivo',
     waitingForSpeaker: 'Esperando al orador…',
     restartingTranslation: 'Reiniciando la traducción…',
@@ -398,7 +402,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Traducciones activas',
     noActiveTranslations: 'Ninguna aún— los oyentes pueden solicitarlas',
     broadcastEditorOnly: 'La transmisión está disponible en modo editor (#editor).',
-    listenOriginal: 'Original / Inglés',
+    listenOriginal: 'Original',
     favorites: 'Favoritos',
     allLanguages: 'Todos los idiomas',
     micLevel: 'Nivel del micrófono',
@@ -491,7 +495,8 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     transcriptPause: 'Poz',
     listenLive: 'Koute an dirèk',
     stopAudio: 'Sispann odyo',
-    englishTranscript: 'Transkripsyon anglè',
+    sourceTranscript: 'Transkripsyon sous',
+    spokenLanguage: 'Lang y ap pale a',
     liveListening: 'Ap koute an dirèk',
     waitingForSpeaker: 'N ap tann moun k ap pale a…',
     restartingTranslation: 'N ap redemare tradiksyon an…',
@@ -505,7 +510,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     activeTranslations: 'Tradiksyon aktif',
     noActiveTranslations: 'Pa gen okenn pou kounye a— moun k ap koute ka mande yo',
     broadcastEditorOnly: 'Difizyon disponib nan mòd editè (#editor).',
-    listenOriginal: 'Orijinal / Angle',
+    listenOriginal: 'Orijinal',
     favorites: 'Favori',
     allLanguages: 'Tout lang yo',
     micLevel: 'Nivo mikwo',

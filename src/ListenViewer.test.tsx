@@ -13,6 +13,14 @@ const roomState = vi.hoisted(() => ({
   participants: [] as Array<{ identity: string; trackPublications: Map<string, never> }>,
 }));
 
+// What the session says the speaker is speaking. `en` is the historical default;
+// a test that wants a non-English talk sets this before rendering.
+const sessionState = vi.hoisted(() => ({ sourceLanguage: "en" }));
+
+vi.mock("./useSourceLanguage", () => ({
+  useSourceLanguage: () => sessionState.sourceLanguage,
+}));
+
 vi.mock("./useLocale", () => ({
   LANGUAGE_BCP47: { French: "fr", English: "en" },
   useStrings: () => ({
@@ -66,6 +74,7 @@ describe("ListenViewer", () => {
 
   beforeEach(() => {
     roomState.participants = [];
+    sessionState.sourceLanguage = "en";
     Object.defineProperty(window.navigator, "sendBeacon", {
       configurable: true,
       value: vi.fn(() => true),
@@ -147,5 +156,43 @@ describe("ListenViewer", () => {
       await vi.advanceTimersByTimeAsync(35_000);
     });
     expect(translateRequests()).toBe(1); // still just the opt-in request
+  });
+
+  it("asks for no bot when the chosen language is the one being spoken", async () => {
+    // "Original" is whatever the speaker is speaking, so it moves with the session:
+    // in a Spanish-spoken service, choosing Spanish means hearing the speaker, not
+    // paying a bot to translate Spanish into Spanish.
+    sessionState.sourceLanguage = "es";
+    roomState.participants = [participant("organizer-host")];
+    render(<ListenViewer language="es" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+
+    expect(translateRequests()).toBe(0);
+    // ...and the token carries no `listen` demand for a language nobody translates.
+    const tokenCall = fetchMock.mock.calls.find(([input]) => input === "/api/livekit/token");
+    expect(JSON.parse((tokenCall?.[1] as RequestInit).body as string)).not.toHaveProperty(
+      "listenLanguage",
+    );
+  });
+
+  it("still asks for a bot when English is a target rather than the source", async () => {
+    // The mirror of the case above, and the one the old hard-coded `en` got wrong:
+    // with a Spanish speaker, English is an ordinary translation target.
+    sessionState.sourceLanguage = "es";
+    roomState.participants = [participant("organizer-host")];
+    render(<ListenViewer language="en" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+
+    expect(translateRequests()).toBe(1);
+    const translateCall = fetchMock.mock.calls.find(
+      ([input]) => input === "/api/livekit/translate",
+    );
+    expect(JSON.parse((translateCall?.[1] as RequestInit).body as string)).toMatchObject({
+      targetLanguage: "en",
+    });
   });
 });
