@@ -61,12 +61,12 @@ struct ConfigView: View {
                         .font(.caption)
                         .foregroundStyle(controller.config.schedule.willEverRun ? Color.secondary : Color.orange)
                         .fixedSize(horizontal: false, vertical: true)
-                    // The two controls people confuse. Say the relationship in the place the
-                    // second one isn't: this checkbox only matters in Schedule mode.
+                    // Says which of the two places is in charge, in the place the other one
+                    // isn't. This is the durable switch; the menu bar only nudges one run.
                     Text("""
-                         The menu bar's “When to publish” decides whether this schedule is \
-                         used at all — it must be set to Schedule. Always on and Always off \
-                         ignore everything above.
+                         This is the only thing that starts the feeder on its own. The menu \
+                         bar's Start now / Stop now only shift the current run; it follows \
+                         the schedule again afterwards.
                          """)
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

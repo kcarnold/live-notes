@@ -1,15 +1,5 @@
 import Foundation
 
-/// Whether the user has forced the feeder on/off regardless of the schedule.
-public enum ManualOverride: String, Codable, Sendable, CaseIterable {
-    /// Follow the schedule.
-    case off
-    /// Run now, ignore the schedule.
-    case forceOn
-    /// Stay off now, ignore the schedule.
-    case forceOff
-}
-
 /// A daily run window plus the weekdays it applies to.
 ///
 /// Minutes are minutes-since-local-midnight in `[0, 1440)`. If `stopMinute` is greater
@@ -104,8 +94,8 @@ public struct Schedule: Codable, Equatable, Sendable {
     public var summary: String {
         guard enabled else {
             // Deliberately doesn't name the way out: this sentence shows in both the settings
-            // window (where the checkbox is right there) and the menu bar (where the mode
-            // picker is), and naming one of them would be wrong in the other place.
+            // window (where the checkbox is right there) and, via `RunPlan`, the menu bar
+            // (where it isn't), and naming the checkbox would be wrong in the second place.
             return "Schedule off — nothing will start the feeder on its own."
         }
         if activeDays.isEmpty {
@@ -140,23 +130,24 @@ public struct FeederConfig: Codable, Equatable, Sendable {
     public var deviceUID: String?
     /// 0-based channel index to pull from the multichannel device.
     public var channelIndex: Int
+    /// The only thing that starts the feeder on its own. Manual starts and stops are held in
+    /// memory (`RunHold`) and deliberately not persisted: they last one run, and a relaunch
+    /// should come back following the schedule rather than resuming somebody's Wednesday
+    /// afternoon override.
     public var schedule: Schedule
-    public var manualOverride: ManualOverride
 
     public init(serverURL: String = "https://notelate.com",
                 docIDOverride: String? = nil,
                 writeKey: String? = nil,
                 deviceUID: String? = nil,
                 channelIndex: Int = 0,
-                schedule: Schedule = Schedule(),
-                manualOverride: ManualOverride = .off) {
+                schedule: Schedule = Schedule()) {
         self.serverURL = serverURL
         self.docIDOverride = docIDOverride
         self.writeKey = writeKey
         self.deviceUID = deviceUID
         self.channelIndex = channelIndex
         self.schedule = schedule
-        self.manualOverride = manualOverride
     }
 
     /// The effective doc id / LiveKit room name for `now`, honoring an override.
@@ -168,32 +159,11 @@ public struct FeederConfig: Codable, Equatable, Sendable {
         return String(format: "doc-%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
-    /// One sentence for what will actually govern the feeder, override included.
-    ///
-    /// Two separate controls decide this — the schedule's own **Enable schedule**, and the
-    /// menu bar's **mode** (this `manualOverride`) — and they are easy to confuse, because
-    /// each can independently stop the feeder from ever starting. The mode is the outer one:
-    /// it decides *whether the schedule is consulted at all*, and only `.off` (mode
-    /// "Schedule") hands the decision to `Schedule`. So: read the mode first, and only then
-    /// does the schedule's own summary mean anything.
-    public var modeSummary: String {
-        switch manualOverride {
-        case .forceOn:
-            return "Always on — publishing regardless of the schedule."
-        case .forceOff:
-            return "Always off — the schedule is ignored until you switch back to Schedule."
-        case .off:
-            return schedule.summary
-        }
-    }
-
     /// Whether anything will start the feeder without a person clicking — the question that
-    /// matters for an unattended install, and one neither control answers on its own.
-    public var willStartUnattended: Bool {
-        switch manualOverride {
-        case .forceOn: return true
-        case .forceOff: return false
-        case .off: return schedule.willEverRun
-        }
-    }
+    /// matters for an unattended install.
+    ///
+    /// Now simply the schedule's own answer. It used to combine two controls that could each
+    /// independently stop the feeder from ever starting, which is the confusion the mode picker
+    /// created and this property existed to warn about.
+    public var willStartUnattended: Bool { schedule.willEverRun }
 }

@@ -91,23 +91,27 @@ Days are the days the window **starts** on. A window whose stop time is earlier 
 time wraps past midnight and finishes the next morning, which the summary spells out
 (*"Runs Sat, 23:00–01:00 the next day."*).
 
-### Schedule vs. the menu bar's "When to publish"
+### Starting and stopping by hand
 
-These are two different switches and it's worth being clear which is which:
+The schedule says when the feeder runs, and it is the **only** thing that starts it on its own.
+The menu bar's **Start now** and **Stop now** don't change the schedule — they shift the current
+run's edge, and then it follows the schedule again:
 
-| Control | Where | What it decides |
-|---|---|---|
-| **When to publish**: Schedule / Always on / Always off | menu-bar popover | Whether the schedule is consulted **at all** |
-| **Enable schedule** + days + times | Settings → Schedule | What "Schedule" mode *does*, when it's selected |
+- **Start now** at 9:40, with a 10:00–12:00 window, runs 9:40–12:00. You don't have to put
+  anything back afterwards.
+- **Stop now** at 11:15 ends that morning's run. The next scheduled run is unaffected.
+- With no schedule, or one whose next run is days away, a manual start lasts **four hours** and
+  then stops. This is a deliberate ceiling: the Mac is unattended, and publishing evicts
+  whoever else holds the room.
+- **Follow schedule** appears while a manual start or stop is in effect and ends it immediately.
 
-**When to publish** is the outer switch. *Always on* publishes continuously and ignores
-everything in the Schedule section; *Always off* stays down and ignores it too; only
-*Schedule* hands the decision to the settings above. So a perfectly good schedule does nothing
-if the mode is *Always off*, and a completely blank one is irrelevant if the mode is
-*Always on*. The line under the picker always states which of those you're in.
+The line under the buttons always says what happens next and when — *"Next run Sun
+10:00–12:00."*, *"Started early — runs until 12:00."* — and turns orange when nothing will start
+the feeder on its own.
 
-(This replaced three buttons — *Start now* / *Stop now* / *Follow schedule* — that set the same
-three modes without ever showing which one you were in.)
+Nothing here is a mode, and none of it is saved: quitting or relaunching comes back on the
+schedule. To stop the feeder for a week, untick **Enable schedule**; to run it at a different
+time, change the schedule.
 
 ## Write key
 
@@ -231,7 +235,7 @@ permission prompt.
 - [x] LiveKit publisher (`Publisher`: token fetch, manual rendering + mixer.capture,
       retry/backoff, identity release on stop) — custom-audio publishing verified end-to-end
       on real hardware
-- [x] Orchestration (`AppController`: schedule eval, manual override, waiting-for-device,
+- [x] Orchestration (`AppController`: schedule eval, manual holds, waiting-for-device,
       pipeline reconciliation)
 - [x] Losing the room is noticed and recovered from (`RoomDelegate` → `DisconnectPolicy`) —
 - [x] Menu-bar UI (NSStatusItem + NSPopover) + settings window + login-item toggle
