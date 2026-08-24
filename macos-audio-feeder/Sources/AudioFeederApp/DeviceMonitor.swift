@@ -15,26 +15,35 @@ final class DeviceMonitor {
     /// Called on the main queue whenever the set of hardware devices changes.
     var onDevicesChanged: (() -> Void)?
 
-    private var listenerInstalled = false
+    /// The exact block handed to `AudioObjectAddPropertyListenerBlock`. CoreAudio matches
+    /// listeners by block identity, so removal has to pass *this* block back — a freshly
+    /// written `{ _, _ in }` with the same shape matches nothing and silently leaves the
+    /// listener installed.
+    private var listenerBlock: AudioObjectPropertyListenerBlock?
     private var address = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDevices,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain)
 
     func startMonitoring() {
-        guard !listenerInstalled else { return }
+        guard listenerBlock == nil else { return }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.onDevicesChanged?()
+        }
         let status = AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main) { [weak self] _, _ in
-                self?.onDevicesChanged?()
-            }
-        listenerInstalled = (status == noErr)
+            AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, block)
+        guard status == noErr else {
+            Log.devices.error("failed to install hot-plug listener: OSStatus \(status, privacy: .public)")
+            return
+        }
+        listenerBlock = block
     }
 
     func stopMonitoring() {
-        guard listenerInstalled else { return }
+        guard let block = listenerBlock else { return }
         AudioObjectRemovePropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main) { _, _ in }
-        listenerInstalled = false
+            AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main, block)
+        listenerBlock = nil
     }
 
     /// All current input-capable devices.
@@ -101,7 +110,7 @@ final class DeviceMonitor {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         var dataSize = UInt32(MemoryLayout<CFString?>.size)
-        var cfString: CFString? = nil
+        var cfString: CFString?
         let status = withUnsafeMutablePointer(to: &cfString) { ptr -> OSStatus in
             AudioObjectGetPropertyData(device, &address, 0, nil, &dataSize, ptr)
         }
