@@ -150,6 +150,9 @@ uv run pytest
 
 # Run a single test
 uv run pytest tests/test_slide_sync_runtime.py::test_reconnects_after_websocket_drop
+
+# Run the `slow` tests too (deselected by default; CI always runs them)
+uv run pytest -m slow
 ```
 
 Tests live in [tests/](tests/), split to match the decoupled modules: `test_slide_feed`,
@@ -161,7 +164,10 @@ re-push), `test_slide_seam` (replayed feed drives the real consumers), `test_sli
 with `uv run tests/fixtures/make_synthetic_service.py`), `test_proclaim_lib`,
 `test_service_version` (the self-reported version / "update pending" flag),
 `test_session_client` (proposing the on-air date and obeying the answer, #111), and
-`test_proclaim_launcher` (the auto-update launch wrapper).
+`test_proclaim_launcher` (the auto-update launch wrapper — marked `slow` and deselected
+from the default run: it shells out to real git and real subprocess timeouts for ~25s to
+cover a file almost no change touches, so run it with `-m slow` when you edit
+[proclaim_service_launch.sh](proclaim_service_launch.sh); CI runs it on every push).
 The shared fakes for the Proclaim DB, the Y-Sweet websocket, and the Yjs Provider live in
 [tests/helpers.py](tests/helpers.py); timing is scaled down by injecting it (constructor args)
 so loops run in milliseconds — no real Proclaim or Y-Sweet needed. Async tests run on the

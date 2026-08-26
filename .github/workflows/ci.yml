@@ -30,4 +30,5 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv run pytest -q
+      # Includes the `slow` launcher tests, which pyproject deselects locally.
+      - run: uv run pytest -q -m "slow or not slow"

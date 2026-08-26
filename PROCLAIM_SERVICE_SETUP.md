@@ -168,7 +168,7 @@ or keep a separate clone for the installed service.
 The automated version needs no Proclaim, no network, and no real `uv`:
 
 ```bash
-uv run pytest tests/test_proclaim_launcher.py
+uv run pytest -m slow    # the launcher tests; deselected from a plain `uv run pytest`
 ```
 
 Those tests build a throwaway remote and checkout, then break the update every
