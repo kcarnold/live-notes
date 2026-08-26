@@ -85,3 +85,32 @@ describe('LiveTranscript pause indicators', () => {
     expect(pauseLabels()).toEqual([]);
   });
 });
+
+// A viewer opening an existing session mounts before the Yjs doc syncs, so the
+// transcript arrives one render *after* the component. Whatever is already there
+// when it lands is history, not new text.
+describe('LiveTranscript new-text highlight', () => {
+  const highlighted = () =>
+    Array.from(document.querySelectorAll('p.transcript-new')).map((el) => el.textContent);
+
+  it('does not highlight a transcript that syncs in after mount', () => {
+    const { rerender } = render(<LiveTranscript langCode="en" />);
+    expect(highlighted()).toEqual([]);
+
+    segments.current = [{ text: 'One.' }, { text: 'Two.' }, { text: 'Three.' }];
+    rerender(<LiveTranscript langCode="en" />);
+
+    expect(screen.getByText('Three.')).toBeTruthy();
+    expect(highlighted()).toEqual([]);
+  });
+
+  it('highlights utterances appended after the transcript has landed', () => {
+    segments.current = [{ text: 'One.' }];
+    const { rerender } = render(<LiveTranscript langCode="en" />);
+
+    segments.current = [{ text: 'One.' }, { text: 'Two.' }];
+    rerender(<LiveTranscript langCode="en" />);
+
+    expect(highlighted()).toEqual(['Two.']);
+  });
+});
