@@ -77,6 +77,21 @@ export interface CurrentSession {
   expiresAt: string | null;
 }
 
+/**
+ * One writer recently seen asking to write to some doc — `GET /api/session/writers`.
+ *
+ * Here rather than in the registry for the same reason as {@link CurrentSession}: the
+ * server produces it and the status page renders it, and two hand-kept copies of a wire
+ * shape is how a field quietly stops meaning the same thing on both ends.
+ */
+export interface WriterSighting {
+  docId: string;
+  /** Who: a write-key label, `browser`, `proclaim-service`, `broadcaster:<identity>`. */
+  writer: string;
+  /** ISO timestamp of the most recent sighting. */
+  at: string;
+}
+
 /** A doc id must look like one before it becomes the answer everyone reads. */
 export const DOC_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 

@@ -45,7 +45,8 @@ an incident happens that this list would not have caught, add a line.
 - [ ] "Who is writing where" lists the Proclaim service and the editor browsers, all green
       (same doc). Any amber row is a component writing somewhere else — fix that first.
 - [ ] Pin a scratch doc from `/status`, reload a viewer: it lands on the pinned doc. Clear
-      the pin, reload: it goes back. **Do this before the service, not during it.**
+      the pin, reload: it goes back. The Proclaim service follows within ~a minute without
+      going off air — watch its log say so. **Still: rehearse this before the service.**
 - [ ] `?doc=doc-scratch` still overrides everything, pin included.
 - [ ] Server boot log shows the intended `SESSION_TIMEZONE` — a wrong zone is a wrong doc
       for everyone, and an evening service is when it shows up.

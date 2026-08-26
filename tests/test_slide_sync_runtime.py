@@ -313,3 +313,71 @@ async def test_translator_tracks_the_runtime_doc_id_across_a_doc_change():
 
     assert rt.doc_id == "doc-2030-01-15"
     assert rt.translator.doc_id == "doc-2030-01-15"
+
+
+class SwitchingResolver:
+    """A server whose answer changes — an operator pinning a doc mid-service."""
+
+    def __init__(self, first: SessionAnswer, then: SessionAnswer, after: int = 1):
+        self._answers = [first, then]
+        self._after = after
+        self.calls = 0
+
+    async def resolve(self, session):
+        self.calls += 1
+        return self._answers[0] if self.calls <= self._after else self._answers[1]
+
+
+async def test_session_ends_when_the_server_names_a_different_doc():
+    """An operator pin has to reach a service that is *already* on air (#111).
+
+    A show that never goes off air would otherwise hold the service on the wrong doc for
+    the whole service — which is precisely the half-hour the pin exists to rescue.
+    """
+    feed = FakeFeed([on_air_snap()])
+    pub = YjsSlidePublisher()
+    tr = SlideTranslator(mock.AsyncMock(return_value=None), ["French"], 0.001)
+    resolver = SwitchingResolver(
+        SessionAnswer("doc-2026-08-09", "date", "accepted"),
+        SessionAnswer("doc-rehearsal", "pin", "pinned"),
+    )
+    timing = fast_timing()
+    timing.session_recheck_interval = 0.0
+    rt = SlideSyncRuntime(
+        feed, pub, tr, "http://localhost:8000", timing=timing, resolver=resolver,
+    )
+    rt.get_ysweet_token = mock.AsyncMock(return_value={"url": "ws://test"})
+
+    await rt._resolve_doc_for_session(None)
+    assert rt.doc_id == "doc-2026-08-09"
+
+    with patched_connection(FakeWebSocket()):
+        with anyio.fail_after(2):
+            await rt._run_session()  # returns rather than running forever
+
+    # The session ended; run() is what re-resolves, with nothing connected.
+    assert rt.doc_id == "doc-2026-08-09"
+    await rt._resolve_doc_for_session(None)
+    assert rt.doc_id == "doc-rehearsal"
+
+
+async def test_a_recheck_failure_does_not_drop_a_healthy_session():
+    """The doc question can wait; the connection carrying the service cannot be re-made
+    for free. A resolver blip must not end a session that is working."""
+    feed = FakeFeed([on_air_snap()])
+    rt = make_runtime(feed, doc_id=None)
+    rt.resolver = mock.Mock(resolve=mock.AsyncMock(side_effect=OSError("connection refused")))
+    rt.doc_id = "doc-test"
+    rt.timing.session_recheck_interval = 0.0
+
+    assert await rt._doc_still_current(None) is True
+
+
+async def test_an_explicit_override_never_re_asks_the_server():
+    """The escape hatch stays an escape hatch, mid-session as well as at connect."""
+    rt = make_runtime(FakeFeed([on_air_snap()]))  # explicit doc_id="doc-test"
+    resolver = FakeResolver(SessionAnswer("doc-elsewhere", "pin", "pinned"))
+    rt.resolver = resolver
+
+    assert await rt._doc_still_current(None) is True
+    assert resolver.proposed == []

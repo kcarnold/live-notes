@@ -10,7 +10,7 @@ import json
 import httpx
 import pytest
 
-from session_client import ServerSessionResolver, SessionAnswer
+from session_client import ServerSessionResolver, SessionAnswer, SessionResolutionError
 from slide_feed import SessionInfo
 from datetime import date
 
@@ -112,4 +112,34 @@ async def test_raises_on_a_server_error_rather_than_guessing(monkeypatch):
     monkeypatch.setattr(httpx, 'AsyncClient', client)
 
     with pytest.raises(httpx.HTTPStatusError):
+        await resolver.resolve(SessionInfo('pres-1', date(2026, 8, 9)))
+
+
+async def test_a_non_json_answer_lands_in_the_reconnect_bucket(monkeypatch):
+    """A proxy returning an HTML error page with a 200 must not kill the service.
+
+    Before this, `response.json()` raised a bare ValueError straight past the runtime's
+    reconnect handler and the LaunchAgent's "always runs" invariant with it.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text='<html>captive portal</html>')
+
+    resolver, client = transport(handler)
+    monkeypatch.setattr(httpx, 'AsyncClient', client)
+
+    with pytest.raises(SessionResolutionError):
+        await resolver.resolve(SessionInfo('pres-1', date(2026, 8, 9)))
+
+
+async def test_an_answer_that_names_no_doc_is_refused(monkeypatch):
+    """Same reasoning: a KeyError here would escape the loop instead of retrying."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={'source': 'date', 'outcome': 'accepted'})
+
+    resolver, client = transport(handler)
+    monkeypatch.setattr(httpx, 'AsyncClient', client)
+
+    with pytest.raises(SessionResolutionError):
         await resolver.resolve(SessionInfo('pres-1', date(2026, 8, 9)))

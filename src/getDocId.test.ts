@@ -5,7 +5,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
-  getCurrentSession,
   getDocId,
   getDocOverride,
   resetResolvedSession,
@@ -43,7 +42,6 @@ describe('resolveCurrentSession', () => {
     await resolveCurrentSession(fetchImpl);
     expect(fetchImpl).toHaveBeenCalledWith('/api/session/current');
     expect(getDocId()).toBe('doc-2026-08-09');
-    expect(getCurrentSession()?.source).toBe('proposal');
   });
 
   it('rejects when the server is unreachable — no local date fallback', async () => {

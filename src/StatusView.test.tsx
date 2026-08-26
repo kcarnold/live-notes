@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { StatusView } from './StatusView';
+import { StatusView, type SessionControl } from './StatusView';
 
 describe('StatusView', () => {
   it('renders a working export link for the session', () => {
@@ -149,9 +149,18 @@ describe('current session (#111)', () => {
     expiresAt: null,
   };
 
-  const noop = () => {};
+  /** A whole session control, so each test only names the part it is about. */
+  const control = (overrides: Partial<SessionControl> = {}): SessionControl => ({
+    session,
+    writers: [],
+    error: null,
+    busy: false,
+    onPin: () => {},
+    onClearPin: () => {},
+    ...overrides,
+  });
 
-  it('is hidden when the container passes no session', () => {
+  it('is hidden when the container has no answer yet', () => {
     render(<StatusView docId="doc-2026-08-09" statusEntries={{}} />);
     expect(screen.queryByText('Current session')).not.toBeInTheDocument();
   });
@@ -161,9 +170,9 @@ describe('current session (#111)', () => {
       <StatusView
         docId="doc-2026-08-09"
         statusEntries={{}}
-        session={{ ...session, source: 'proposal', setBy: 'proclaim-service' }}
-        onPinSession={noop}
-        onClearSessionPin={noop}
+        sessionControl={control({
+          session: { ...session, source: 'proposal', setBy: 'proclaim-service' },
+        })}
       />,
     );
     // Twice: the page header names the doc this browser is on, and the section names
@@ -174,39 +183,27 @@ describe('current session (#111)', () => {
   });
 
   it('pins the doc an operator types', async () => {
-    const onPinSession = vi.fn();
+    const onPin = vi.fn();
     render(
-      <StatusView
-        docId="doc-2026-08-09"
-        statusEntries={{}}
-        session={session}
-        onPinSession={onPinSession}
-        onClearSessionPin={noop}
-      />,
+      <StatusView docId="doc-2026-08-09" statusEntries={{}} sessionControl={control({ onPin })} />,
     );
     await userEvent.type(screen.getByLabelText('doc-YYYY-MM-DD'), 'doc-2026-08-16');
     await userEvent.click(screen.getByRole('button', { name: 'Pin' }));
-    expect(onPinSession).toHaveBeenCalledWith('doc-2026-08-16');
+    expect(onPin).toHaveBeenCalledWith('doc-2026-08-16');
   });
 
   it('offers to clear the pin only when there is one', () => {
     const { rerender } = render(
-      <StatusView
-        docId="doc-2026-08-09"
-        statusEntries={{}}
-        session={session}
-        onPinSession={noop}
-        onClearSessionPin={noop}
-      />,
+      <StatusView docId="doc-2026-08-09" statusEntries={{}} sessionControl={control()} />,
     );
     expect(screen.queryByRole('button', { name: /clear pin/i })).not.toBeInTheDocument();
     rerender(
       <StatusView
         docId="doc-2026-08-09"
         statusEntries={{}}
-        session={{ ...session, source: 'pin', setBy: 'status-page' }}
-        onPinSession={noop}
-        onClearSessionPin={noop}
+        sessionControl={control({
+          session: { ...session, source: 'pin', setBy: 'status-page' },
+        })}
       />,
     );
     expect(screen.getByRole('button', { name: /clear pin/i })).toBeInTheDocument();
@@ -217,13 +214,12 @@ describe('current session (#111)', () => {
       <StatusView
         docId="doc-2026-08-09"
         statusEntries={{}}
-        session={session}
-        writers={[
-          { writer: 'proclaim', docId: 'doc-2026-08-02', at: new Date().toISOString() },
-          { writer: 'booth', docId: 'doc-2026-08-09', at: new Date().toISOString() },
-        ]}
-        onPinSession={noop}
-        onClearSessionPin={noop}
+        sessionControl={control({
+          writers: [
+            { writer: 'proclaim', docId: 'doc-2026-08-02', at: new Date().toISOString() },
+            { writer: 'booth', docId: 'doc-2026-08-09', at: new Date().toISOString() },
+          ],
+        })}
       />,
     );
     expect(screen.getByText('writing to a different session')).toBeInTheDocument();
@@ -235,10 +231,7 @@ describe('current session (#111)', () => {
       <StatusView
         docId="doc-2026-08-09"
         statusEntries={{}}
-        session={session}
-        sessionError="Unauthorized"
-        onPinSession={noop}
-        onClearSessionPin={noop}
+        sessionControl={control({ error: 'Unauthorized' })}
       />,
     );
     expect(screen.getByText(/Could not change the pin: Unauthorized/)).toBeInTheDocument();

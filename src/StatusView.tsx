@@ -135,6 +135,26 @@ function WriteKeySection({
 }
 
 /**
+ * Everything the current-session section needs, as one value.
+ *
+ * One object rather than six loose props because the six are all-or-nothing: a `session`
+ * without an `onPin` renders a control that silently does nothing, which on this page —
+ * the one someone opens mid-service when a doc is wrong — is the worst possible failure.
+ * Making it a single optional prop lets the type say so.
+ */
+export interface SessionControl {
+  session: CurrentSession;
+  /** Writers recently seen, so a doc-id disagreement is visible rather than inferred. */
+  writers: WriterSighting[];
+  /** Why the last pin change failed, if it did. */
+  error: string | null;
+  /** True while a pin change is in flight. */
+  busy: boolean;
+  onPin: (docId: string) => void;
+  onClearPin: () => void;
+}
+
+/**
  * The operator control from #111: which doc everything is writing to, and the pin that
  * overrides it.
  *
@@ -150,14 +170,7 @@ function CurrentSessionSection({
   busy,
   onPin,
   onClearPin,
-}: {
-  session: CurrentSession;
-  writers: WriterSighting[];
-  error: string | null;
-  busy: boolean;
-  onPin: (docId: string) => void;
-  onClearPin: () => void;
-}) {
+}: SessionControl) {
   const s = useStrings();
   const [typed, setTyped] = useState('');
   const pending = typed.trim();
@@ -280,18 +293,10 @@ export interface StatusViewProps {
    */
   onWriteKeyChange?: (key: string | null) => void;
   /**
-   * The server's current-session answer (#111). Omitting it hides the section, on the
-   * same principle as the write key above.
+   * The current session and the pin control over it (#111). Omitting it hides the
+   * section, on the same principle as the write key above.
    */
-  session?: CurrentSession | null;
-  /** Writers recently seen, so a doc-id disagreement is visible rather than inferred. */
-  writers?: WriterSighting[];
-  /** Why the last pin change failed, if it did. */
-  sessionError?: string | null;
-  /** True while a pin change is in flight. */
-  sessionBusy?: boolean;
-  onPinSession?: (docId: string) => void;
-  onClearSessionPin?: () => void;
+  sessionControl?: SessionControl;
 }
 
 export function StatusView({
@@ -300,12 +305,7 @@ export function StatusView({
   liveTranscripts,
   writeKey = null,
   onWriteKeyChange,
-  session = null,
-  writers = [],
-  sessionError = null,
-  sessionBusy = false,
-  onPinSession,
-  onClearSessionPin,
+  sessionControl,
 }: StatusViewProps) {
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
@@ -326,16 +326,7 @@ export function StatusView({
 
         {/* Which session everything is writing to (#111). First, because every other
             tile on this page is meaningless if the answer is the wrong doc. */}
-        {session && onPinSession && onClearSessionPin && (
-          <CurrentSessionSection
-            session={session}
-            writers={writers}
-            error={sessionError}
-            busy={sessionBusy}
-            onPin={onPinSession}
-            onClearPin={onClearSessionPin}
-          />
-        )}
+        {sessionControl && <CurrentSessionSection {...sessionControl} />}
 
         {/* Health — placeholder tiles until #72 wires component heartbeats. */}
         <section className={sectionClass}>
@@ -430,26 +421,23 @@ export function StatusView({
 /** How often the writer list refreshes. Fast enough to watch a service come up. */
 const WRITERS_POLL_MS = 10_000;
 
-/** Yjs connector: reads the `status` Y.Map and the session doc id. */
-export function StatusViewContainer() {
-  useYDoc(); // Ensure this renders within the session's YDocProvider.
-  const statusMap = useMap('status');
-  const statusEntries: Record<string, unknown> = {};
-  statusMap.forEach((value, key) => {
-    statusEntries[key] = value;
-  });
-  // The stored key isn't reactive, so mirror it into state to re-render on a change.
-  const [writeKey, setWriteKeyState] = useState<string | null>(() => getWriteKey());
-
-  // The current session and who is writing where. Polled rather than pushed: it lives on
-  // the server, not in the doc — deliberately, since a doc-scoped view of "which doc is
-  // current" could only ever agree with itself.
+/**
+ * The current session and who is writing where, wired to the pin endpoints.
+ *
+ * Polled rather than pushed: it lives on the server, not in the doc — deliberately, since
+ * a doc-scoped view of "which doc is current" could only ever agree with itself. Undefined
+ * until the first answer arrives, which is what keeps the section off the page rather than
+ * showing an empty one.
+ */
+function useSessionControl(): SessionControl | undefined {
   const [session, setSession] = useState<CurrentSession | null>(null);
   const [writers, setWriters] = useState<WriterSighting[]>([]);
-  const [sessionError, setSessionError] = useState<string | null>(null);
-  const [sessionBusy, setSessionBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   // Bumped after a pin change so the poll re-runs at once instead of on its next tick.
+  // Restarting the effect also retires any read that was already in flight, which would
+  // otherwise answer with the pre-pin session and undo the change on screen.
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -460,8 +448,8 @@ export function StatusViewContainer() {
         if (!active) return;
         setSession(current);
         setWriters(seen);
-      } catch (error) {
-        console.warn('[status] could not read the current session', error);
+      } catch (err) {
+        console.warn('[status] could not read the current session', err);
       }
     };
     void poll();
@@ -474,17 +462,37 @@ export function StatusViewContainer() {
 
   /** Run a pin change, then re-read rather than trusting our own optimistic guess. */
   const change = useCallback(async (action: () => Promise<CurrentSession>) => {
-    setSessionBusy(true);
-    setSessionError(null);
+    setBusy(true);
+    setError(null);
     try {
       setSession(await action());
       setRefreshToken((n) => n + 1);
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : String(error));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setSessionBusy(false);
+      setBusy(false);
     }
   }, []);
+
+  const onPin = useCallback((docId: string) => void change(() => pinSession(docId)), [change]);
+  const onClearPin = useCallback(() => void change(() => clearSessionPin()), [change]);
+
+  if (!session) return undefined;
+  return { session, writers, error, busy, onPin, onClearPin };
+}
+
+/** Yjs connector: reads the `status` Y.Map and the session doc id. */
+export function StatusViewContainer() {
+  useYDoc(); // Ensure this renders within the session's YDocProvider.
+  const statusMap = useMap('status');
+  const statusEntries: Record<string, unknown> = {};
+  statusMap.forEach((value, key) => {
+    statusEntries[key] = value;
+  });
+  // The stored key isn't reactive, so mirror it into state to re-render on a change.
+  const [writeKey, setWriteKeyState] = useState<string | null>(() => getWriteKey());
+
+  const sessionControl = useSessionControl();
 
   return (
     <StatusView
@@ -496,12 +504,7 @@ export function StatusViewContainer() {
         setWriteKey(key);
         setWriteKeyState(key);
       }}
-      session={session}
-      writers={writers}
-      sessionError={sessionError}
-      sessionBusy={sessionBusy}
-      onPinSession={(docId) => void change(() => pinSession(docId))}
-      onClearSessionPin={() => void change(() => clearSessionPin())}
+      sessionControl={sessionControl}
     />
   );
 }

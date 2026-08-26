@@ -36,9 +36,10 @@ import {
   zoneHour,
   type CurrentSession,
   type SessionSource,
+  type WriterSighting,
 } from './src/sessionCurrent.ts';
 
-export type { CurrentSession, SessionSource };
+export type { CurrentSession, SessionSource, WriterSighting };
 
 /**
  * Hour of the local morning at which a pin or proposal lapses. Late enough that a service
@@ -103,15 +104,6 @@ export type ProposalOutcome =
 export interface ProposalResult {
   outcome: ProposalOutcome;
   session: CurrentSession;
-}
-
-/** One writer that recently asked for write access to some doc. */
-export interface WriterSighting {
-  docId: string;
-  /** Who: a write-key label, `browser`, `proclaim-service`, `livekit:<role>`. */
-  writer: string;
-  /** ISO timestamp of the most recent sighting. */
-  at: string;
 }
 
 export class SessionRegistry {
