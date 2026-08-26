@@ -26,8 +26,12 @@ export const LISTEN_LANGUAGE_CODES: string[] = [
 ];
 
 // Pinned to the top of the picker for quick access. (Gemini Live Translate does
-// not support Haitian Creole, so only French and Spanish are favorited.)
-export const LISTEN_FAVORITES: string[] = ["fr", "es"];
+// not support Haitian Creole, so it can't be favorited.) English is in the list
+// like any other language: for the usual English-spoken session it drops out as
+// the "Original" entry, and when someone speaks French or Spanish instead it
+// becomes a translation the room wants near the top rather than buried in the
+// alphabetical list.
+export const LISTEN_FAVORITES: string[] = ["en", "fr", "es"];
 
 // Default language for the listen pane when none is specified in the URL.
 export const DEFAULT_LISTEN_CODE = "fr";
@@ -39,6 +43,15 @@ export const DEFAULT_LISTEN_CODE = "fr";
 // it's what a room with no other shared language reaches for.
 export function defaultListenCode(sourceLanguage: string): string {
   return sourceLanguage === DEFAULT_LISTEN_CODE ? "en" : DEFAULT_LISTEN_CODE;
+}
+
+/**
+ * The favorites to pin at the top of the listen picker for a session spoken in
+ * `sourceLanguage` — the curated list minus the spoken language, which the picker
+ * offers separately as "Original".
+ */
+export function listenFavorites(sourceLanguage: string): string[] {
+  return LISTEN_FAVORITES.filter((c) => c !== sourceLanguage);
 }
 
 export function isListenLanguage(code: string): boolean {

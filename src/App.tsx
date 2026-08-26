@@ -12,7 +12,7 @@ import { editorDeniedAtom, fontSizeAtom, isEditorAtom, languages } from "./confi
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
 import {
   LISTEN_LANGUAGE_CODES,
-  LISTEN_FAVORITES,
+  listenFavorites,
   defaultListenCode,
 } from "./listenLanguages";
 import { useSourceLanguage } from "./useSourceLanguage";
@@ -232,12 +232,12 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
   // BCP-47 code), with "Original" and favorites pinned on top. Names are localized
   // via Intl.DisplayNames; the long list is sorted by localized name. The spoken
   // language is filtered out of both groups — it is the "Original" entry.
+  const favoriteListenLangs = listenFavorites(sourceLanguage);
   const sortedListenLangs = LISTEN_LANGUAGE_CODES
-    .filter((c) => c !== sourceLanguage && !LISTEN_FAVORITES.includes(c))
+    .filter((c) => c !== sourceLanguage && !favoriteListenLangs.includes(c))
     .sort((a, b) =>
       (langDisplayNames.of(a) ?? a).localeCompare(langDisplayNames.of(b) ?? b, locale)
     );
-  const listenFavorites = LISTEN_FAVORITES.filter((c) => c !== sourceLanguage);
 
   const listenLanguageSelector = (language: string) => (
     <select
@@ -249,7 +249,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
         {`${s.listenOriginal} / ${langDisplayNames.of(sourceLanguage) ?? sourceLanguage}`}
       </option>
       <optgroup label={s.favorites}>
-        {listenFavorites.map((c) => (
+        {favoriteListenLangs.map((c) => (
           <option key={c} value={c}>{langDisplayNames.of(c) ?? c}</option>
         ))}
       </optgroup>
