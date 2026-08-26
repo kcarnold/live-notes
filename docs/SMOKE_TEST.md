@@ -30,11 +30,25 @@ an incident happens that this list would not have caught, add a line.
 
 ## 3. Proclaim sync
 
-- [ ] Proclaim service running (LaunchAgent) and pointed at today's doc.
+- [ ] Proclaim service running (LaunchAgent), and its log line after a show goes on air
+      names the doc the *server* gave it (not one it computed) — see
+      [CURRENT_SESSION.md](CURRENT_SESSION.md).
 - [ ] Advance a slide in Proclaim; current-slide view updates on both devices within ~2 s.
 - [ ] Slide translations show for the on-air item; review screen loads its conversation.
 - [ ] `/status` shows the Proclaim service's SHA/branch, and no "update pending" flag
       (if it flags one, restart the service — restarting is what applies an update).
+
+## 3b. Current session (#111)
+
+- [ ] `/status` "Current session" names the doc this browser is on, and says where it came
+      from (pinned / proposed / today's date).
+- [ ] "Who is writing where" lists the Proclaim service and the editor browsers, all green
+      (same doc). Any amber row is a component writing somewhere else — fix that first.
+- [ ] Pin a scratch doc from `/status`, reload a viewer: it lands on the pinned doc. Clear
+      the pin, reload: it goes back. **Do this before the service, not during it.**
+- [ ] `?doc=doc-scratch` still overrides everything, pin included.
+- [ ] Server boot log shows the intended `SESSION_TIMEZONE` — a wrong zone is a wrong doc
+      for everyone, and an evening service is when it shows up.
 
 ## 4. Live audio translation
 

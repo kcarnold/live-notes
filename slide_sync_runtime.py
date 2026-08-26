@@ -1,10 +1,16 @@
 """The runtime: connects a SlideFeed to the Yjs consumers and manages the session lifecycle.
 
 ``SlideSyncRuntime`` is source-agnostic — it knows nothing about Proclaim. It owns the Yjs
-document lifecycle (date-based doc id, midnight rollover), the Y-Sweet connection (lazy
-connect, reconnect with backoff, off-air disconnect, keepalive health ping), and the
-per-cycle fan-out: one ``feed.poll()`` → ``publisher.apply`` (inline, one transaction) plus
-``bus.publish`` to wake the background translator.
+document lifecycle, the Y-Sweet connection (lazy connect, reconnect with backoff, off-air
+disconnect, keepalive health ping), and the per-cycle fan-out: one ``feed.poll()`` →
+``publisher.apply`` (inline, one transaction) plus ``bus.publish`` to wake the background
+translator.
+
+What it no longer owns is *which doc* (issue #111). It used to compute that from the on-air
+show's date, with a midnight-rollover rule bolted on — handling a day change that never
+happens mid-service while missing the one that easily does, an older deck being opened
+first. Now it proposes what it sees to the server before each session and connects to
+whatever it is told, once, at the point of connecting.
 
 Because ``feed.poll()`` never raises on a source problem, the only exceptions the reconnect
 loop handles are Y-Sweet/connection failures — a cleaner error boundary than the old
@@ -15,7 +21,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
 from typing import Any, Callable, Optional
 
 import anyio
@@ -24,6 +29,7 @@ from httpx_ws import HTTPXWSException, aconnect_ws
 from pycrdt import Doc, Provider
 from pycrdt.websocket.websocket import HttpxWebsocket
 
+from session_client import ServerSessionResolver, SessionAnswer, SessionResolver
 from slide_feed import SessionInfo, SlideFeed, SnapshotBus
 from slide_translator import SlideTranslator
 from write_key import write_key_headers
@@ -55,8 +61,9 @@ class SlideSyncRuntime:
         doc_id: Optional[str] = None,
         timing: Optional[RuntimeTiming] = None,
         report_exception: Optional[Callable[[Exception], None]] = None,
-        on_session_start: Optional[Callable[[Doc], None]] = None,
+        on_session_start: Optional[Callable[[Doc, str], None]] = None,
         write_key: Optional[str] = None,
+        resolver: Optional[SessionResolver] = None,
     ):
         self.feed = feed
         self.publisher = publisher
@@ -68,85 +75,66 @@ class SlideSyncRuntime:
         self.write_key = write_key
         self.timing = timing or RuntimeTiming()
         self._report_exception = report_exception or (lambda _e: None)
-        # Called with the freshly connected Doc at the start of every session — the seam the
-        # entrypoint uses to announce itself into the shared `status` map (#73). Per-session,
-        # not per-process: a doc rollover makes a new Doc that needs its own announcement.
-        self._on_session_start = on_session_start or (lambda _doc: None)
+        # Called with the freshly connected Doc and the doc id at the start of every
+        # session — the seam the entrypoint uses to announce itself into the shared
+        # `status` map (#73). Per-session, not per-process: a doc change makes a new Doc
+        # that needs its own announcement. The id is passed because the announcement says
+        # which doc this service is writing to, which is the whole point of #111.
+        self._on_session_start = on_session_start or (lambda _doc, _doc_id: None)
 
-        if doc_id is None:
-            self.use_date_based_doc_id = True
-            self.doc_id = self._get_date_based_doc_id()
-            self.current_doc_date: Optional[date] = date.today()
-        else:
-            self.use_date_based_doc_id = False
-            self.doc_id = doc_id
-            self.current_doc_date = None
-
-        # True when the doc date came from the on-air show (authoritative, no midnight roll).
-        self.doc_date_from_show = False
+        # An explicit doc id is an override and is never resolved away: it is how the
+        # replay harness targets a throwaway doc, and the escape hatch when the server's
+        # answer is wrong. Otherwise the server names the doc, and until it has, we have
+        # no doc id at all — which is the honest state and the one the old code lied about.
+        self.override_doc_id = doc_id
+        self.doc_id: Optional[str] = doc_id
+        self.resolver: SessionResolver = resolver or ServerSessionResolver(
+            ysweet_url, write_key=write_key
+        )
 
         self.ydoc: Doc = Doc()
         self.publisher.bind(self.ydoc)
         self.translator.bind(self.ydoc, self.doc_id)
 
-    # -- doc id / rollover -----------------------------------------------------
+    # -- doc id ----------------------------------------------------------------
 
-    @staticmethod
-    def _get_date_based_doc_id(d: Optional[date] = None) -> str:
-        return f'doc-{(d or date.today()).isoformat()}'
+    async def _resolve_doc_for_session(self, session: Optional[SessionInfo]) -> None:
+        """Ask the server which doc this session belongs to, and point at its answer.
 
-    def _resolve_doc_for_session(self, session: Optional[SessionInfo]) -> None:
-        """Point the date-based doc id at the on-air show's date before connecting.
+        Called once per session, immediately before connecting — the only moment the doc
+        can change, and the moment where being wrong is cheapest to notice. Recreates the
+        Doc when the id changes so a new session never inherits the last one's slides.
 
-        Uses the session's date when known, otherwise wall-clock today. Recreates the Doc
-        when the id changes. No-op under an explicit doc_id override.
+        Under an explicit doc_id override this is a no-op: an operator (or the replay
+        harness) who named a doc outranks the server, same as ``?doc=`` in a browser.
+
+        Raises on an unreachable server rather than falling back to a guess. The caller's
+        reconnect loop handles that, and it is the correct outcome: the server that can't
+        answer this is the server that issues the token needed to write anything at all.
         """
-        if not self.use_date_based_doc_id:
+        if self.override_doc_id is not None:
             return
 
+        answer: SessionAnswer = await self.resolver.resolve(session)
         show_date = session.session_date if session else None
-        new_date = show_date if show_date is not None else date.today()
-        self.doc_date_from_show = show_date is not None
-        new_doc_id = self._get_date_based_doc_id(new_date)
-
-        if new_doc_id != self.doc_id:
-            source = "show date" if show_date is not None else "today"
-            logger.info(f"Resolved doc from {source}: {self.doc_id} → {new_doc_id}")
-            self.doc_id = new_doc_id
-            self._recreate_doc()
-        self.current_doc_date = new_date
-
-    def _check_doc_id_change(self) -> bool:
-        """Advance the date-based doc id if wall-clock day changed. Returns True if it did."""
-        if not self.use_date_based_doc_id or self.doc_date_from_show:
-            return False
-        today = date.today()
-        if today != self.current_doc_date:
-            old_doc_id = self.doc_id
-            self.doc_id = self._get_date_based_doc_id()
-            self.current_doc_date = today
-            logger.info(f"Date changed: {old_doc_id} → {self.doc_id}")
-            return True
-        return False
-
-    def _date_rolled_over(self) -> bool:
-        """Side-effect-free check of whether the date-based doc is now stale (used mid-session)."""
-        return (
-            self.use_date_based_doc_id
-            and not self.doc_date_from_show
-            and date.today() != self.current_doc_date
-        )
-
-    def _maybe_roll_doc_date(self) -> None:
-        """If the date-based doc id changed, advance to it with a fresh Doc (disconnected only)."""
-        if self._check_doc_id_change():
+        if not answer.followed_us:
+            # The interesting line, and the one whose absence made #111 invisible: we
+            # proposed something and were told otherwise. Log the disagreement, not the
+            # proposal.
+            logger.info(
+                f"Proposed {show_date or 'no date'}; server says {answer.doc_id} "
+                f"({answer.source}, proposal {answer.outcome})"
+            )
+        if answer.doc_id != self.doc_id:
+            logger.info(f"Session doc: {self.doc_id or 'none'} → {answer.doc_id}")
+            self.doc_id = answer.doc_id
             self._recreate_doc()
 
     def _recreate_doc(self) -> None:
-        """Start a fresh Y.Doc so a new day doesn't inherit yesterday's slides.
+        """Start a fresh Y.Doc so a new session doesn't inherit the last one's slides.
 
-        The single join point for a doc rollover: rebind both consumers to the new Doc and
-        drop the feed's source-side caches, so nothing leaks across days.
+        The single join point for a doc change: rebind both consumers to the new Doc and
+        drop the feed's source-side caches, so nothing leaks between sessions.
         """
         self.ydoc = Doc()
         self.publisher.bind(self.ydoc)
@@ -170,14 +158,19 @@ class SlideSyncRuntime:
 
     async def run(self) -> None:
         """Main loop: wait for on air, connect, sync, reconnect on failure."""
-        logger.info(f"Starting slide sync for doc: {self.doc_id}")
+        # Deliberately does NOT name a doc. #111's first symptom was this line announcing
+        # a doc the service then didn't use; the doc is logged when it is actually resolved.
+        if self.override_doc_id:
+            logger.info(f"Starting slide sync, doc overridden to: {self.override_doc_id}")
+        else:
+            logger.info("Starting slide sync; the server names the doc when a show goes on air")
         logger.info(f"Y-Sweet URL: {self.ysweet_url}")
 
         backoff = self.timing.reconnect_backoff_initial
         while True:
             try:
                 session = await self._wait_until_on_air()
-                self._resolve_doc_for_session(session)
+                await self._resolve_doc_for_session(session)
                 await self._run_session()
                 backoff = self.timing.reconnect_backoff_initial
             except (HTTPXWSException, httpx.HTTPError, OSError) as e:
@@ -197,11 +190,9 @@ class SlideSyncRuntime:
         """Poll the feed until it reports on air, holding NO Y-Sweet connection.
 
         Returns the on-air session so the caller can resolve the doc before connecting.
-        Rolls the date-based doc while waiting (safe: nothing is connected).
         """
         announced = False
         while True:
-            self._maybe_roll_doc_date()
             snap = await self.feed.poll()
             if snap.on_air:
                 logger.info("Source is on air - connecting to Y-Sweet")
@@ -212,11 +203,12 @@ class SlideSyncRuntime:
             await anyio.sleep(self.timing.poll_interval_off_air)
 
     async def _run_session(self) -> None:
-        """Open a Y-Sweet connection and sync until off air, disconnect, or date roll.
+        """Open a Y-Sweet connection and sync until off air.
 
-        Returns normally on an expected end (sustained off air / date roll); raises on a
-        connection problem so ``run`` reconnects with backoff.
+        Returns normally on an expected end (sustained off air); raises on a connection
+        problem so ``run`` reconnects with backoff.
         """
+        assert self.doc_id is not None, "doc must be resolved before connecting"
         token_data = await self.get_ysweet_token()
         ws_url = token_data['url'] + '/' + self.doc_id
         logger.info(f"Connecting to Y-Sweet: {ws_url}")
@@ -228,7 +220,7 @@ class SlideSyncRuntime:
             logger.info("Connected to Y-Sweet")
             # Force a full re-push of current state onto the freshly connected server.
             self.publisher.bind(self.ydoc)
-            self._on_session_start(self.ydoc)
+            self._on_session_start(self.ydoc, self.doc_id)
 
             bus = SnapshotBus()
             async with anyio.create_task_group() as session_tg:
@@ -239,16 +231,13 @@ class SlideSyncRuntime:
     async def _poll_until_session_end(self, websocket: Any, bus: SnapshotBus) -> None:
         """Poll the feed and fan snapshots out until the session should end.
 
-        Returns on sustained off air or a date rollover; raises on a websocket problem.
+        Returns on sustained off air; raises on a websocket problem. Going off air is now
+        the only way a session ends, which is also the only moment the doc is re-resolved
+        — the server's answer is never swapped in underneath a live connection.
         """
         off_air_since: Optional[float] = None
         last_ping = anyio.current_time()
         while True:
-            # Don't swap the Doc while connected; end the session and let run() roll the date.
-            if self._date_rolled_over():
-                logger.info("Date changed - ending session to roll the document")
-                return
-
             snap = await self.feed.poll()
             if not snap.on_air:
                 now = anyio.current_time()

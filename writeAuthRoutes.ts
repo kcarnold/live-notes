@@ -23,6 +23,14 @@ export interface YsAuthDeps {
   /** Mint a Y-Sweet client token at the given authorization level. */
   issueToken: (docId: string | null, authorization: GrantedAuthorization) => Promise<unknown>;
   log?: (message: string) => void;
+  /**
+   * Called when a *full* token is issued, with the key's label when one matched.
+   *
+   * This is where the server learns who is writing to which doc, which is half of the
+   * answer to #111: a service writing to the wrong doc and a service that isn't running
+   * produce the same empty pane, and this call is what tells them apart.
+   */
+  onGrantFull?: (docId: string | null, label: string | null) => void;
 }
 
 /**
@@ -40,6 +48,7 @@ export function makeYsAuthHandler({
   writeAuth,
   issueToken,
   log = () => {},
+  onGrantFull = () => {},
 }: YsAuthDeps): RequestHandler {
   return async (req, res) => {
     const docId = (req.body?.docId as string | undefined) ?? null;
@@ -50,6 +59,7 @@ export function makeYsAuthHandler({
     const check = wantsEditor ? writeAuth.check(req, '/api/ys-auth') : null;
     const authorization: GrantedAuthorization = check?.allowed ? 'full' : 'read-only';
     log(`Auth request: doc=${docId} isEditor=${wantsEditor} granted=${authorization}`);
+    if (authorization === 'full') onGrantFull(docId, check?.result.label ?? null);
     const clientToken = await issueToken(docId, authorization);
     res.setHeader(GRANTED_AUTHORIZATION_HEADER, authorization);
     // In observe mode nothing is refused, so `granted` is always `full` and this header

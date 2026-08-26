@@ -61,26 +61,29 @@ def test_status_announcer_writes_version_and_identity():
     })
     doc = Doc()
 
-    announce(doc)
+    announce(doc, "doc-2026-08-09")
 
     entry = doc.get("status", type=Map)["proclaimService"]
     assert entry["role"] == "proclaim-service"
     assert entry["gitShaShort"] == "aaaaaaa"
     assert entry["updatePending"] is True
     assert entry["clientId"] == doc.client_id
-    assert entry["startedAt"] and entry["connectedAt"]
+    # Which doc this service is writing to (#111): the fact whose absence made a service
+    # writing to last week's document indistinguishable from a service that was down.
+    assert entry["docId"] == "doc-2026-08-09"
 
 
 def test_status_announcer_reannounces_onto_a_new_doc():
-    """A doc rollover creates a new Doc, so each session gets its own announcement."""
+    """A doc change creates a new Doc, so each session gets its own announcement."""
     announce = ps.make_status_announcer({
         "gitSha": "a" * 40, "gitShaShort": "aaaaaaa", "gitBranch": "main",
         "updateChannel": "proclaim-stable", "channelSha": "a" * 40, "updatePending": False,
     })
 
     first, second = Doc(), Doc()
-    announce(first)
-    announce(second)
+    announce(first, "doc-2026-08-09")
+    announce(second, "doc-2026-08-16")
 
     assert first.get("status", type=Map)["proclaimService"]["clientId"] == first.client_id
     assert second.get("status", type=Map)["proclaimService"]["clientId"] == second.client_id
+    assert second.get("status", type=Map)["proclaimService"]["docId"] == "doc-2026-08-16"

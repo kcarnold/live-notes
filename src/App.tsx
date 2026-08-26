@@ -26,6 +26,7 @@ import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
 import { StatusViewContainer } from "./StatusView";
 import { getDocId } from "./getDocId";
+import { SessionGate } from "./SessionGate";
 import { apiFetch, promptForWriteKeyOnce } from "./writeKey";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
@@ -476,12 +477,16 @@ function EditorDeniedBanner() {
   );
 }
 
-const App = () => {
+/**
+ * Everything below the session gate. Split out so `getDocId()` — and every pane that
+ * calls it — runs only after the server has told us which session we are in (#111).
+ */
+const SessionApp = () => {
   // We're an editor only if location hash includes #editor
   const isEditor = window.location.hash.includes("editor");
 
-  // Default doc id is `doc-${today}`, overridable via ?doc=. Shared with the
-  // live-audio panes via getDocId() so the LiveKit room matches the session.
+  // The server's answer, or the ?doc= override. Shared with the live-audio panes via
+  // getDocId() so the LiveKit room matches the session.
   const docId = getDocId();
 
   const [, setIsEditor] = useAtom(isEditorAtom);
@@ -552,5 +557,11 @@ const App = () => {
     </YDocProvider>
   );
 };
+
+const App = () => (
+  <SessionGate>
+    <SessionApp />
+  </SessionGate>
+);
 
 export default App;

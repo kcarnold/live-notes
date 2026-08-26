@@ -6,6 +6,13 @@ import {
   translateItem,
 } from './slideTranslationApi';
 
+// These clients stamp the session's doc id onto every request. Since #111 that id comes
+// from the server rather than a local formula, so a test that never mounted the session
+// gate has to stand one in.
+vi.mock('./getDocId', () => ({
+  getDocId: () => 'doc-test',
+}));
+
 describe('parseSlidesInput', () => {
   it('splits on explicit -- delimiters', () => {
     const text = 'Slide one\nline two\n--\nSlide two';
