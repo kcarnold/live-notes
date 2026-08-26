@@ -48,6 +48,7 @@ Optional environment variables:
 - `LIVE_AUDIO_SOURCE_LANGUAGE` - BCP-47 code a session is assumed to be *spoken* in when
   nobody declares one (default `en`). The broadcast pane asks the speaker and publishes their
   answer per session; this is only the fallback, for older clients and the macOS audio feeder.
+  However it is resolved, the supervisor mirrors it into the doc's `liveAudioConfig`.
   See [src/liveAudioConfig.ts](src/liveAudioConfig.ts).
 - `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 - `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)

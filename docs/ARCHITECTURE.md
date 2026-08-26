@@ -40,7 +40,7 @@ derived data) drives the testing/replay strategy.
   winds down one bridge per (session, language) to match (no refcounts or beacons). Each
   bridge subscribes to the organizer's LiveKit track (16 kHz in), streams to Gemini Live,
   publishes translated audio (24 kHz out), and writes the transcript into Yjs via
-  `transcript-writer`. When a Gemini session is swapped (goaway/reconnect), input frames are
+  `transcript-log`. When a Gemini session is swapped (goaway/reconnect), input frames are
   buffered across the gap and flushed into the fresh session, so a swap costs a little
   latency rather than dropped words (always on). A **cost path** — off unless
   `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level (−30 is a guess) — additionally
@@ -81,7 +81,7 @@ doc is *derived* data that the system under test will regenerate.
 |---|---|---|
 | Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
 | `proclaim_service.py` (slide feed → Yjs publisher + translator) | `proclaimServiceOrder`, `proclaimPresentations`, `proclaimStatus`, `slideTranslations`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
-| translation-bridge / transcript-writer | `liveTranscriptSegments-{code}` (one utterance per entry, stamped `startedAt` + `endedAt`; the silence between utterances is derived from those, not stored) | Organizer audio track + Gemini Live responses — including *when* each delta arrived, which only the writer sees |
+| translation-bridge / transcript-log | `liveTranscriptSegments-{code}` (one utterance per entry, stamped `startedAt` + `endedAt`; the silence between utterances is derived from those, not stored) | Organizer audio track + Gemini Live responses — including *when* each delta arrived, which only the writer sees |
 | Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |
 
@@ -115,7 +115,10 @@ writer once each component announces its clientID (planned: via the status heart
   transcript is filed under, the listen picker's "Original" entry, and which language the
   always-on bridge targets (English talk → the deployment default `fr`; anything else → `en`).
   A broadcaster who declares nothing gets `LIVE_AUDIO_SOURCE_LANGUAGE`, default `en`, which is
-  what the macOS audio feeder and any pre-existing client land on. See
+  what the macOS audio feeder and any pre-existing client land on. Whichever way it is
+  resolved, the supervisor mirrors the answer into `liveAudioConfig.sourceLanguage` on every
+  reconcile with a broadcaster present — presence routes the bridges, but the doc is the only
+  thing viewers and later exports can read. See
   [src/liveAudioConfig.ts](../src/liveAudioConfig.ts).
 - **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
   show's scheduled date), so a service's state lives in one doc per date.

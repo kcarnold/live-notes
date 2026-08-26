@@ -1,6 +1,6 @@
 // Shared primitives for the live speech-translation transcripts. The pipeline
 // publishes each language into a `liveTranscriptSegments-{code}` Y.Array (see
-// live-audio/transcript-writer.ts); both the client (LiveTranscript,
+// live-audio/transcript-log.ts); both the client (LiveTranscript,
 // TranscriptHealth) and the server-side session export need to agree on that
 // namespace, on the segment shape, and on how to label a code. Kept free of any
 // third-party runtime dependency (the Y import is type-only; liveAudioConfig is

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 
-import type { DocumentManager } from "@y-sweet/sdk";
+import { readSourceLanguage } from "../src/liveAudioConfig.ts";
+import type { ServerDoc } from "../serverDoc.ts";
 
 import {
   computeDesiredLanguages,
@@ -200,8 +202,19 @@ class FakeBridge {
   async simulateScenario(): Promise<void> {}
 }
 
-function makeManager(rooms: Map<string, PresentParticipant[]>) {
+function makeManager(
+  rooms: Map<string, PresentParticipant[]>,
+  opts: { defaultSourceLanguage?: string } = {}
+) {
   const created: FakeBridge[] = [];
+  // Stand a plain local Y.Doc in for the session's Y-Sweet connection, so what the
+  // manager writes into the shared doc is observable without a server.
+  const docs = new Map<string, Y.Doc>();
+  const docFactory = (docId: string): ServerDoc => {
+    const doc = new Y.Doc();
+    docs.set(docId, doc);
+    return { doc, synced: Promise.resolve(), close: () => doc.destroy() };
+  };
   const directory: RoomDirectory = {
     listRooms: async () => [...rooms.keys()],
     listParticipants: async (room) => {
@@ -212,19 +225,26 @@ function makeManager(rooms: Map<string, PresentParticipant[]>) {
   };
   const manager = new TranslationSessionManager();
   manager.init({
-    // The writer needs a real DocumentManager; null-object it — TranscriptWriter is
-    // only constructed lazily per session and these tests never await its sync.
-    documentManager: null as unknown as DocumentManager,
     livekit: { url: "ws://fake", apiKey: "k", apiSecret: "s" },
     directory,
+    docFactory,
+    defaultSourceLanguage: opts.defaultSourceLanguage,
     bridgeFactory: (sessionId, targetLanguage, _organizerIdentity, config) => {
       const bridge = new FakeBridge(sessionId, targetLanguage, config);
       created.push(bridge);
       return bridge as unknown as TranslationBridge;
     },
   });
-  return { manager, created, rooms };
+  return { manager, created, rooms, docs };
 }
+
+/**
+ * The manager defers its doc writes until the connection reports synced (a set made
+ * before the initial sync is concurrent with what the doc already holds). With a fake
+ * that is already synced, that is one microtask — but it is not zero, so tests that
+ * assert on doc contents have to let it land.
+ */
+const flushWrites = () => Promise.resolve().then(() => {});
 
 const runningLanguages = (manager: TranslationSessionManager, sessionId: string) =>
   manager
@@ -267,6 +287,48 @@ describe("TranslationSessionManager supervisor", () => {
     expect(en.config?.sourceLanguage).toBe("es");
     // Exactly one bridge transcribes the speaker, or the transcript doubles up.
     expect(created.filter((b) => b.config?.writesSourceTranscript)).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Publishing the spoken language into the shared doc. The server routes bridges
+  // from presence, but browsers and exports read the doc — and nothing wrote it
+  // except a broadcaster who declared one, so a feeder-fed non-English service was
+  // routed as Spanish and labelled English everywhere a human could see.
+  // -------------------------------------------------------------------------
+
+  it("publishes the declared spoken language into the session doc", async () => {
+    const { manager, docs } = makeManager(
+      new Map([["doc-1", [organizerSpeaking("ht"), listener("a", "en")]]])
+    );
+    await manager.reconcileAll();
+    await flushWrites();
+
+    expect(readSourceLanguage(docs.get("doc-1")!)).toBe("ht");
+  });
+
+  it("publishes the deployment default for a broadcaster that declares nothing", async () => {
+    // The macOS audio feeder: publishes as organizer, has no UI to ask, carries no
+    // `speaks` attribute. LIVE_AUDIO_SOURCE_LANGUAGE is the only thing that knows,
+    // and before this it reached the bridges but never a single viewer.
+    const { manager, docs } = makeManager(new Map([["doc-1", [organizer]]]), {
+      defaultSourceLanguage: "es",
+    });
+    await manager.reconcileAll();
+    await flushWrites();
+
+    expect(readSourceLanguage(docs.get("doc-1")!)).toBe("es");
+  });
+
+  it("leaves the doc alone for a room with no broadcaster", async () => {
+    // Same reason the in-memory value isn't refreshed without one: an empty room
+    // must not stamp the deployment default over a live session's declaration.
+    const { manager, docs } = makeManager(new Map([["doc-1", [listener("a", "es")]]]), {
+      defaultSourceLanguage: "es",
+    });
+    await manager.reconcileAll();
+    await flushWrites();
+
+    expect(docs.has("doc-1")).toBe(false);
   });
 
   it("keeps an undeclared room on the English/French arrangement it has always had", async () => {
@@ -355,7 +417,6 @@ describe("TranslationSessionManager supervisor", () => {
       listParticipants: async () => [],
     };
     manager.init({
-      documentManager: null as unknown as DocumentManager,
       livekit: { url: "ws://fake", apiKey: "k", apiSecret: "s" },
       directory: blind,
     });

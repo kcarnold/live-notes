@@ -9,7 +9,7 @@ import {
 import { slideTranslationKey, type SlideTranslationEntry } from './src/slideTranslation.ts';
 
 /**
- * Append a transcript segment the way live-audio/transcript-writer.ts does: stored
+ * Append a transcript segment the way live-audio/transcript-log.ts does: stored
  * timings are observations only (when the utterance started and last grew), and the
  * silence between utterances is derived from them at read time.
  */

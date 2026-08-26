@@ -33,6 +33,7 @@ import { SimulateScenarioKind } from '@livekit/rtc-node';
 import TranslationSessionManager, { SPEAKS_ATTRIBUTE } from './live-audio/translation-session-manager.ts';
 import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
 import { normalizeSourceLanguage } from './src/liveAudioConfig.ts';
+import { connectServerDoc } from './serverDoc.ts';
 import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
 import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
 import { limitFromEnv, makeRateLimit } from './rateLimit.ts';
@@ -319,7 +320,7 @@ const DEFAULT_SOURCE_LANGUAGE_ENV = normalizeSourceLanguage(process.env.LIVE_AUD
   const lk = getLiveKitConfig();
   if (lk) {
     TranslationSessionManager.getInstance().init({
-      documentManager,
+      docFactory: (docId) => connectServerDoc(docId, documentManager),
       livekit: lk,
       telemetry: phClient,
       silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,

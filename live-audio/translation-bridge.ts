@@ -52,7 +52,7 @@ import {
 import type { RemoteTrack } from "@livekit/rtc-node";
 import WebSocket from "ws";
 import { DEFAULT_SOURCE_LANGUAGE } from "../src/liveAudioConfig.ts";
-import type { TranscriptWriter } from "./transcript-writer.ts";
+import type { TranscriptSegmentLog } from "./transcript-log.ts";
 
 export type BridgeStatus = "starting" | "active" | "error" | "closed";
 
@@ -444,7 +444,7 @@ export class TranslationBridge {
   private consecutiveStallRecoveries: number = 0;
 
   // Persists finalized transcript segments into the shared Yjs doc.
-  private readonly writer: TranscriptWriter | null;
+  private readonly transcript: TranscriptSegmentLog | null;
   // Whether this bridge also writes the *spoken*-language transcript, via Gemini
   // input transcription. Only the primary bridge does, so the same source text isn't
   // appended once per running language.
@@ -471,7 +471,7 @@ export class TranslationBridge {
       livekitUrl: string;
       livekitApiKey: string;
       livekitApiSecret: string;
-      writer?: TranscriptWriter | null;
+      transcript?: TranscriptSegmentLog | null;
       writesSourceTranscript?: boolean;
       sourceLanguage?: string;
       recordEvent?: RecordEvent | null;
@@ -486,7 +486,7 @@ export class TranslationBridge {
     this.livekitUrl = config.livekitUrl;
     this.livekitApiKey = config.livekitApiKey;
     this.livekitApiSecret = config.livekitApiSecret;
-    this.writer = config.writer ?? null;
+    this.transcript = config.transcript ?? null;
     this.writesSourceTranscript = config.writesSourceTranscript ?? false;
     this.sourceLanguage = config.sourceLanguage ?? DEFAULT_SOURCE_LANGUAGE;
     this.recordEvent = config.recordEvent ?? null;
@@ -1182,12 +1182,12 @@ export class TranslationBridge {
     // flow of deltas with no turnComplete, so persist each delta straight into the
     // shared Yjs transcript, which is the single source of truth for viewers.
     if (serverContent?.outputTranscription?.text) {
-      this.writer?.appendDelta(this.targetLanguage, serverContent.outputTranscription.text);
+      this.transcript?.append(this.targetLanguage, serverContent.outputTranscription.text);
     }
 
     // Input transcription (the spoken language) — only on the primary bridge.
     if (this.writesSourceTranscript && serverContent?.inputTranscription?.text) {
-      this.writer?.appendDelta(this.sourceLanguage, serverContent.inputTranscription.text);
+      this.transcript?.append(this.sourceLanguage, serverContent.inputTranscription.text);
     }
   }
 
