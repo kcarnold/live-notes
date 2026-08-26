@@ -31,6 +31,17 @@ from write_key import write_key_headers
 logger = logging.getLogger(__name__)
 
 
+class SessionResolutionError(RuntimeError):
+    """The server answered, but not with a usable session.
+
+    Its own class so it can join the runtime's reconnect-backoff bucket. Without it a
+    proxy returning an HTML error page with a 200 — or any answer missing ``docId`` —
+    escapes the reconnect loop as a bare ``ValueError``/``KeyError`` and takes the whole
+    service down until someone notices. The launch wrapper's invariant is "runs last
+    version", never "doesn't run"; this keeps that true for the doc lookup too.
+    """
+
+
 @dataclass(frozen=True)
 class SessionAnswer:
     """What the server said. ``outcome`` explains *why* this doc, not just which."""
@@ -81,9 +92,18 @@ class ServerSessionResolver:
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError as e:
+                raise SessionResolutionError(
+                    f"{self.ysweet_url} answered /api/session/propose with something "
+                    f"that isn't JSON"
+                ) from e
+        doc_id = data.get('docId') if isinstance(data, dict) else None
+        if not isinstance(doc_id, str) or not doc_id:
+            raise SessionResolutionError(f"No docId in the answer from {self.ysweet_url}")
         return SessionAnswer(
-            doc_id=data['docId'],
+            doc_id=doc_id,
             source=data.get('source', 'unknown'),
             outcome=data.get('outcome', 'unknown'),
         )

@@ -75,6 +75,16 @@ never did before.
 The service logs the answer it *got*, including when that differs from what it proposed. The
 absence of that line is what made #111 invisible for a whole service.
 
+It also re-asks every `session_recheck_interval` (60s) while connected, and ends the session
+when the answer moves — the doc itself is still only ever changed by the reconnect path, with
+nothing connected. A failed re-check is ignored rather than dropping a working connection:
+the doc question keeps for a minute, the service does not.
+
+An answer that isn't usable — no `docId`, or a proxy's HTML error page returned with a 200 —
+raises `SessionResolutionError`, which the reconnect loop catches like any other connection
+problem. It must not escape: the launch wrapper's invariant is "runs last version", never
+"doesn't run".
+
 ### Pins lapse on their own
 
 A pin (or a proposal) expires at the next 4am in `SESSION_TIMEZONE`, but never sooner than
@@ -110,7 +120,11 @@ also reports its `docId` in the shared `status` map alongside its version.
 **Something is on the wrong doc mid-service.** Open `/status` on a phone (the device needs a
 write key), read the "Current session" section — it names the doc, where that came from, and
 who is writing where — type the right doc id, press **Pin**. Every browser picks it up on
-reload; the Proclaim service picks it up the next time a show goes on air.
+reload. The Proclaim service re-asks about once a minute while it is connected, so it moves
+on its own within a minute or so: it ends the session, resolves the doc again, and reconnects
+to the pinned one. (Resolving only at session start would have meant never, in practice — a
+show that is on air for an hour never goes off air, which is the whole half-hour the pin is
+supposed to rescue.)
 
 **Pre-staging next Sunday on a Thursday.** Open the deck in Proclaim as before. Its
 `DateGiven` is in the future, so the server accepts the proposal and review screens follow
@@ -129,4 +143,4 @@ it without anyone typing a doc id.
 | [`src/getDocId.ts`](../src/getDocId.ts) | browser side: resolve once, then answer synchronously |
 | [`src/SessionGate.tsx`](../src/SessionGate.tsx) | the gate that mounts nothing until the answer is in |
 | [`session_client.py`](../session_client.py) | the Proclaim service's wire to `/api/session/propose` |
-| [`slide_sync_runtime.py`](../slide_sync_runtime.py) | resolves once per session, immediately before connecting |
+| [`slide_sync_runtime.py`](../slide_sync_runtime.py) | resolves before connecting, re-checks while connected |

@@ -94,6 +94,12 @@ describe('GET /api/session/current', () => {
       setBy: 'status-page',
     });
   });
+
+  it('is never cached — reloading is how a viewer picks up a new pin', async () => {
+    const base = await serve();
+    const response = await fetch(`${base}/api/session/current`);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
 });
 
 describe('POST /api/session/pin', () => {

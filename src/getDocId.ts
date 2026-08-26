@@ -19,13 +19,15 @@
  *
  * The resolved id is cached in this module so the many synchronous callers (`ListenViewer`,
  * `BroadcastControl`, the slide-translation API) keep working unchanged — `App` resolves
- * before rendering them, so by the time any of them asks, the answer is in hand.
+ * before rendering them, so by the time any of them asks, the answer is in hand. Only the
+ * id is kept: the rest of the server's answer is about *why* this doc is current, which
+ * only `/status` shows, and it reads it live rather than from a snapshot taken at boot.
  */
 import type { CurrentSession } from './sessionCurrent.ts';
 
 export type { CurrentSession };
 
-let resolved: CurrentSession | null = null;
+let resolvedDocId: string | null = null;
 
 /** The `?doc=` override, or null. Read fresh each time; the URL can change under us. */
 export function getDocOverride(): string | null {
@@ -42,13 +44,8 @@ export function getDocOverride(): string | null {
 export function getDocId(): string {
   const override = getDocOverride();
   if (override) return override;
-  if (resolved) return resolved.docId;
+  if (resolvedDocId) return resolvedDocId;
   throw new Error('getDocId() called before the current session was resolved');
-}
-
-/** The whole server answer, for screens that show *why* this is the current doc. */
-export function getCurrentSession(): CurrentSession | null {
-  return resolved;
 }
 
 /**
@@ -56,15 +53,13 @@ export function getCurrentSession(): CurrentSession | null {
  *
  * Rejects rather than guessing when the server can't be reached — see the module comment.
  */
-export async function resolveCurrentSession(
-  fetchImpl: typeof fetch = fetch,
-): Promise<CurrentSession> {
+export async function resolveCurrentSession(fetchImpl: typeof fetch = fetch): Promise<string> {
   const override = getDocOverride();
   if (override) {
     // An override is the answer; don't let a server round trip stand in front of the
     // one path that exists precisely for when the server is wrong.
-    resolved = { docId: override, source: 'pin', since: null, setBy: 'url', expiresAt: null };
-    return resolved;
+    resolvedDocId = override;
+    return override;
   }
   const response = await fetchImpl('/api/session/current');
   if (!response.ok) {
@@ -74,11 +69,11 @@ export async function resolveCurrentSession(
   if (!session || typeof session.docId !== 'string' || !session.docId) {
     throw new Error('Server did not name a current session');
   }
-  resolved = session;
-  return session;
+  resolvedDocId = session.docId;
+  return resolvedDocId;
 }
 
 /** Test seam: forget the cached answer. */
 export function resetResolvedSession(): void {
-  resolved = null;
+  resolvedDocId = null;
 }

@@ -10,7 +10,9 @@ What it no longer owns is *which doc* (issue #111). It used to compute that from
 show's date, with a midnight-rollover rule bolted on — handling a day change that never
 happens mid-service while missing the one that easily does, an older deck being opened
 first. Now it proposes what it sees to the server before each session and connects to
-whatever it is told, once, at the point of connecting.
+whatever it is told. While connected it re-asks periodically and ends the session if the
+answer moved, so an operator pin set mid-service reaches this service too — the doc itself
+still only ever changes with nothing connected.
 
 Because ``feed.poll()`` never raises on a source problem, the only exceptions the reconnect
 loop handles are Y-Sweet/connection failures — a cleaner error boundary than the old
@@ -29,7 +31,12 @@ from httpx_ws import HTTPXWSException, aconnect_ws
 from pycrdt import Doc, Provider
 from pycrdt.websocket.websocket import HttpxWebsocket
 
-from session_client import ServerSessionResolver, SessionAnswer, SessionResolver
+from session_client import (
+    ServerSessionResolver,
+    SessionAnswer,
+    SessionResolutionError,
+    SessionResolver,
+)
 from slide_feed import SessionInfo, SlideFeed, SnapshotBus
 from slide_translator import SlideTranslator
 from write_key import write_key_headers
@@ -49,6 +56,7 @@ class RuntimeTiming:
     reconnect_backoff_max: float = 30.0
     ws_ping_interval: float = 15.0          # keepalive + silent-drop health ping
     ysweet_token_timeout: float = 30.0
+    session_recheck_interval: float = 60.0  # re-ask the server which doc, while connected
 
 
 class SlideSyncRuntime:
@@ -130,6 +138,28 @@ class SlideSyncRuntime:
             self.doc_id = answer.doc_id
             self._recreate_doc()
 
+    async def _doc_still_current(self, session: Optional[SessionInfo]) -> bool:
+        """Ask the server whether the doc we are connected to is still the current one.
+
+        A show that is on air for an hour never goes off air, so resolving only at session
+        start would mean an operator pin — the control #111 exists to provide, the one
+        that is supposed to fix a wrong doc *from a pew, mid-service* — could not reach
+        this service until the service was over. This is the check that lets it.
+
+        Deliberately side-effect-free: it answers a question, and the caller ends the
+        session so the doc is re-resolved (and the Doc recreated) the one place that is
+        safe, with nothing connected. A resolver failure is not a reason to drop a healthy
+        connection either — the question keeps until the next check.
+        """
+        if self.override_doc_id is not None:
+            return True
+        try:
+            answer = await self.resolver.resolve(session)
+        except Exception as e:
+            logger.debug(f"Could not re-check the current session ({type(e).__name__}: {e})")
+            return True
+        return answer.doc_id == self.doc_id
+
     def _recreate_doc(self) -> None:
         """Start a fresh Y.Doc so a new session doesn't inherit the last one's slides.
 
@@ -173,7 +203,7 @@ class SlideSyncRuntime:
                 await self._resolve_doc_for_session(session)
                 await self._run_session()
                 backoff = self.timing.reconnect_backoff_initial
-            except (HTTPXWSException, httpx.HTTPError, OSError) as e:
+            except (HTTPXWSException, httpx.HTTPError, OSError, SessionResolutionError) as e:
                 logger.warning(
                     f"Y-Sweet connection problem ({type(e).__name__}: {e}); "
                     f"reconnecting in {backoff:.0f}s"
@@ -231,12 +261,14 @@ class SlideSyncRuntime:
     async def _poll_until_session_end(self, websocket: Any, bus: SnapshotBus) -> None:
         """Poll the feed and fan snapshots out until the session should end.
 
-        Returns on sustained off air; raises on a websocket problem. Going off air is now
-        the only way a session ends, which is also the only moment the doc is re-resolved
-        — the server's answer is never swapped in underneath a live connection.
+        Returns on sustained off air, or when the server names a different doc; raises on
+        a websocket problem. Either way the doc is only ever *re-resolved* by ``run()``,
+        with nothing connected — the server's answer is never swapped in underneath a
+        live connection.
         """
         off_air_since: Optional[float] = None
         last_ping = anyio.current_time()
+        last_recheck = anyio.current_time()
         while True:
             snap = await self.feed.poll()
             if not snap.on_air:
@@ -261,4 +293,12 @@ class SlideSyncRuntime:
             if now - last_ping >= self.timing.ws_ping_interval:
                 await websocket.ping()
                 last_ping = now
+
+            # Has the current session moved out from under us? (An operator pin, most
+            # likely.) Throttled, and it only ends the session — run() does the resolving.
+            if now - last_recheck >= self.timing.session_recheck_interval:
+                last_recheck = now
+                if not await self._doc_still_current(snap.session):
+                    logger.info("Current session moved - ending session to change documents")
+                    return
             await anyio.sleep(self.timing.poll_interval)

@@ -31,10 +31,15 @@ export function makeSessionRouter({
 
   /**
    * The fact everyone reads. Deliberately open and cheap: it is on the critical path of
-   * every page load, and a viewer who can't reach it falls back to the date formula —
-   * so making it require anything would only add ways to be wrong.
+   * every page load, and it stands between a viewer and the service — so making it
+   * require anything would only add ways to be wrong.
    */
   router.get('/current', (_req, res) => {
+    // Never cached, anywhere. This answer decides which doc a whole service writes to, it
+    // changes the moment an operator pins one, and a viewer reloading to pick up that pin
+    // is the recovery path — a proxy serving a minute-old copy would break exactly the
+    // thing this endpoint exists for.
+    res.setHeader('Cache-Control', 'no-store');
     res.json(registry.current());
   });
 

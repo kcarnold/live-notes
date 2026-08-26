@@ -6,14 +6,9 @@
  * as taking the microphone.
  */
 import { apiFetch } from './writeKey.ts';
-import type { CurrentSession } from './sessionCurrent.ts';
+import type { CurrentSession, WriterSighting } from './sessionCurrent.ts';
 
-/** One writer recently seen asking to write to some doc. Mirrors WriterSighting. */
-export interface WriterSighting {
-  docId: string;
-  writer: string;
-  at: string;
-}
+export type { WriterSighting };
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
