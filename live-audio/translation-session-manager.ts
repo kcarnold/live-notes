@@ -13,16 +13,20 @@
  *
  * Usage:
  *   const manager = TranslationSessionManager.getInstance();
- *   manager.init({ documentManager, livekit });   // once, at server boot
+ *   manager.init({ docFactory, livekit });       // once, at server boot
  *   const bridge = await manager.getOrCreate(sessionId, targetLanguage, organizerIdentity);
  */
 
 import type { SimulateScenarioKind } from "@livekit/rtc-node";
-import type { DocumentManager } from "@y-sweet/sdk";
 import { RoomServiceClient } from "livekit-server-sdk";
 
-import { DEFAULT_SOURCE_LANGUAGE, normalizeSourceLanguage } from "../src/liveAudioConfig.ts";
-import { TranscriptWriter } from "./transcript-writer.ts";
+import {
+  DEFAULT_SOURCE_LANGUAGE,
+  normalizeSourceLanguage,
+  writeSourceLanguage,
+} from "../src/liveAudioConfig.ts";
+import type { ServerDoc } from "../serverDoc.ts";
+import { TranscriptSegmentLog } from "./transcript-log.ts";
 import { SILENCE_GATING_OFF_DBFS, TranslationBridge } from "./translation-bridge.ts";
 import type { BridgeHealth, BridgeStatus } from "./translation-bridge.ts";
 
@@ -246,8 +250,11 @@ export class TranslationSessionManager {
   // Map<sessionId, Map<languageCode, TranslationBridge>>
   private translations: Map<string, Map<string, TranslationBridge>> = new Map();
 
-  // Map<sessionId, TranscriptWriter> — one Yjs writer per session, shared by bridges.
-  private writers: Map<string, TranscriptWriter> = new Map();
+  // Map<sessionId, ServerDoc> — one connection to the session's shared doc, opened once
+  // per live session and used for everything the server writes there: every bridge's
+  // transcript, and the spoken language itself. Y-Sweet has no partial sync, so each
+  // entry is a full replica of that day's doc — one per session, never one per language.
+  private docs: Map<string, ServerDoc> = new Map();
 
   // Map<sessionId, BCP-47> — the language each live room is being spoken in. Refreshed
   // from presence on every reconcile (which is what makes it survive a server restart)
@@ -263,7 +270,11 @@ export class TranslationSessionManager {
   // attempt, so a language whose bridge won't start isn't retried every tick.
   private lastStartAttemptAt: Map<string, number> = new Map();
 
-  private documentManager: DocumentManager | null = null;
+  // How a session doc gets opened — the manager's whole dependency on Y-Sweet. The
+  // server hands over `connectServerDoc` bound to its DocumentManager; tests hand over
+  // a plain local Y.Doc and read back what the manager wrote. Omitted, the manager
+  // supervises bridges and writes to no doc at all.
+  private docFactory: ((docId: string) => ServerDoc) | null = null;
   private livekitConfig: LiveKitConfig | null = null;
   private telemetry: TelemetryClient | null = null;
   private directory: RoomDirectory | null = null;
@@ -292,18 +303,18 @@ export class TranslationSessionManager {
   /**
    * Provide the dependencies the manager needs to persist transcripts and supervise
    * bridges. Called once from the server at boot; tests construct their own instance
-   * and inject a fake directory/bridge factory.
+   * and inject a fake directory/bridge/doc factory.
    */
   init(opts: {
-    documentManager: DocumentManager;
     livekit: LiveKitConfig;
     telemetry?: TelemetryClient;
     silenceThresholdDbfs?: number;
     defaultSourceLanguage?: string;
     directory?: RoomDirectory;
     bridgeFactory?: typeof defaultBridgeFactory;
+    docFactory?: (docId: string) => ServerDoc;
   }): void {
-    this.documentManager = opts.documentManager;
+    this.docFactory = opts.docFactory ?? null;
     this.livekitConfig = opts.livekit;
     this.telemetry = opts.telemetry ?? null;
     this.silenceThresholdDbfs = opts.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
@@ -365,14 +376,14 @@ export class TranslationSessionManager {
     stamps.set(wanted, now);
     stamps.set(primary, now);
 
-    const writer = this.getOrCreateWriter(sessionId);
+    const transcript = this.transcriptLogFor(sessionId);
 
     // Always keep the primary bridge alive (the spoken-language transcript writer).
-    const primaryBridge = await this.ensureBridge(sessionId, primary, organizerIdentity, writer);
+    const primaryBridge = await this.ensureBridge(sessionId, primary, organizerIdentity, transcript);
     if (wanted === primary) {
       return primaryBridge;
     }
-    return this.ensureBridge(sessionId, wanted, organizerIdentity, writer);
+    return this.ensureBridge(sessionId, wanted, organizerIdentity, transcript);
   }
 
   /** The always-on bridge's target for this room, given what it's being spoken in. */
@@ -391,14 +402,51 @@ export class TranslationSessionManager {
     return stamps;
   }
 
-  private getOrCreateWriter(sessionId: string): TranscriptWriter | null {
-    if (!this.documentManager) return null;
-    let writer = this.writers.get(sessionId);
-    if (!writer) {
-      writer = new TranscriptWriter(sessionId, this.documentManager);
-      this.writers.set(sessionId, writer);
+  /** This session's doc connection, opened on first use and held until teardown. */
+  private getOrCreateDoc(sessionId: string): ServerDoc | null {
+    if (!this.docFactory) return null;
+    let entry = this.docs.get(sessionId);
+    if (!entry) {
+      entry = this.docFactory(sessionId);
+      this.docs.set(sessionId, entry);
     }
-    return writer;
+    return entry;
+  }
+
+  /**
+   * The transcript log the session's bridges append through. Stateless over the doc
+   * (see TranscriptSegmentLog), so this is a view, not a resource — the connection
+   * underneath is the thing with a lifetime.
+   */
+  private transcriptLogFor(sessionId: string): TranscriptSegmentLog | null {
+    const entry = this.getOrCreateDoc(sessionId);
+    return entry ? new TranscriptSegmentLog(entry.doc) : null;
+  }
+
+  /**
+   * Mirror the spoken language into the shared doc, where viewers and exports read it.
+   *
+   * Presence stays authoritative — the supervisor decides from room attributes and
+   * can't wait on a doc sync (see src/liveAudioConfig.ts). This write exists because
+   * nothing else tells a *browser* what the room is being spoken in: a broadcaster who
+   * declares one writes it themselves, but the macOS audio feeder and pre-`speaks`
+   * clients declare nothing, and the deployment default (LIVE_AUDIO_SOURCE_LANGUAGE)
+   * reached only the server. A session fed by those used to route bridges as Spanish
+   * while every viewer, and every later export, labelled the transcripts English.
+   *
+   * Deferred until the initial sync rather than awaited: reconcileRoom runs over every
+   * room in a tick, so blocking here would stall the others on one network round-trip.
+   * writeSourceLanguage no-ops when the value is unchanged, so the steady state costs
+   * nothing per tick.
+   */
+  private publishSourceLanguage(sessionId: string, code: string): void {
+    const entry = this.getOrCreateDoc(sessionId);
+    if (!entry) return;
+    void entry.synced
+      .then(() => writeSourceLanguage(entry.doc, code))
+      .catch((e) => {
+        console.warn(`[SessionManager] Publishing spoken language for ${sessionId} failed:`, e);
+      });
   }
 
   /**
@@ -411,7 +459,7 @@ export class TranslationSessionManager {
     sessionId: string,
     targetLanguage: string,
     organizerIdentity: string,
-    writer: TranscriptWriter | null
+    transcript: TranscriptSegmentLog | null
   ): Promise<TranslationBridge> {
     let languageMap = this.translations.get(sessionId);
     if (languageMap) {
@@ -446,7 +494,7 @@ export class TranslationSessionManager {
       livekitUrl: this.livekitConfig?.url ?? process.env.LIVEKIT_URL ?? process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "ws://localhost:7880",
       livekitApiKey: this.livekitConfig?.apiKey ?? process.env.LIVEKIT_API_KEY!,
       livekitApiSecret: this.livekitConfig?.apiSecret ?? process.env.LIVEKIT_API_SECRET!,
-      writer,
+      transcript,
       writesSourceTranscript: targetLanguage === this.primaryTargetFor(sessionId),
       sourceLanguage: this.getSourceLanguage(sessionId),
       recordEvent,
@@ -518,7 +566,7 @@ export class TranslationSessionManager {
     return fired;
   }
 
-  /** Stop every bridge for a session and close its transcript writer. */
+  /** Stop every bridge for a session and close its doc connection. */
   private async teardownSession(sessionId: string): Promise<void> {
     const languageMap = this.translations.get(sessionId);
     if (languageMap) {
@@ -529,10 +577,10 @@ export class TranslationSessionManager {
       this.translations.delete(sessionId);
     }
 
-    const writer = this.writers.get(sessionId);
-    if (writer) {
-      writer.close();
-      this.writers.delete(sessionId);
+    const entry = this.docs.get(sessionId);
+    if (entry) {
+      entry.close();
+      this.docs.delete(sessionId);
     }
 
     this.lastDesiredAt.delete(sessionId);
@@ -605,6 +653,9 @@ export class TranslationSessionManager {
       );
     }
     const sourceLanguage = this.getSourceLanguage(sessionId);
+    // Only while a broadcaster is present, for the same reason as above: an empty
+    // room must not stamp the deployment default over a live session's declaration.
+    if (hasBroadcaster) this.publishSourceLanguage(sessionId, sourceLanguage);
 
     const desired = computeDesiredLanguages(participants, {
       defaultLanguage: TranslationSessionManager.DEFAULT_LANGUAGE,
@@ -648,7 +699,7 @@ export class TranslationSessionManager {
     const organizerIdentity =
       participants.find((p) => p.identity.startsWith(ORGANIZER_PREFIX))?.identity ??
       "organizer-host";
-    const writer = plan.start.length > 0 ? this.getOrCreateWriter(sessionId) : null;
+    const transcript = plan.start.length > 0 ? this.transcriptLogFor(sessionId) : null;
     for (const language of plan.start) {
       const key = `${sessionId}:${language}`;
       if (now - (this.lastStartAttemptAt.get(key) ?? 0) < START_RETRY_MS) continue;
@@ -660,7 +711,7 @@ export class TranslationSessionManager {
         properties: { sessionId, language },
       });
       try {
-        await this.ensureBridge(sessionId, language, organizerIdentity, writer);
+        await this.ensureBridge(sessionId, language, organizerIdentity, transcript);
       } catch (e) {
         console.error(`[SessionManager] Supervisor start of ${language} in ${sessionId} failed:`, e);
         this.telemetry?.capture({
@@ -684,7 +735,7 @@ export class TranslationSessionManager {
       (this.translations.get(sessionId)?.size ?? 0) === 0 &&
       desired.size === 0 &&
       participants.length === 0 &&
-      (this.writers.has(sessionId) || this.lastDesiredAt.has(sessionId))
+      (this.docs.has(sessionId) || this.lastDesiredAt.has(sessionId))
     ) {
       await this.teardownSession(sessionId);
     }

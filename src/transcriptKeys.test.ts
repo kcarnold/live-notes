@@ -12,7 +12,7 @@ import {
 } from './transcriptKeys';
 
 /**
- * Write a segment the way live-audio/transcript-writer.ts does. Only observations go in
+ * Write a segment the way live-audio/transcript-log.ts does. Only observations go in
  * — `startedAt`/`endedAt` — because the gap is derived, so a test can't hand-wave it.
  */
 function pushSegment(

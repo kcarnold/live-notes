@@ -5,7 +5,7 @@
 // late joiners the full history.
 //
 // Each segment carries how much silence preceded it, measured server-side at write
-// time (see live-audio/transcript-writer.ts). A long enough gap renders as a break
+// time (see live-audio/transcript-log.ts). A long enough gap renders as a break
 // between utterances, so a reader can tell "the speaker stopped for a while" from
 // "these two sentences ran together" — which unbroken text can't express.
 //

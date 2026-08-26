@@ -1,34 +1,31 @@
 /**
- * TranscriptWriter: a server-side Yjs writer that persists live translation
- * transcripts into the session's shared Y-Sweet doc, so any viewer — including
- * late joiners — can read the full transcript history.
+ * TranscriptSegmentLog: the segmentation rules that turn a stream of Gemini
+ * transcription deltas into timestamped utterances in a session's shared doc, so any
+ * viewer — including late joiners — can read the full transcript history.
  *
- * One writer per session (doc), shared by all of that session's TranslationBridges.
- * Each language's transcript accumulates in a `liveTranscriptSegments-{code}` Y.Array
- * of segment Y.Maps (`{ startedAt, gapMs?, text: Y.Text }`): Gemini Live Translate
- * streams a continuous flow of transcription deltas (it has no "turns", so no
- * turnComplete to flush on), so we append each delta verbatim into the open segment
- * and start a new one once a sentence finishes. The Y.Array is the single source of
- * truth — there is no separate ephemeral interim stream.
+ * It writes into a Y.Doc it is handed and owns no connection: the session doc is
+ * opened once per session by the caller (see serverDoc.ts) and shared by all of that
+ * session's TranslationBridges. Each language's transcript accumulates in a
+ * `liveTranscriptSegments-{code}` Y.Array of segment Y.Maps (`{ startedAt, gapMs?,
+ * text: Y.Text }`): Gemini Live Translate streams a continuous flow of transcription
+ * deltas (it has no "turns", so no turnComplete to flush on), so we append each delta
+ * verbatim into the open segment and start a new one once a sentence finishes. The
+ * Y.Array is the single source of truth — there is no separate ephemeral interim stream.
  *
  * Segments exist so the transcript can carry *time*, which a flat Y.Text cannot: this
- * writer is the only place in the system that knows when a delta arrived, so timing has
+ * log is the only place in the system that knows when a delta arrived, so timing has
  * to be recorded here or it's unrecoverable downstream (a viewer can only ever time
  * deltas it was present for). Each segment records when it opened (`startedAt`) and when
  * it last grew (`endedAt`) — observations only. The silence *between* utterances is
  * derived from those at read time, which is what lets the client turn a long gap into a
- * visible break without this writer having to decide, or remember, anything.
+ * visible break without this log having to decide, or remember, anything.
  *
  * Mirrors the Proclaim service's "external process writes into Yjs" pattern, but
- * in-process on the Node server using the same Y-Sweet DocumentManager that issues
- * client tokens.
+ * in-process on the Node server.
  */
 
 import * as Y from "yjs";
-import { createYjsProvider, type YSweetProvider } from "@y-sweet/client";
-import type { DocumentManager } from "@y-sweet/sdk";
 
-import { serverDocTokenCallback } from "../ysDocToken.ts";
 import {
   TRANSCRIPT_ENDED_AT_RESOLUTION_MS,
   TRANSCRIPT_PAUSE_MS,
@@ -122,32 +119,5 @@ export class TranscriptSegmentLog {
         }
       }
     });
-  }
-}
-
-export class TranscriptWriter {
-  public readonly docId: string;
-  private doc = new Y.Doc();
-  private provider: YSweetProvider;
-  private log = new TranscriptSegmentLog(this.doc);
-
-  constructor(docId: string, documentManager: DocumentManager) {
-    this.docId = docId;
-    this.provider = createYjsProvider(
-      this.doc,
-      docId,
-      serverDocTokenCallback(documentManager, docId),
-      { connect: true }
-    );
-  }
-
-  /** Append a streamed transcription delta for a language. See TranscriptSegmentLog.append. */
-  appendDelta(code: string, text: string): void {
-    this.log.append(code, text);
-  }
-
-  close(): void {
-    this.provider.destroy();
-    this.doc.destroy();
   }
 }

@@ -1,6 +1,6 @@
 // The transcript's rendering half: given segments carrying gap timings, does a long
 // silence actually become a visible break in the right place? The measuring half
-// (which gaps exist at all) is covered in live-audio/transcript-writer.test.ts, and
+// (which gaps exist at all) is covered in live-audio/transcript-log.test.ts, and
 // the threshold itself in transcriptKeys.test.ts.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';

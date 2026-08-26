@@ -957,11 +957,13 @@ describe("TranslationBridge (end-to-end, faked LiveKit + Gemini)", () => {
 
   it("files the speaker's own words under the language being spoken", async () => {
     const appended: Array<[string, string]> = [];
-    const writer = {
-      appendDelta: (code: string, text: string) => appended.push([code, text]),
+    const transcript = {
+      append: (code: string, text: string) => appended.push([code, text]),
     };
     const { bridge } = await boot((room) => room.seatOrganizer(ORGANIZER), {
-      writer: writer as unknown as ConstructorParameters<typeof TranslationBridge>[3]["writer"],
+      transcript: transcript as unknown as ConstructorParameters<
+        typeof TranslationBridge
+      >[3]["transcript"],
       writesSourceTranscript: true,
       sourceLanguage: "es",
     });

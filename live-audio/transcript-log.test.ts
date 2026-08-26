@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 
-import { TranscriptSegmentLog, endsSentence } from "./transcript-writer.ts";
+import { TranscriptSegmentLog, endsSentence } from "./transcript-log.ts";
 import {
   TRANSCRIPT_PAUSE_MS,
   readTranscriptSegments,
