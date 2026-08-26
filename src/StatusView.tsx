@@ -1,9 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useMap, useYDoc } from '@y-sweet/react';
 import { useStrings } from './useLocale';
 import { getDocId } from './getDocId';
 import { TranscriptHealth } from './TranscriptHealth';
 import { getWriteKey, maskWriteKey, setWriteKey } from './writeKey';
+import { clearSessionPin, fetchSessionWriters, pinSession, type WriterSighting } from './sessionApi';
+import type { CurrentSession } from './sessionCurrent';
 
 /**
  * Session status / admin page.
@@ -132,6 +134,131 @@ function WriteKeySection({
   );
 }
 
+/**
+ * The operator control from #111: which doc everything is writing to, and the pin that
+ * overrides it.
+ *
+ * This is the piece that would have let last Sunday be fixed from a pew — the whole point
+ * of moving the decision to the server. It sits next to the writer list deliberately:
+ * "the service is down" and "the service is writing to last week's doc" produced the
+ * identical empty pane, and only one of them is fixable in the next thirty seconds.
+ */
+function CurrentSessionSection({
+  session,
+  writers,
+  error,
+  busy,
+  onPin,
+  onClearPin,
+}: {
+  session: CurrentSession;
+  writers: WriterSighting[];
+  error: string | null;
+  busy: boolean;
+  onPin: (docId: string) => void;
+  onClearPin: () => void;
+}) {
+  const s = useStrings();
+  const [typed, setTyped] = useState('');
+  const pending = typed.trim();
+
+  const sourceLabel = {
+    pin: s.statusSessionSourcePin,
+    proposal: s.statusSessionSourceProposal,
+    date: s.statusSessionSourceDate,
+  }[session.source];
+
+  return (
+    <section className={SECTION_CLASS}>
+      <h2 className={SECTION_TITLE_CLASS}>{s.statusSessionTitle}</h2>
+      <p className={PLACEHOLDER_CLASS}>{s.statusSessionDescription}</p>
+
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+        <code className="font-semibold">{session.docId}</code>
+        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700">
+          {sourceLabel}
+        </span>
+        {session.setBy && (
+          <span className={PLACEHOLDER_CLASS}>
+            {s.statusSessionSetBy} {session.setBy}
+          </span>
+        )}
+        {session.expiresAt && (
+          <span className={PLACEHOLDER_CLASS}>
+            · {s.statusSessionLapses} {new Date(session.expiresAt).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!pending) return;
+          onPin(pending);
+          setTyped('');
+        }}
+      >
+        <input
+          type="text"
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          placeholder={s.statusSessionPlaceholder}
+          aria-label={s.statusSessionPlaceholder}
+          autoComplete="off"
+          spellCheck={false}
+          className="flex-1 min-w-40 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm font-mono"
+        />
+        <button
+          type="submit"
+          disabled={!pending || busy}
+          className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:hover:bg-blue-500 text-sm"
+        >
+          {s.statusSessionPin}
+        </button>
+        {session.source === 'pin' && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClearPin}
+            className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-40"
+          >
+            {s.statusSessionClearPin}
+          </button>
+        )}
+      </form>
+      {error && (
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {s.statusSessionFailed}: {error}
+        </p>
+      )}
+
+      <h3 className="text-sm font-semibold mt-1">{s.statusWritersTitle}</h3>
+      {writers.length === 0 ? (
+        <p className={PLACEHOLDER_CLASS}>{s.statusWritersEmpty}</p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-sm">
+          {writers.map((writer) => {
+            const elsewhere = writer.docId !== session.docId;
+            return (
+              <li key={`${writer.writer} ${writer.docId}`} className="flex flex-wrap items-baseline gap-2">
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${elsewhere ? 'bg-amber-500' : 'bg-green-500'}`} />
+                <span>{writer.writer}</span>
+                <code className="text-xs text-gray-500 dark:text-gray-400">{writer.docId}</code>
+                {elsewhere && (
+                  <span className="text-xs text-amber-700 dark:text-amber-400">
+                    {s.statusWritersElsewhere}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export interface StatusViewProps {
   /** The session's doc id (drives the export link). */
   docId: string;
@@ -152,6 +279,19 @@ export interface StatusViewProps {
    * section entirely, which is what keeps the section out of tests that don't care.
    */
   onWriteKeyChange?: (key: string | null) => void;
+  /**
+   * The server's current-session answer (#111). Omitting it hides the section, on the
+   * same principle as the write key above.
+   */
+  session?: CurrentSession | null;
+  /** Writers recently seen, so a doc-id disagreement is visible rather than inferred. */
+  writers?: WriterSighting[];
+  /** Why the last pin change failed, if it did. */
+  sessionError?: string | null;
+  /** True while a pin change is in flight. */
+  sessionBusy?: boolean;
+  onPinSession?: (docId: string) => void;
+  onClearSessionPin?: () => void;
 }
 
 export function StatusView({
@@ -160,6 +300,12 @@ export function StatusView({
   liveTranscripts,
   writeKey = null,
   onWriteKeyChange,
+  session = null,
+  writers = [],
+  sessionError = null,
+  sessionBusy = false,
+  onPinSession,
+  onClearSessionPin,
 }: StatusViewProps) {
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
@@ -177,6 +323,19 @@ export function StatusView({
           <h1 className="text-2xl font-bold">{s.statusTitle}</h1>
           <code className="text-xs text-gray-500 dark:text-gray-400">{docId}</code>
         </header>
+
+        {/* Which session everything is writing to (#111). First, because every other
+            tile on this page is meaningless if the answer is the wrong doc. */}
+        {session && onPinSession && onClearSessionPin && (
+          <CurrentSessionSection
+            session={session}
+            writers={writers}
+            error={sessionError}
+            busy={sessionBusy}
+            onPin={onPinSession}
+            onClearPin={onClearSessionPin}
+          />
+        )}
 
         {/* Health — placeholder tiles until #72 wires component heartbeats. */}
         <section className={sectionClass}>
@@ -268,6 +427,9 @@ export function StatusView({
   );
 }
 
+/** How often the writer list refreshes. Fast enough to watch a service come up. */
+const WRITERS_POLL_MS = 10_000;
+
 /** Yjs connector: reads the `status` Y.Map and the session doc id. */
 export function StatusViewContainer() {
   useYDoc(); // Ensure this renders within the session's YDocProvider.
@@ -278,6 +440,52 @@ export function StatusViewContainer() {
   });
   // The stored key isn't reactive, so mirror it into state to re-render on a change.
   const [writeKey, setWriteKeyState] = useState<string | null>(() => getWriteKey());
+
+  // The current session and who is writing where. Polled rather than pushed: it lives on
+  // the server, not in the doc — deliberately, since a doc-scoped view of "which doc is
+  // current" could only ever agree with itself.
+  const [session, setSession] = useState<CurrentSession | null>(null);
+  const [writers, setWriters] = useState<WriterSighting[]>([]);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionBusy, setSessionBusy] = useState(false);
+
+  // Bumped after a pin change so the poll re-runs at once instead of on its next tick.
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const { current, writers: seen } = await fetchSessionWriters();
+        if (!active) return;
+        setSession(current);
+        setWriters(seen);
+      } catch (error) {
+        console.warn('[status] could not read the current session', error);
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), WRITERS_POLL_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [refreshToken]);
+
+  /** Run a pin change, then re-read rather than trusting our own optimistic guess. */
+  const change = useCallback(async (action: () => Promise<CurrentSession>) => {
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      setSession(await action());
+      setRefreshToken((n) => n + 1);
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSessionBusy(false);
+    }
+  }, []);
+
   return (
     <StatusView
       docId={getDocId()}
@@ -288,6 +496,12 @@ export function StatusViewContainer() {
         setWriteKey(key);
         setWriteKeyState(key);
       }}
+      session={session}
+      writers={writers}
+      sessionError={sessionError}
+      sessionBusy={sessionBusy}
+      onPinSession={(docId) => void change(() => pinSession(docId))}
+      onClearSessionPin={() => void change(() => clearSessionPin())}
     />
   );
 }

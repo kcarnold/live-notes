@@ -45,6 +45,12 @@ Optional environment variables:
   endpoints viewers call and a write key can't protect (defaults 600 / 1200; 0 disables).
   Sized to stop a script, not a congregation — see [rateLimit.ts](rateLimit.ts).
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
+- `SESSION_TIMEZONE` - IANA zone the congregation keeps (default: the host's zone). The
+  server owns "which doc is the current session" for everyone (issue #111), so it reckons
+  dates and the 4am pin expiry on this clock — a container's is UTC, which would file a
+  Sunday-evening service under Monday. See [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
+- `SESSION_REGISTRY_PATH` - where the pin/proposal state is persisted (default: inside the
+  audio-cache dir, so a pin survives a restart mid-service).
 - `LIVE_AUDIO_SOURCE_LANGUAGE` - BCP-47 code a session is assumed to be *spoken* in when
   nobody declares one (default `en`). The broadcast pane asks the speaker and publishes their
   answer per session; this is only the fallback, for older clients and the macOS audio feeder.
@@ -153,7 +159,8 @@ re-push), `test_slide_seam` (replayed feed drives the real consumers), `test_sli
 (record → JSONL → replay through the real consumers, driven by the committed synthetic fixture
 [tests/fixtures/synthetic_service.jsonl](tests/fixtures/synthetic_service.jsonl); regenerate
 with `uv run tests/fixtures/make_synthetic_service.py`), `test_proclaim_lib`,
-`test_service_version` (the self-reported version / "update pending" flag), and
+`test_service_version` (the self-reported version / "update pending" flag),
+`test_session_client` (proposing the on-air date and obeying the answer, #111), and
 `test_proclaim_launcher` (the auto-update launch wrapper).
 The shared fakes for the Proclaim DB, the Y-Sweet websocket, and the Yjs Provider live in
 [tests/helpers.py](tests/helpers.py); timing is scaled down by injecting it (constructor args)
@@ -191,12 +198,30 @@ endpoints that spend money. Clients present it as `X-Write-Key`. Defaults to `ob
 which records every privileged request and allows it anyway. Full picture:
 [docs/WRITE_KEYS.md](docs/WRITE_KEYS.md).
 
+### The Current Session
+
+Which Y-Sweet doc everything reads and writes is a **server-owned fact**, not a formula each
+component re-derives ([sessionRegistry.ts](sessionRegistry.ts), routes in
+[sessionRoutes.ts](sessionRoutes.ts), browser side [src/getDocId.ts](src/getDocId.ts) +
+[src/SessionGate.tsx](src/SessionGate.tsx), Python side [session_client.py](session_client.py)).
+
+Precedence: `?doc=` / explicit `doc_id` override → an operator pin set from `/status` →
+the Proclaim service's accepted proposal → the date in `SESSION_TIMEZONE`. The service
+*proposes* what is on air and connects to whatever it is told; a show dated before today is
+refused (`stale`), which is exactly the failure in #111. Pins lapse at 4am. Nobody keeps a
+client-side copy of the date formula — an unreachable server is reported, not guessed
+around. Writer sightings (`GET /api/session/writers`, shown on `/status`) make "the service
+is down" and "the service is writing to last week's doc" look different.
+
+Full picture: [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
+
 ### Core Collaboration Flow
 
 The app uses **Yjs** for real-time collaborative state management:
 
 1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status, gated on a write key (an unauthorized editor request is downgraded to read-only, not refused)
-2. **Shared Y.Doc** per session: Each session (identified by `?doc=doc-YYYY-MM-DD`) has a shared Yjs document
+2. **Shared Y.Doc** per session: Each session has a shared Yjs document, identified by the doc
+   id the server names (see *The Current Session* above); `?doc=` overrides it
 3. **Key shared data structures** (the header comment in [sessionExport.ts](sessionExport.ts) is
    the canonical description — it has to read all of them):
    - `sourceBlocks` (Y.Array of block Y.Maps): the notes being taken
@@ -493,6 +518,8 @@ The app has two modes determined by URL hash (`#editor`):
 
 ### Backend
 - [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
+- [sessionRegistry.ts](sessionRegistry.ts) / [sessionRoutes.ts](sessionRoutes.ts) - the
+  server-owned current session (#111): pin/proposal/date precedence, 4am expiry, writer sightings
 - [nlp.ts](nlp.ts) - Gemini API integration for translation
 - Proclaim → Yjs sync (Python), decoupled into a slide feed + consumers:
   - [proclaim_service.py](proclaim_service.py) - thin entrypoint: env/config, telemetry, and wiring
@@ -503,11 +530,15 @@ The app has two modes determined by URL hash (`#editor`):
   - [slide_sync_runtime.py](slide_sync_runtime.py) - `SlideSyncRuntime`: doc lifecycle, connect/reconnect, fan-out
   - [slide_replay.py](slide_replay.py) - record/replay of the `FeedSnapshot` stream (issue #70, Proclaim slice): `RecordingSlideFeed` (`--record`), `ReplaySlideFeed` (`--replay`), `replay_records_through_consumers` (offline replay through the real consumers)
   - [proclaim_lib.py](proclaim_lib.py) - DB access + rich-text/XML slide parsing (unchanged, shared)
+  - [session_client.py](session_client.py) - proposes the on-air show's date to the server and
+    takes the doc it is given back (#111); the service no longer decides its own doc
 
 ### Frontend Core
 - [App.tsx](src/App.tsx) - Main React app with routing and layout system
 - [translationUtils.ts](src/translationUtils.ts) - Translation pipeline logic (chunking, caching, reconstruction)
 - [yjsUtils.ts](src/yjsUtils.ts) - Yjs utility functions and React hooks
+- [getDocId.ts](src/getDocId.ts) / [SessionGate.tsx](src/SessionGate.tsx) / [sessionApi.ts](src/sessionApi.ts) -
+  resolving the current session before anything mounts, and the `/status` pin controls
 
 ### Components
 - [BlockEditor.tsx](src/BlockEditor.tsx) - Block-based collaborative editor with Yjs backing

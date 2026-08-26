@@ -120,8 +120,15 @@ writer once each component announces its clientID (planned: via the status heart
   reconcile with a broadcaster present — presence routes the bridges, but the doc is the only
   thing viewers and later exports can read. See
   [src/liveAudioConfig.ts](../src/liveAudioConfig.ts).
-- **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
-  show's scheduled date), so a service's state lives in one doc per date.
+- **The current doc id is a server-owned fact, not a formula** — one doc per service, but
+  *which* one is decided in one place and read by everyone: `?doc=` override, else an
+  operator pin set from `/status`, else the Proclaim service's accepted proposal, else the
+  date in `SESSION_TIMEZONE`. Browsers fetch it before mounting anything (`src/getDocId.ts`,
+  `src/SessionGate.tsx`); the service proposes what is on air and connects to whatever it is
+  told (`session_client.py`). Nobody keeps a private copy of the date formula to fall back
+  on. This is issue #111 — three parties computing it independently and never comparing
+  answers — and it is worth reading [CURRENT_SESSION.md](CURRENT_SESSION.md) before touching
+  anything that resolves a doc id.
 - **Editor vs viewer** is enforced server-side via Y-Sweet token scope. The `#editor` request
   states an intent; whether it is honored depends on a shared per-device write key
   (`writeAuth.ts`, [WRITE_KEYS.md](WRITE_KEYS.md)) — as does taking the microphone, and the
