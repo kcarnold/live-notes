@@ -7,7 +7,7 @@
 // dependency-free in the same way) so either side can import it without pulling the
 // other's bundle in.
 import type * as Y from 'yjs';
-import { readSourceLanguage } from './liveAudioConfig';
+import { readSourceLanguage } from './liveAudioConfig.ts';
 
 /**
  * Legacy prefix: transcripts used to be one flat, append-only Y.Text per language,
