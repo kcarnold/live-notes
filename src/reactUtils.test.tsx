@@ -338,14 +338,13 @@ describe('useStickToBottom with content that arrives after mount', () => {
     expect(result.current.pinned).toBe(true);
   });
 
-  // The notes view renders its bottom sentinel unconditionally, so "the sentinel
-  // exists" is not evidence that anything has loaded. The initial jump has to wait
-  // for the container to actually have something to scroll, or it is spent on an
-  // empty container and the reader is left at the top of the synced-in history.
-  it('waits for scrollable content when the sentinel is rendered from the start', () => {
+  // Content that arrives too short to overflow the container has nothing to
+  // scroll to, so the initial jump must not be spent on it — it is still owed to
+  // the reader once enough arrives to push the bottom out of view.
+  it('holds the initial jump until there is something to scroll', () => {
     const { el, scrollTo, set } = makeParent({ scrollTop: 0, scrollHeight: 900, clientHeight: 900 });
     const parentRef = { current: el };
-    const targetRef = { current: makeTarget(4900) }; // present from mount, nothing above it
+    const targetRef = { current: makeTarget(4900) };
 
     const { rerender } = renderHook(
       ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
@@ -353,11 +352,37 @@ describe('useStickToBottom with content that arrives after mount', () => {
     );
     expect(scrollTo).not.toHaveBeenCalled();
 
-    // Blocks sync in; now there is history to be at the bottom of.
     set({ scrollHeight: 5000 });
     rerender({ deps: [1] });
 
     expect(scrollTo).toHaveBeenCalledWith({ top: 4800, behavior: 'auto' });
+  });
+
+  // Regression: the notes view returns early while it has no blocks, rendering
+  // neither the scroll container nor the sentinel, so this hook is handed a null
+  // parent on the first render. Listeners bound once at mount would bind to
+  // nothing and — the handlers being stable — never re-run, leaving the reader
+  // permanently pinned: no pill, and no way to scroll away and stay away.
+  it('binds its listeners to a scroll container that mounts later', () => {
+    const { el, fire, set } = makeParent({ scrollTop: 0, scrollHeight: 5000, clientHeight: 900 });
+    const parentRef = { current: null as HTMLElement | null };
+    const targetRef = { current: null as HTMLElement | null };
+
+    const { result, rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    // Blocks sync in: container and sentinel mount together.
+    parentRef.current = el;
+    targetRef.current = makeTarget(4900);
+    rerender({ deps: [1] });
+
+    // The reader scrolls back up to re-read something.
+    set({ scrollTop: 0 });
+    act(() => fire('scroll'));
+
+    expect(result.current.pinned).toBe(false);
   });
 
   it('only takes over the initial jump once, leaving later growth to the throttle', () => {
@@ -442,6 +467,35 @@ describe('useStickToBottom with content that arrives after mount', () => {
     // Landed.
     set({ scrollTop: 1000 });
     act(() => fire('scroll'));
+    expect(result.current.pinned).toBe(true);
+  });
+
+  // A glide takes a few hundred ms, and fast speech can append more than the
+  // near-bottom threshold in that time — so the scroll lands exactly where it
+  // aimed and is *still* short of the bottom. That's our scroll to catch up on,
+  // not the reader walking away: unpinning here would stop the chase for good and
+  // strand them a paragraph from the latest with the pill showing.
+  it('stays pinned when content outgrows the target mid-glide', () => {
+    const { el, fire, set } = makeParent({ scrollTop: 0, scrollHeight: 1900, clientHeight: 900 });
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget(1100) };
+
+    const { result, rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    rerender({ deps: [1] });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    }); // smooth scroll issued, aiming at scrollTop 1000
+
+    // Mid-glide a long utterance lands: 300px of new content below us.
+    set({ scrollHeight: 2200 });
+    // The glide finishes at the target it was given, now 300px short of the bottom.
+    set({ scrollTop: 1000 });
+    act(() => fire('scroll'));
+
     expect(result.current.pinned).toBe(true);
   });
 
