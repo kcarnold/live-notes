@@ -32,6 +32,7 @@ struct MenuContentView: View {
             }
 
             deviceSummary
+            roomSummary
 
             Divider()
 
@@ -94,6 +95,32 @@ struct MenuContentView: View {
             }
         }
         .font(.caption)
+    }
+
+    /// Which room this will publish into — the fact that decides whether the device, channel
+    /// and schedule above matter at all.
+    ///
+    /// Everything else in this popover reports something that fails loudly when it is wrong: a
+    /// missing device turns orange, a bad key fails the token, an off schedule now says so. A
+    /// wrong room fails silently and looks like success — the feeder connects, publishes, and
+    /// the meter moves, into a room no viewer has open. It is also the only setting derived
+    /// from *this Mac's* clock, so a booth machine with a wrong date produces exactly that.
+    /// Settings already showed the room; an unattended install is judged from the popover.
+    private var roomSummary: some View {
+        HStack(spacing: 6) {
+            Image(systemName: controller.config.pinnedDocID == nil
+                  ? "dot.radiowaves.left.and.right" : "pin.fill")
+            Text(controller.config.resolvedDocID())
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if controller.config.pinnedDocID != nil {
+                // Pinning is rare and usually a one-off, which is precisely why it needs
+                // saying: it is set for one service and then quietly outlives the reason.
+                Text("pinned").foregroundStyle(.orange)
+            }
+        }
+        .font(.caption)
+        .help(controller.config.roomSummary())
     }
 
     /// What decides whether the feeder runs — as a control whose selection *is* the state.
