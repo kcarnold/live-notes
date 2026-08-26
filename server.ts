@@ -68,7 +68,7 @@ const geminiProvider = new GeminiProvider({
 // translates all slides into all languages and sorts a multilingual reference dump into
 // the right languages, so capability matters more than the latency/cost of the hot
 // incremental notes path (which stays on defaultModel). Override via GEMINI_STRONG_MODEL.
-const STRONG_MODEL = process.env.GEMINI_STRONG_MODEL || 'gemini-3.5-flash';
+const STRONG_MODEL = process.env.GEMINI_STRONG_MODEL || 'gemini-3.7-flash';
 
 // General context injected into every slide-translation prompt: the setting and the intent
 // of the translations. Steers register and reminds the model these are for understanding,
