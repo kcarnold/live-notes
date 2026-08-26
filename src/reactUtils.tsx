@@ -71,6 +71,14 @@ export function useStickToBottom(
       // scrollbar mid-glide), ends the glide and hands control back.
       if (distance > SCROLL_ARRIVAL_PX && distance <= previousDistance) return;
       glideRef.current = null;
+      if (distance <= SCROLL_ARRIVAL_PX) {
+        // Landed exactly where we asked to be. Content that arrived mid-glide has
+        // moved the bottom on without us, so this can finish short of it — but
+        // that is our scroll to catch up on, not the reader walking away, and
+        // reading position here would unpin them and stop the chase for good.
+        updatePinned(true);
+        return;
+      }
     }
 
     updatePinned(isNearBottom());
@@ -87,8 +95,26 @@ export function useStickToBottom(
     }, USER_SCROLL_HOLDOFF_MS);
   }, []);
 
-  React.useEffect(() => {
+  // The scroll container can mount *after* this hook does: a caller showing an
+  // empty state until its content syncs in (BilingualBlockViewer returns early,
+  // rendering neither the container nor the sentinel) hands us a null ref on the
+  // first render. Binding once on mount would therefore bind to nothing and,
+  // since the handlers are stable, never re-run — leaving the reader unable to
+  // unpin at all: no jump-to-latest pill, and no way to scroll away from a view
+  // that keeps chasing the bottom. So re-check whenever tracked content changes,
+  // and rebind if the element we're holding isn't the one on screen.
+  const listeningToRef = React.useRef<HTMLElement | null>(null);
+
+  const bindScrollListeners = React.useCallback(() => {
     const el = scrollParentRef.current;
+    const previous = listeningToRef.current;
+    if (el === previous) return;
+    if (previous) {
+      previous.removeEventListener('scroll', handleScroll);
+      previous.removeEventListener('wheel', markUserScrolling);
+      previous.removeEventListener('touchmove', markUserScrolling);
+    }
+    listeningToRef.current = el;
     if (!el) return;
     // 'scroll' also fires for our own scrollToEnd(), which handleScroll filters
     // out. Only wheel/touch input marks the reader as actively scrolling, since
@@ -96,13 +122,10 @@ export function useStickToBottom(
     el.addEventListener('scroll', handleScroll, { passive: true });
     el.addEventListener('wheel', markUserScrolling, { passive: true });
     el.addEventListener('touchmove', markUserScrolling, { passive: true });
-    return () => {
-      el.removeEventListener('scroll', handleScroll);
-      el.removeEventListener('wheel', markUserScrolling);
-      el.removeEventListener('touchmove', markUserScrolling);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleScroll, markUserScrolling]);
+
+  React.useEffect(bindScrollListeners, [bindScrollListeners, ...deps]);
 
   const scrollToEnd = React.useCallback((behavior: ScrollBehavior = 'smooth') => {
     const scrollParent = scrollParentRef.current;
@@ -130,11 +153,11 @@ export function useStickToBottom(
   // opening a session that already has a long transcript mounts *empty* — the
   // Yjs doc syncs a moment later — so a plain mount effect fires against an
   // empty container and does nothing, and by the time the history arrives it has
-  // already been spent. Hence a latch rather than a one-shot, and one that waits
-  // for the container to have something to scroll rather than merely for the
-  // sentinel to exist (callers that render the sentinel unconditionally would
-  // otherwise spend it at mount just the same). Instant ('auto') so there's no
-  // long smooth glide down through the whole history.
+  // already been spent. Hence a latch rather than a one-shot, held until there is
+  // actually something to scroll: that, rather than the sentinel merely existing,
+  // is the condition we mean, and it keeps the latch unspent for content that
+  // arrives too short to overflow the container.
+  // Instant ('auto') so there's no long smooth glide down through the whole history.
   React.useLayoutEffect(() => {
     const el = scrollParentRef.current;
     if (didInitialScrollRef.current || !el || !targetRef.current) return;
@@ -163,7 +186,14 @@ export function useStickToBottom(
     () => () => {
       if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
       if (holdoffTimeoutRef.current) clearTimeout(holdoffTimeoutRef.current);
+      const el = listeningToRef.current;
+      if (el) {
+        el.removeEventListener('scroll', handleScroll);
+        el.removeEventListener('wheel', markUserScrolling);
+        el.removeEventListener('touchmove', markUserScrolling);
+      }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 
