@@ -36,6 +36,8 @@ import { normalizeSourceLanguage } from './src/liveAudioConfig.ts';
 import { connectServerDoc } from './serverDoc.ts';
 import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
 import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
+import { SessionRegistry } from './sessionRegistry.ts';
+import { makeSessionRouter } from './sessionRoutes.ts';
 import { limitFromEnv, makeRateLimit } from './rateLimit.ts';
 
 // Get API keys from environment variables, crash if not set
@@ -104,6 +106,22 @@ const SLIDE_LIBRARY_PATH =
 const slideLibrary = new SlideLibrary(SLIDE_LIBRARY_PATH);
 await slideLibrary.load();
 console.log(`Slide translation library: ${SLIDE_LIBRARY_PATH} (${slideLibrary.list().length} entries)`);
+
+// The server-owned "current session" (#111): the pin an operator sets from /status, the
+// Proclaim service's proposal, and the recent-writer sightings that make a disagreement
+// visible. Rides the same Docker volume as the slide library so a pin survives a restart.
+const SESSION_REGISTRY_PATH =
+  process.env.SESSION_REGISTRY_PATH || path.join(AUDIO_CACHE_DIR, 'current-session.json');
+// The congregation's zone, not the container's. Moving the date formula off the browser
+// moved it onto a clock that is UTC by default, which would file a Sunday-evening service
+// under Monday. Worth logging: a wrong zone here is a wrong doc for everyone.
+const sessionRegistry = new SessionRegistry(SESSION_REGISTRY_PATH, process.env.SESSION_TIMEZONE);
+await sessionRegistry.load();
+const bootSession = sessionRegistry.current();
+console.log(
+  `Current session: ${bootSession.docId} (${bootSession.source}), ` +
+  `timezone ${sessionRegistry.zone}, state in ${SESSION_REGISTRY_PATH}`,
+);
 
 // Per-item agent conversations. The agent runs here, but the conversation is stored in the
 // per-day Y-Sweet doc (so it survives restarts and streams live to the review screen); this
@@ -278,6 +296,22 @@ app.post(
     issueToken: (docId, authorization) =>
       documentManager.getOrCreateDocAndToken(docId ?? undefined, { authorization }),
     log: (message) => console.log(message),
+    // Every writable token is a sighting: this is the log line that told the truth in
+    // #111 while the service's own logs did not, now recorded where /status can show it.
+    onGrantFull: (docId, label) => {
+      if (docId) sessionRegistry.noteWriter(label ?? 'unlabeled-writer', docId);
+    },
+  }),
+);
+
+// The current session: read by every client, set by an operator, proposed by the
+// Proclaim service. See sessionRegistry.ts for why this is a server-owned fact.
+app.use(
+  '/api/session',
+  makeSessionRouter({
+    registry: sessionRegistry,
+    requireWriteKey,
+    log: (message) => console.log(message),
   }),
 );
 
@@ -389,6 +423,11 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
     // before the language is known would file the transcript under the wrong one.
     if (isOrganizer) {
       TranslationSessionManager.getInstance().setSourceLanguage(room, speakLanguage);
+      // The room name *is* the doc id — the third party in #111 that computed the current
+      // session for itself. A broadcaster publishing into a room that isn't the current
+      // session is the same silent mismatch as the Proclaim service writing to last
+      // week's doc, so it is recorded the same way and shows up on the same screen.
+      sessionRegistry.noteWriter(`broadcaster:${identity}`, room);
     }
 
     // A token request means room presence is about to change — poke the translation

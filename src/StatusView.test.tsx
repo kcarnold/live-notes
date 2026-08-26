@@ -139,3 +139,108 @@ describe('StatusView write key', () => {
     expect(onWriteKeyChange).toHaveBeenCalledWith(null);
   });
 });
+
+describe('current session (#111)', () => {
+  const session = {
+    docId: 'doc-2026-08-09',
+    source: 'date' as const,
+    since: null,
+    setBy: null,
+    expiresAt: null,
+  };
+
+  const noop = () => {};
+
+  it('is hidden when the container passes no session', () => {
+    render(<StatusView docId="doc-2026-08-09" statusEntries={{}} />);
+    expect(screen.queryByText('Current session')).not.toBeInTheDocument();
+  });
+
+  it('names the doc everything is on, and where that came from', () => {
+    render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        session={{ ...session, source: 'proposal', setBy: 'proclaim-service' }}
+        onPinSession={noop}
+        onClearSessionPin={noop}
+      />,
+    );
+    // Twice: the page header names the doc this browser is on, and the section names
+    // the doc the server says is current. Them agreeing is the normal case.
+    expect(screen.getAllByText('doc-2026-08-09')).toHaveLength(2);
+    expect(screen.getByText('Proposed by the presentation service')).toBeInTheDocument();
+    expect(screen.getByText(/proclaim-service/)).toBeInTheDocument();
+  });
+
+  it('pins the doc an operator types', async () => {
+    const onPinSession = vi.fn();
+    render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        session={session}
+        onPinSession={onPinSession}
+        onClearSessionPin={noop}
+      />,
+    );
+    await userEvent.type(screen.getByLabelText('doc-YYYY-MM-DD'), 'doc-2026-08-16');
+    await userEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    expect(onPinSession).toHaveBeenCalledWith('doc-2026-08-16');
+  });
+
+  it('offers to clear the pin only when there is one', () => {
+    const { rerender } = render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        session={session}
+        onPinSession={noop}
+        onClearSessionPin={noop}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /clear pin/i })).not.toBeInTheDocument();
+    rerender(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        session={{ ...session, source: 'pin', setBy: 'status-page' }}
+        onPinSession={noop}
+        onClearSessionPin={noop}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /clear pin/i })).toBeInTheDocument();
+  });
+
+  it('flags a writer on a different doc — the #111 symptom, made visible', () => {
+    render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        session={session}
+        writers={[
+          { writer: 'proclaim', docId: 'doc-2026-08-02', at: new Date().toISOString() },
+          { writer: 'booth', docId: 'doc-2026-08-09', at: new Date().toISOString() },
+        ]}
+        onPinSession={noop}
+        onClearSessionPin={noop}
+      />,
+    );
+    expect(screen.getByText('writing to a different session')).toBeInTheDocument();
+    expect(screen.getByText('proclaim')).toBeInTheDocument();
+  });
+
+  it('reports why a pin change failed instead of silently not changing', () => {
+    render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        session={session}
+        sessionError="Unauthorized"
+        onPinSession={noop}
+        onClearSessionPin={noop}
+      />,
+    );
+    expect(screen.getByText(/Could not change the pin: Unauthorized/)).toBeInTheDocument();
+  });
+});

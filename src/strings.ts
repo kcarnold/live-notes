@@ -95,6 +95,26 @@ export interface AppStrings {
   statusWriteKeySave: string;
   statusWriteKeyClear: string;
 
+  // Which session we are in (#111): the gate before anything mounts, and the operator
+  // control that overrides it.
+  sessionResolving: string;
+  sessionUnreachableTitle: string;
+  sessionUnreachableBody: string;
+  statusSessionTitle: string;
+  statusSessionDescription: string;
+  statusSessionSourcePin: string;
+  statusSessionSourceProposal: string;
+  statusSessionSourceDate: string;
+  statusSessionSetBy: string;
+  statusSessionLapses: string;
+  statusSessionPin: string;
+  statusSessionClearPin: string;
+  statusSessionPlaceholder: string;
+  statusSessionFailed: string;
+  statusWritersTitle: string;
+  statusWritersEmpty: string;
+  statusWritersElsewhere: string;
+
   // Status / admin page (skeleton for #72)
   statusTitle: string;
   statusHealthTitle: string;
@@ -210,6 +230,25 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusWriteKeySave: 'Save',
     statusWriteKeyClear: 'Clear',
     downloadSession: 'Download session',
+    sessionResolving: 'Finding the current session…',
+    sessionUnreachableTitle: 'Can’t reach the server',
+    sessionUnreachableBody:
+      'The server decides which session is live, so there is nothing to show until it answers. Check the connection and retry, or put ?doc=doc-YYYY-MM-DD in the address to pick a session yourself.',
+    statusSessionTitle: 'Current session',
+    statusSessionDescription:
+      'Every screen and every service reads this. Pin a document to override what the server would otherwise choose; the pin lapses on its own by the next morning.',
+    statusSessionSourcePin: 'Pinned',
+    statusSessionSourceProposal: 'Proposed by the presentation service',
+    statusSessionSourceDate: 'Today’s date',
+    statusSessionSetBy: 'set by',
+    statusSessionLapses: 'lapses',
+    statusSessionPin: 'Pin',
+    statusSessionClearPin: 'Clear pin',
+    statusSessionPlaceholder: 'doc-YYYY-MM-DD',
+    statusSessionFailed: 'Could not change the pin',
+    statusWritersTitle: 'Who is writing where',
+    statusWritersEmpty: 'Nothing has asked to write in the last 15 minutes.',
+    statusWritersElsewhere: 'writing to a different session',
     statusTitle: 'Session status',
     statusHealthTitle: 'Component health',
     statusHealthPlaceholder: 'Live component heartbeats will appear here.',
@@ -318,6 +357,25 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusWriteKeySave: 'Enregistrer',
     statusWriteKeyClear: 'Effacer',
     downloadSession: 'Télécharger la session',
+    sessionResolving: 'Recherche de la session en cours…',
+    sessionUnreachableTitle: 'Serveur injoignable',
+    sessionUnreachableBody:
+      'C’est le serveur qui décide quelle session est en direct : rien ne peut s’afficher tant qu’il n’a pas répondu. Vérifiez la connexion et réessayez, ou ajoutez ?doc=doc-AAAA-MM-JJ à l’adresse pour choisir vous-même une session.',
+    statusSessionTitle: 'Session en cours',
+    statusSessionDescription:
+      'Tous les écrans et tous les services lisent cette valeur. Épinglez un document pour remplacer le choix du serveur ; l’épingle expire d’elle-même le lendemain matin.',
+    statusSessionSourcePin: 'Épinglée',
+    statusSessionSourceProposal: 'Proposée par le service de présentation',
+    statusSessionSourceDate: 'Date du jour',
+    statusSessionSetBy: 'définie par',
+    statusSessionLapses: 'expire',
+    statusSessionPin: 'Épingler',
+    statusSessionClearPin: 'Retirer l’épingle',
+    statusSessionPlaceholder: 'doc-AAAA-MM-JJ',
+    statusSessionFailed: 'Impossible de modifier l’épingle',
+    statusWritersTitle: 'Qui écrit où',
+    statusWritersEmpty: 'Aucune demande d’écriture depuis 15 minutes.',
+    statusWritersElsewhere: 'écrit dans une autre session',
     statusTitle: 'État de la session',
     statusHealthTitle: 'État des composants',
     statusHealthPlaceholder: 'L’état en direct des composants apparaîtra ici.',
@@ -426,6 +484,25 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusWriteKeySave: 'Guardar',
     statusWriteKeyClear: 'Borrar',
     downloadSession: 'Descargar sesión',
+    sessionResolving: 'Buscando la sesión actual…',
+    sessionUnreachableTitle: 'No se puede conectar con el servidor',
+    sessionUnreachableBody:
+      'El servidor decide qué sesión está en directo, así que no hay nada que mostrar hasta que responda. Revise la conexión y vuelva a intentarlo, o añada ?doc=doc-AAAA-MM-DD a la dirección para elegir una sesión usted mismo.',
+    statusSessionTitle: 'Sesión actual',
+    statusSessionDescription:
+      'Todas las pantallas y todos los servicios leen esto. Fije un documento para anular lo que elegiría el servidor; la fijación caduca sola a la mañana siguiente.',
+    statusSessionSourcePin: 'Fijada',
+    statusSessionSourceProposal: 'Propuesta por el servicio de presentación',
+    statusSessionSourceDate: 'Fecha de hoy',
+    statusSessionSetBy: 'fijada por',
+    statusSessionLapses: 'caduca',
+    statusSessionPin: 'Fijar',
+    statusSessionClearPin: 'Quitar la fijación',
+    statusSessionPlaceholder: 'doc-AAAA-MM-DD',
+    statusSessionFailed: 'No se pudo cambiar la fijación',
+    statusWritersTitle: 'Quién escribe dónde',
+    statusWritersEmpty: 'Nada ha pedido escribir en los últimos 15 minutos.',
+    statusWritersElsewhere: 'escribiendo en otra sesión',
     statusTitle: 'Estado de la sesión',
     statusHealthTitle: 'Estado de los componentes',
     statusHealthPlaceholder: 'El estado en vivo de los componentes aparecerá aquí.',
@@ -534,6 +611,25 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     statusWriteKeySave: 'Anrejistre',
     statusWriteKeyClear: 'Efase',
     downloadSession: 'Telechaje sesyon an',
+    sessionResolving: 'N ap chèche sesyon an k ap dewoule kounye a…',
+    sessionUnreachableTitle: 'Nou pa ka jwenn sèvè a',
+    sessionUnreachableBody:
+      'Se sèvè a ki deside ki sesyon k ap dewoule, kidonk nou pa ka montre anyen toutotan li poko reponn. Tcheke koneksyon an epi eseye ankò, oswa mete ?doc=doc-AAAA-MM-JJ nan adrès la pou w chwazi yon sesyon ou menm.',
+    statusSessionTitle: 'Sesyon kounye a',
+    statusSessionDescription:
+      'Tout ekran ak tout sèvis li sa a. Tache yon dokiman pou ranplase sa sèvè a ta chwazi; tach la ap tonbe pou kont li nan denmen maten.',
+    statusSessionSourcePin: 'Tache',
+    statusSessionSourceProposal: 'Sèvis prezantasyon an pwopoze l',
+    statusSessionSourceDate: 'Dat jodi a',
+    statusSessionSetBy: 'mete pa',
+    statusSessionLapses: 'ap tonbe',
+    statusSessionPin: 'Tache',
+    statusSessionClearPin: 'Retire tach la',
+    statusSessionPlaceholder: 'doc-AAAA-MM-JJ',
+    statusSessionFailed: 'Nou pa t ka chanje tach la',
+    statusWritersTitle: 'Kiyès k ap ekri ki kote',
+    statusWritersEmpty: 'Anyen pa mande pou ekri nan 15 dènye minit yo.',
+    statusWritersElsewhere: 'l ap ekri nan yon lòt sesyon',
     statusTitle: 'Estati sesyon an',
     statusHealthTitle: 'Estati konpozan yo',
     statusHealthPlaceholder: 'Estati konpozan yo an dirèk ap parèt isit la.',

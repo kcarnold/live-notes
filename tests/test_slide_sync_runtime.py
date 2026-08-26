@@ -1,5 +1,6 @@
 """Tests for SlideSyncRuntime: lazy connect, off-air disconnect, reconnect-with-backoff,
-state re-push on connect, doc-date resolution, and the all-three-resets doc rollover.
+state re-push on connect, server-owned doc resolution (#111), and the all-three-resets
+doc swap.
 
 The feed, Y-Sweet websocket, and Provider are all faked (see tests/helpers.py)."""
 
@@ -11,6 +12,7 @@ import anyio
 import pytest
 
 import slide_sync_runtime as ssr
+from session_client import SessionAnswer
 from slide_feed import SessionInfo
 from slide_sync_runtime import SlideSyncRuntime
 from slide_translator import SlideTranslator
@@ -43,10 +45,27 @@ def make_runtime(feed, doc_id="doc-test", on_session_start=None):
     return rt
 
 
-def make_date_based_runtime(feed):
+class FakeResolver:
+    """Stands in for the server: records what was proposed, answers with a fixed doc."""
+
+    def __init__(self, answer: SessionAnswer):
+        self.answer = answer
+        self.proposed: list = []
+
+    async def resolve(self, session):
+        self.proposed.append(session)
+        return self.answer
+
+
+def make_server_resolved_runtime(feed, answer: SessionAnswer):
+    """A runtime with no doc_id override, so the (fake) server names the doc."""
     pub = YjsSlidePublisher()
     tr = SlideTranslator(mock.AsyncMock(return_value=None), ["French"], 0.001)
-    return SlideSyncRuntime(feed, pub, tr, "http://localhost:8000", timing=fast_timing())
+    resolver = FakeResolver(answer)
+    rt = SlideSyncRuntime(
+        feed, pub, tr, "http://localhost:8000", timing=fast_timing(), resolver=resolver,
+    )
+    return rt, resolver
 
 
 async def test_wait_until_on_air_holds_no_connection():
@@ -163,7 +182,7 @@ async def test_fresh_connection_runs_the_session_start_hook():
     """Every session announces onto the freshly connected doc (#73's version report)."""
     feed = FakeFeed([on_air_snap()])
     seen = []
-    rt = make_runtime(feed, on_session_start=seen.append)
+    rt = make_runtime(feed, on_session_start=lambda doc, doc_id: seen.append((doc, doc_id)))
     ws = FakeWebSocket(fail_ping_after=1)
 
     with patched_connection(ws):
@@ -171,44 +190,95 @@ async def test_fresh_connection_runs_the_session_start_hook():
             with anyio.fail_after(2):
                 await rt._run_session()
 
-    assert seen == [rt.ydoc]
+    assert seen == [(rt.ydoc, "doc-test")]
 
 
-def test_resolve_doc_uses_show_date():
-    """Date-based doc is anchored to the on-air show's date, with a fresh Doc."""
-    rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+async def test_resolve_doc_takes_the_doc_the_server_names():
+    """The service proposes the on-air show's date and connects to whatever it is told."""
+    rt, resolver = make_server_resolved_runtime(
+        FakeFeed([off_air_snap()]),
+        SessionAnswer(doc_id="doc-2030-01-15", source="proposal", outcome="accepted"),
+    )
     old_doc = rt.ydoc
 
-    rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
+    await rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
 
+    assert resolver.proposed == [SessionInfo("pres-1", date(2030, 1, 15))]
     assert rt.doc_id == "doc-2030-01-15"
-    assert rt.doc_date_from_show is True
-    assert rt.current_doc_date == date(2030, 1, 15)
     assert rt.ydoc is not old_doc
-    assert rt._date_rolled_over() is False
 
 
-def test_resolve_doc_falls_back_to_today_without_show_date():
-    """A session with no date falls back to today and stays midnight-rollable."""
-    rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+async def test_resolve_doc_obeys_an_answer_that_rejects_the_proposal():
+    """The #111 scenario: last week's deck is on air, and the server says use today's doc.
 
-    rt._resolve_doc_for_session(SessionInfo("pres-1", None))
+    The old code took the show's own date and wrote a whole service into the wrong doc.
+    Now the show's date is a *proposal*, and this is what happens when it is refused.
+    """
+    rt, resolver = make_server_resolved_runtime(
+        FakeFeed([off_air_snap()]),
+        SessionAnswer(doc_id="doc-2026-08-09", source="date", outcome="stale"),
+    )
 
-    assert rt.doc_id == SlideSyncRuntime._get_date_based_doc_id(date.today())
-    assert rt.doc_date_from_show is False
-    assert rt.current_doc_date == date.today()
+    await rt._resolve_doc_for_session(SessionInfo("pres-1", date(2026, 8, 2)))
+
+    assert rt.doc_id == "doc-2026-08-09"
+    assert resolver.proposed[0].session_date == date(2026, 8, 2)
 
 
-def test_resolve_doc_noop_with_explicit_doc_id():
-    """An explicit doc_id override is left untouched (no Doc swap)."""
+async def test_resolve_doc_follows_an_operator_pin():
+    """A pin set from /status outranks whatever the service can see."""
+    rt, _ = make_server_resolved_runtime(
+        FakeFeed([off_air_snap()]),
+        SessionAnswer(doc_id="doc-rehearsal", source="pin", outcome="pinned"),
+    )
+
+    await rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
+
+    assert rt.doc_id == "doc-rehearsal"
+
+
+async def test_resolve_doc_proposes_nothing_when_the_show_has_no_date():
+    """No DateGiven is not an error — it's a proposal with nothing in it."""
+    rt, resolver = make_server_resolved_runtime(
+        FakeFeed([off_air_snap()]),
+        SessionAnswer(doc_id="doc-2026-08-09", source="date", outcome="no-date"),
+    )
+
+    await rt._resolve_doc_for_session(SessionInfo("pres-1", None))
+
+    assert resolver.proposed[0].session_date is None
+    assert rt.doc_id == "doc-2026-08-09"
+
+
+async def test_resolve_doc_noop_with_explicit_doc_id():
+    """An explicit doc_id override outranks the server and never asks it (no Doc swap)."""
     rt = make_runtime(FakeFeed([off_air_snap()]))  # explicit doc_id="doc-test"
+    resolver = FakeResolver(SessionAnswer("doc-elsewhere", "date", "accepted"))
+    rt.resolver = resolver
     old_doc = rt.ydoc
 
-    rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
+    await rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
 
     assert rt.doc_id == "doc-test"
     assert rt.ydoc is old_doc
-    assert rt.doc_date_from_show is False
+    assert resolver.proposed == []
+
+
+async def test_resolve_doc_raises_rather_than_guessing_when_the_server_is_unreachable():
+    """No local fallback: an unresolvable doc flows into run()'s reconnect backoff.
+
+    Guessing here is the original bug. The server that can't answer this is the same
+    server that issues the token needed to write anything at all.
+    """
+    rt, _ = make_server_resolved_runtime(
+        FakeFeed([off_air_snap()]), SessionAnswer("unused", "date", "accepted"),
+    )
+    rt.resolver = mock.Mock(resolve=mock.AsyncMock(side_effect=OSError("connection refused")))
+
+    with pytest.raises(OSError):
+        await rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
+
+    assert rt.doc_id is None
 
 
 def test_recreate_doc_resets_publisher_translator_and_feed():
@@ -230,13 +300,16 @@ def test_recreate_doc_resets_publisher_translator_and_feed():
     assert rt.translator.ydoc is rt.ydoc
 
 
-def test_translator_tracks_the_runtime_doc_id_across_rollover():
+async def test_translator_tracks_the_runtime_doc_id_across_a_doc_change():
     """The translator forwards docId to /api/translateItem, so its bound id must follow every
-    doc_id change — otherwise a rolled-over day writes conversations into yesterday's doc."""
-    rt = make_date_based_runtime(FakeFeed([off_air_snap()]))
+    doc_id change — otherwise a new session writes conversations into the last one's doc."""
+    rt, _ = make_server_resolved_runtime(
+        FakeFeed([off_air_snap()]),
+        SessionAnswer(doc_id="doc-2030-01-15", source="proposal", outcome="accepted"),
+    )
     assert rt.translator.doc_id == rt.doc_id
 
-    rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
+    await rt._resolve_doc_for_session(SessionInfo("pres-1", date(2030, 1, 15)))
 
     assert rt.doc_id == "doc-2030-01-15"
     assert rt.translator.doc_id == "doc-2030-01-15"
