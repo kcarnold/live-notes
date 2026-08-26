@@ -34,7 +34,10 @@ function makeParent({
     },
   } as unknown as HTMLElement;
   const fire = (type: string) => listeners[type]?.forEach((cb) => cb());
-  return { el, scrollTo, fire };
+  /** Mutate the fake's geometry, as appending content or scrolling would. */
+  const set = (props: Partial<Record<'scrollTop' | 'scrollHeight' | 'clientHeight', number>>) =>
+    Object.assign(el as unknown as Record<string, number>, props);
+  return { el, scrollTo, fire, set };
 }
 
 /** A fake target element that reports a fixed rect. */
@@ -74,12 +77,12 @@ describe('useStickToBottom', () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 150, behavior: 'smooth' });
   });
 
-  // Regression: a late joiner mounts with a full transcript already present, so
-  // the container starts scrolled to the top (far from the bottom). The initial
-  // mount must jump to the latest content immediately — instantly ('auto', not a
-  // long smooth glide) and without waiting for any dependency change — otherwise
-  // the growth effect never fires for them (it bails while not near bottom).
-  it('jumps to the bottom on mount for a late joiner starting at the top', () => {
+  // A viewer whose content is already rendered on the first render (doc already
+  // synced) starts scrolled to the top, far from the bottom. The initial jump must
+  // happen immediately — instantly ('auto', not a long smooth glide) and without
+  // waiting for any dependency change. The commoner case, where the content
+  // arrives *after* mount, is covered in the late-sync block below.
+  it('jumps to the bottom on mount when content is already rendered', () => {
     const { el, scrollTo } = makeParent({
       bottom: 100,
       scrollTop: 0,
@@ -298,5 +301,176 @@ describe('useStickToBottom', () => {
 
     expect(scrollTo).toHaveBeenCalledTimes(1);
     document.body.removeChild(parent);
+  });
+});
+
+// The scenario that keeps coming back: someone opens a session whose transcript is
+// already long. The component mounts *empty* — Yjs syncs a moment later — so on the
+// first render there is no bottom sentinel to scroll to. Everything that decides
+// "are we at the latest" has to survive that gap.
+describe('useStickToBottom with content that arrives after mount', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('jumps to the end when the transcript syncs in after mount', () => {
+    const { el, scrollTo } = makeParent({ scrollTop: 0, scrollHeight: 5000, clientHeight: 900 });
+    const parentRef = { current: el };
+    // No sentinel yet: the component is showing "waiting for speech…".
+    const targetRef = { current: null as HTMLElement | null };
+
+    const { result, rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    // Doc syncs: the whole transcript renders and the sentinel mounts.
+    targetRef.current = makeTarget(4900);
+    rerender({ deps: [12_345] });
+
+    // scrollTop (0) + (targetBottom 4900 - parentBottom 100) = 4800, instantly.
+    expect(scrollTo).toHaveBeenCalledWith({ top: 4800, behavior: 'auto' });
+    expect(result.current.pinned).toBe(true);
+  });
+
+  // The notes view renders its bottom sentinel unconditionally, so "the sentinel
+  // exists" is not evidence that anything has loaded. The initial jump has to wait
+  // for the container to actually have something to scroll, or it is spent on an
+  // empty container and the reader is left at the top of the synced-in history.
+  it('waits for scrollable content when the sentinel is rendered from the start', () => {
+    const { el, scrollTo, set } = makeParent({ scrollTop: 0, scrollHeight: 900, clientHeight: 900 });
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget(4900) }; // present from mount, nothing above it
+
+    const { rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    // Blocks sync in; now there is history to be at the bottom of.
+    set({ scrollHeight: 5000 });
+    rerender({ deps: [1] });
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 4800, behavior: 'auto' });
+  });
+
+  it('only takes over the initial jump once, leaving later growth to the throttle', () => {
+    const { el, scrollTo } = makeParent({ scrollTop: 0, scrollHeight: 5000, clientHeight: 900 });
+    const parentRef = { current: el };
+    const targetRef = { current: null as HTMLElement | null };
+
+    const { rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    targetRef.current = makeTarget(4900);
+    rerender({ deps: [1] });
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    scrollTo.mockClear();
+
+    // A later utterance is ordinary growth: smooth, and throttled.
+    rerender({ deps: [2] });
+    expect(scrollTo).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 4800, behavior: 'smooth' });
+  });
+
+  // Regression: appending content moves the bottom away without firing any scroll
+  // event. Reading position at that moment says "not near the bottom" even though
+  // the reader never moved — which used to stop the auto-scroll dead while leaving
+  // `pinned` true, so the jump-to-latest pill wasn't offered either. Growth must
+  // not unpin.
+  it('keeps auto-scrolling when a burst of content outruns the near-bottom threshold', () => {
+    const { el, scrollTo, set } = makeParent({
+      scrollTop: 100,
+      scrollHeight: 1000,
+      clientHeight: 900,
+    });
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget() };
+
+    const { result, rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+    scrollTo.mockClear(); // discard the one-time initial scroll
+
+    // A long utterance lands: 400px of new content, well past NEAR_BOTTOM_PX.
+    set({ scrollHeight: 1400 });
+    rerender({ deps: [1] });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(result.current.pinned).toBe(true);
+  });
+
+  // The pill is driven by `pinned`, so our own smooth glide must not flicker it:
+  // a scroll animation reports every intermediate position on the way down.
+  it('does not unpin on the intermediate positions of its own smooth scroll', () => {
+    // Geometry a real container would have: 1900 - 900 means the bottom is scrollTop 1000,
+    // which is exactly where the sentinel (bottom 1100, parent bottom 100) puts us.
+    const { el, fire, set } = makeParent({ scrollTop: 0, scrollHeight: 1900, clientHeight: 900 });
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget(1100) };
+
+    const { result, rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    rerender({ deps: [1] });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+
+    // Mid-glide: 400px down of the 1000px trip, still 700px from the bottom.
+    set({ scrollTop: 400 });
+    act(() => fire('scroll'));
+    expect(result.current.pinned).toBe(true);
+
+    // Landed.
+    set({ scrollTop: 1000 });
+    act(() => fire('scroll'));
+    expect(result.current.pinned).toBe(true);
+  });
+
+  // …but the reader taking over mid-glide (dragging the scrollbar, which fires no
+  // wheel or touch event) still has to unpin and offer the way back.
+  it('unpins when the reader scrolls away from the target mid-glide', () => {
+    // Geometry a real container would have: 1900 - 900 means the bottom is scrollTop 1000,
+    // which is exactly where the sentinel (bottom 1100, parent bottom 100) puts us.
+    const { el, fire, set } = makeParent({ scrollTop: 0, scrollHeight: 1900, clientHeight: 900 });
+    const parentRef = { current: el };
+    const targetRef = { current: makeTarget(1100) };
+
+    const { result, rerender } = renderHook(
+      ({ deps }) => useStickToBottom(parentRef, targetRef, deps),
+      { initialProps: { deps: [0] as unknown[] } },
+    );
+
+    rerender({ deps: [1] });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+
+    set({ scrollTop: 400 });
+    act(() => fire('scroll'));
+
+    // Reader drags back up, away from where we were heading.
+    set({ scrollTop: 200 });
+    act(() => fire('scroll'));
+
+    expect(result.current.pinned).toBe(false);
   });
 });
