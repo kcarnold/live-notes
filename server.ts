@@ -9,7 +9,7 @@ import pLimit from 'p-limit';
 import { DocumentManager } from '@y-sweet/sdk'
 import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
-import { PostHog, setupExpressErrorHandler } from 'posthog-node';
+import { PostHog, setupExpressErrorHandler, setupExpressRequestContext } from 'posthog-node';
 
 import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider, emptyUsage, mergeUsage } from './nlp.ts';
 import type { TranslationTodo, TokenUsage, AgentObservability } from './nlp.ts';
@@ -274,7 +274,12 @@ app.use(express.static("dist"));
 app.use(express.json());
 app.use('/audio-cache', express.static(AUDIO_CACHE_DIR));
 
-setupExpressErrorHandler(phClient, app);
+// PostHog's express integration comes in two halves with opposite ordering rules, and both
+// matter here. This one is the *first* middleware on purpose: it opens an AsyncLocalStorage
+// context per request, so every `phClient.captureException(...)` fired deeper in a handler
+// picks up the method, path, IP and tracing headers without us threading `req` around. The
+// error handler is the other half and is registered last — see the note above `app.listen`.
+setupExpressRequestContext(phClient, app);
 
 
 // Public config for services that need to report to PostHog
@@ -965,6 +970,15 @@ app.get('/*splat', (req, res, next) => {
   }
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
+
+// Last middleware, after every route: Express dispatches errors *forward* from the layer
+// that threw, so an error handler only ever sees the routes registered above it. This one
+// used to sit up beside the static/json middleware, where it could see a malformed JSON body
+// and nothing else — every API route's failures went straight to Express's default handler
+// and were never reported. It captures and re-raises (`next(error)`), so the routes that
+// swallow their own errors in a try/catch still report via `phClient.captureException` there;
+// this covers the majority that don't.
+setupExpressErrorHandler(phClient, app);
 
 app.listen(app.get("port"), () => {
   console.log(`Server running on http://localhost:${PORT}`);
