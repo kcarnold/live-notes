@@ -157,7 +157,7 @@ struct MenuContentView: View {
     private var statusColor: Color {
         switch controller.status {
         case .publishing: return .green
-        case .connecting, .reconnecting: return .yellow
+        case .resolvingSession, .connecting, .reconnecting: return .yellow
         // Standing down is deliberate, not broken — but it is the one state nothing will
         // resolve on its own, so it gets a colour that asks to be looked at.
         case .waitingForDevice, .standby: return .orange

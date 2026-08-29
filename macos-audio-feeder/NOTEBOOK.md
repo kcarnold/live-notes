@@ -10,6 +10,117 @@ cause, the fix.
 
 ---
 
+## 2026-08-29 — the feeder was the fourth party computing "today's doc"
+
+**Symptom.** None yet, which is the point. This one was found by reading, not by a service
+going wrong — but the failure it sets up is specific and would have been very hard to read
+from the booth.
+
+**Background.** Issue #111 (server side, `docs/CURRENT_SESSION.md`): three parties each
+computed "the current session" from their own private rule — browsers from the wall clock,
+the Proclaim service from the on-air show's `DateGiven`, LiveKit from whatever room name a
+browser passed. Two of them disagreed, the service wrote a whole Sunday's slides into last
+week's doc while *logging* this week's, and nothing anybody looks at showed the disagreement.
+The fix made the current doc a fact the server owns and everyone reads, and added an operator
+**pin** on `/status` so a wrong doc can be corrected from a pew, mid-service.
+
+**What was wrong here.** This app was a fourth party and got neither half of that fix. It
+named its LiveKit room from `Calendar.current` in `FeederConfig.resolvedDocID()`. It was
+missed because it is Swift: nothing in the repo's npm or uv toolchain touches this directory,
+and a sweep of `*.ts`/`*.tsx`/`*.py` finds nothing here. #111's own table of guilty parties
+doesn't list it.
+
+The date rule *usually agreed* — the booth Mac's clock is the congregation's clock, which is
+exactly why this could sit here unnoticed. The pin is what turned it into a defect:
+
+- An operator pins a doc mid-service. Browsers follow on reload; the Proclaim service follows
+  within ~60s. The feeder never does — it resolved its room once, at `startPipeline`, and
+  held it for the life of the run.
+- So the pin **splits the service**: notes, slides, transcripts and every listener move to the
+  pinned doc while the microphone keeps publishing into the old room. Before the pin existed,
+  everything was wrong *together*, which at least produced a coherent service filed under the
+  wrong date. Half a service is worse than a misfiled one.
+- And the feeder is the install nobody is watching. That is its whole purpose.
+
+There was also a smaller edge the server's version doesn't have: a schedule window that wraps
+midnight (Sat 23:50 → Sun 00:30) resolved Saturday's doc and kept it across the boundary.
+
+**The fix.** `SessionClient` in `AudioFeederCore` — `GET /api/session/current`, which is
+deliberately open (no write key), with the same precedence the browser uses in
+`src/getDocId.ts`: the settings window's doc-id field is the `?doc=` equivalent and wins
+outright *without a round trip* (it is the escape hatch for when the server's answer is
+wrong, so it must not stand behind the server to take effect), otherwise the server's answer,
+otherwise an error. `FeederConfig` no longer knows how to name a doc at all — deleting
+`resolvedDocID()` is most of the value here, because a formula that still exists is a formula
+something will call.
+
+`SessionResolution` (also in the Core, so the rules are testable) holds the answer and
+decides how long it may be acted on. `AppController` re-asks every 60s while publishing (the
+same cadence and for the same reason as `slide_sync_runtime.py`) and rebuilds the pipeline
+when the answer moves — a `Publisher` can't be retargeted in place any more than it can be
+restarted.
+
+Three judgment calls worth recording:
+
+1. **A failed re-check behind a live pipeline is ignored**, logged, and retried in a minute.
+   A stale doc answer costs a minute; dropping the pipeline costs the broadcast.
+2. **No local date fallback**, matching the browser. This felt severe until the arithmetic:
+   the same server that answers `/api/session/current` issues the LiveKit token, so a server
+   we cannot reach is a run that could not have started anyway. The strict rule costs nothing
+   and buys "says which server it can't reach" instead of "publishes into a doc nobody chose".
+   It lands in the existing 2→30s retry backoff.
+3. **`source` decodes as a plain `String`, not an enum.** A strict enum would make an
+   unattended feeder refuse to start because the server learned a fourth word for where an
+   answer came from. It is a log line, not a decision.
+4. **The answer expires; it is not merely forgotten at the end of a run.** Forgetting is the
+   obvious rule and it was the first one written. It has a hole: the controller only forgets
+   when an `evaluate` lands while off schedule, and `Timer` doesn't fire while a Mac is
+   asleep. A booth Mac that slept through the gap between two Sunday windows would wake up
+   *inside* the next service still holding last week's answer, and open the mic in last
+   week's doc for the second it took the re-check to land. An expiry closes that without
+   anything having to notice the run ended.
+
+**What the review pass caught.** Three defects, all in the app half — which is the half with
+no test target, and that is not a coincidence:
+
+- **A settings field that reconnected per keystroke.** The doc-id override is a plain
+  SwiftUI `TextField`, which writes its binding on every character, and the new
+  rebuild-on-mismatch logic acted on each one. Typing `doc-2026-08-30` walked the feeder
+  through rooms named `d`, `do`, `doc`… — a real token request and a real LiveKit connect
+  each — in the middle of the service that is the only reason anyone would be typing there.
+  Before this change a config edit could not rebuild a live pipeline at all, so the feature
+  created the bug. Fixed with an explicit **Apply** button (server URL, doc id and write key
+  now commit together); `MinuteField` had already solved the same problem the same way, and
+  the lesson generalizes: *a field that only takes effect on the next run can bind live; a
+  field that acts on a live broadcast has to be committed.*
+- **A status that could get stuck lying.** `resolveSession` painted "Finding the current
+  session…" (or an error) unconditionally, including behind a healthy pipeline — and nothing
+  on the success path repaints it, so it stuck. That is issue #97 exactly: the menu bar
+  describing a state the pipeline is not in. Whether a resolve is blocking is not a property
+  of the call, it is whether anything is on air, so both ends now read `isPipelineRunning`.
+- **A mirrored copy of the room name.** The controller kept `publishingDocID` alongside the
+  room it had handed the `Publisher`. Two copies of one fact, in the file whose bug history
+  is entirely about two copies of one fact. `Publisher` now owns its `docID`.
+
+**What was already right.** The feeder was never *invisible*: `server.ts` records a
+`broadcaster:<identity>` writer sighting on every token issued, so it already showed on
+`/status`, flagged amber when its doc differed from the current one. #111's "make disagreement
+visible" half covered this app even though its "one owner" half didn't — which is a decent
+argument for building the visibility half first.
+
+**Verification.** `swift test` (86 tests; 10 new in `SessionClientTests` covering the request
+contract, decoding a proxy's HTML error page and a docId-less answer as ordinary errors, and
+the override short-circuit proved by pointing the client at an unresolvable host; 9 more in
+`SessionResolutionTests` covering the expiry rules, including last week's answer being stale
+a week later). App target built with `xcodebuild -scheme AudioFeederApp`. **Not yet exercised
+against a live server** — the round trip, the mid-run pin, and the pipeline rebuild are
+untested outside unit tests. Smoke-test that before it matters: pin from `/status` while the
+feeder is publishing and confirm the log's `session moved:` line and that audio reappears in
+the pinned room. The Apply button also wants a look on real hardware — it is the only part
+of this that changes a screen an operator uses under time pressure.
+
+---
+
 ## 2026-08-24 — the mode picker answered a temporary question permanently
 
 **Symptom.** *"The mode picker is weird."* What an operator wants at the sound board is to

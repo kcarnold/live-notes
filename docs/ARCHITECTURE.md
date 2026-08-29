@@ -55,8 +55,8 @@ derived data) drives the testing/replay strategy.
   *same* identity that page uses (`organizer-host`), and LiveKit permits one participant per
   identity, so **the app and the browser page are mutually exclusive** — whichever connects
   last evicts the other (handled deliberately: `DisconnectPolicy`). Split into
-  `AudioFeederCore` (pure logic — schedule, config, levels, channel extraction, token
-  contract; `swift test`, no Xcode) and `AudioFeederApp` (CoreAudio capture, LiveKit publish,
+  `AudioFeederCore` (pure logic — schedule, config, levels, channel extraction, the token
+  and current-session contracts; `swift test`, no Xcode) and `AudioFeederApp` (CoreAudio capture, LiveKit publish,
   UI; built by an XcodeGen-generated project). Publishing spends the room's microphone, so it
   carries a write key like everything else. Its own `README.md` covers operation and
   `NOTEBOOK.md` records why it looks the way it does — read the notebook before changing
@@ -125,10 +125,13 @@ writer once each component announces its clientID (planned: via the status heart
   operator pin set from `/status`, else the Proclaim service's accepted proposal, else the
   date in `SESSION_TIMEZONE`. Browsers fetch it before mounting anything (`src/getDocId.ts`,
   `src/SessionGate.tsx`); the service proposes what is on air and connects to whatever it is
-  told (`session_client.py`). Nobody keeps a private copy of the date formula to fall back
-  on. This is issue #111 — three parties computing it independently and never comparing
-  answers — and it is worth reading [CURRENT_SESSION.md](CURRENT_SESSION.md) before touching
-  anything that resolves a doc id.
+  told (`session_client.py`); the macOS audio feeder asks the same endpoint and re-asks every
+  60s while publishing, so a pin moves the microphone too rather than splitting the service
+  (`SessionClient.swift`). Nobody keeps a private copy of the date formula to fall back on.
+  This is issue #111 — parties computing it independently and never comparing answers — and it
+  is worth reading [CURRENT_SESSION.md](CURRENT_SESSION.md) before touching anything that
+  resolves a doc id. The feeder was found to still be doing so a month after the fix, because
+  it is Swift and no `*.ts`/`*.py` sweep reaches it.
 - **Editor vs viewer** is enforced server-side via Y-Sweet token scope. The `#editor` request
   states an intent; whether it is honored depends on a shared per-device write key
   (`writeAuth.ts`, [WRITE_KEYS.md](WRITE_KEYS.md)) — as does taking the microphone, and the

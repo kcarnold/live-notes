@@ -48,6 +48,9 @@ an incident happens that this list would not have caught, add a line.
       the pin, reload: it goes back. The Proclaim service follows within ~a minute without
       going off air — watch its log say so. **Still: rehearse this before the service.**
 - [ ] `?doc=doc-scratch` still overrides everything, pin included.
+- [ ] With the macOS audio feeder publishing, pin another doc: within ~a minute its log shows
+      `session moved: … -> …` and audio reappears in the pinned room. (Its own doc-id field,
+      when set, outranks the pin — the `?doc=` equivalent.)
 - [ ] Server boot log shows the intended `SESSION_TIMEZONE` — a wrong zone is a wrong doc
       for everyone, and an evening service is when it shows up.
 

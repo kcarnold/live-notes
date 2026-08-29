@@ -7,6 +7,18 @@ struct ConfigView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var launchAtLogin = LoginItem.isEnabled
 
+    // Drafts for the three fields that decide *where and as whom* a live broadcast connects.
+    // Everything else in this window binds straight to the config, because a Picker or a
+    // Stepper only ever writes a whole, meaningful value. A `TextField` writes on every
+    // keystroke, and a partial value in these three is not a harmless intermediate state:
+    // typing `doc-2026-08-30` into the doc field used to walk the feeder through rooms named
+    // `d`, `do`, `doc`… tearing down and reconnecting to a real LiveKit room per character,
+    // in the middle of the service that is the only reason anyone would be typing here.
+    // (`MinuteField` below solves the same problem the same way for the schedule.)
+    @State private var serverDraft = ""
+    @State private var docDraft = ""
+    @State private var keyDraft = ""
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Audio Feeder Settings").font(.headline).padding()
@@ -16,20 +28,38 @@ struct ConfigView: View {
                 // holding a value looks exactly like a label holding a value — nothing says
                 // "you can type here". `.roundedBorder` puts the box back.
                 Section("Server") {
-                    TextField("Server URL", text: $controller.config.serverURL)
-                    TextField("Doc id (blank = today's doc-YYYY-MM-DD)",
-                              text: Binding(
-                                get: { controller.config.docIDOverride ?? "" },
-                                set: { controller.config.docIDOverride = $0.isEmpty ? nil : $0 }))
-                    Text("Will publish to room: \(controller.config.resolvedDocID())")
+                    TextField("Server URL", text: $serverDraft).onSubmit(applyServerFields)
+                    TextField("Doc id (blank = whichever session the server says is current)",
+                              text: $docDraft).onSubmit(applyServerFields)
+                    // Not a prediction any more. The server owns which doc is the current
+                    // session (#111); this app asks, and says what it was told. Claiming a
+                    // room here would be the private answer presented as fact that issue
+                    // was about — and the answer can move mid-run, when an operator pins.
+                    Text(controller.sessionSummary)
                         .font(.caption).foregroundStyle(.secondary)
-                    SecureField("Write key (must match the server)",
-                                text: Binding(
-                                    get: { controller.config.writeKey ?? "" },
-                                    set: { controller.config.writeKey = $0.isEmpty ? nil : $0 }))
+                    SecureField("Write key (must match the server)", text: $keyDraft)
+                        .onSubmit(applyServerFields)
                     Text("Required to take the microphone.")
                         .font(.caption).foregroundStyle(.secondary)
+
+                    HStack {
+                        Button("Apply", action: applyServerFields)
+                        Button("Revert", action: revertServerFields)
+                        Spacer()
+                        if serverFieldsDirty {
+                            Text("Not applied yet").font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                    .disabled(!serverFieldsDirty)
+                    // Says why these three behave differently from everything below them.
+                    Text("""
+                         These three take effect when you click Apply (or press Return). \
+                         Applying mid-service reconnects the feeder.
+                         """)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .onAppear(perform: revertServerFields)
 
                 Section("Input") {
                     Picker("Device", selection: Binding(
@@ -92,6 +122,40 @@ struct ConfigView: View {
             .padding()
         }
         .frame(width: 420, height: 560)
+    }
+
+    // MARK: - The apply-on-commit fields
+
+    private var serverFieldsDirty: Bool {
+        serverDraft != controller.config.serverURL
+            || docDraft != (controller.config.docIDOverride ?? "")
+            || keyDraft != (controller.config.writeKey ?? "")
+    }
+
+    /// Commit all three at once, as a single config mutation — so a change of server *and*
+    /// doc is one `forgetSession` and at most one reconnect, not two of each.
+    private func applyServerFields() {
+        guard serverFieldsDirty else { return }
+        let server = serverDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let doc = docDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var updated = controller.config
+        updated.serverURL = server
+        updated.docIDOverride = doc.isEmpty ? nil : doc
+        updated.writeKey = keyDraft.isEmpty ? nil : keyDraft
+        controller.config = updated
+
+        // Show what was actually stored, so the trimming is visible rather than a surprise
+        // the next time this window opens.
+        serverDraft = server
+        docDraft = doc
+    }
+
+    /// Put the fields back to what is in force. Also how they are seeded on open.
+    private func revertServerFields() {
+        serverDraft = controller.config.serverURL
+        docDraft = controller.config.docIDOverride ?? ""
+        keyDraft = controller.config.writeKey ?? ""
     }
 
     private var maxChannel: Int {

@@ -9,23 +9,14 @@ final class ConfigTests: XCTestCase {
         return c
     }
 
-    func testResolvedDocIDDefaultsToDatedDoc() {
-        var c = DateComponents(); c.year = 2025; c.month = 3; c.day = 5
-        let now = utc.date(from: c)!
-        let cfg = FeederConfig(docIDOverride: nil)
-        XCTAssertEqual(cfg.resolvedDocID(now: now, calendar: utc), "doc-2025-03-05")
-    }
-
-    func testResolvedDocIDHonorsOverride() {
-        let cfg = FeederConfig(docIDOverride: "doc-special")
-        XCTAssertEqual(cfg.resolvedDocID(), "doc-special")
-    }
-
-    func testBlankOverrideFallsBackToDated() {
-        var c = DateComponents(); c.year = 2025; c.month = 12; c.day = 31
-        let now = utc.date(from: c)!
-        let cfg = FeederConfig(docIDOverride: "   ")
-        XCTAssertEqual(cfg.resolvedDocID(now: now, calendar: utc), "doc-2025-12-31")
+    /// The config no longer knows how to name a doc. It used to derive `doc-YYYY-MM-DD` from
+    /// this Mac's clock — the fourth private copy of the formula issue #111 removed from the
+    /// browser, the Proclaim service and the LiveKit room name. The only doc id it now holds
+    /// is the explicit override; everything else is asked for (`SessionClient`).
+    func testConfigCarriesAnOverrideAndNoDateFormula() {
+        XCTAssertNil(SessionClient.normalizedOverride(FeederConfig().docIDOverride))
+        XCTAssertEqual(SessionClient.normalizedOverride(FeederConfig(docIDOverride: "doc-special").docIDOverride),
+                       "doc-special")
     }
 
     func testHHMMRoundTrip() {
