@@ -44,7 +44,7 @@ Optional environment variables:
 - `TTS_RATE_LIMIT_PER_MIN` / `TRANSLATE_RATE_LIMIT_PER_MIN` - Per-caller caps on the two
   endpoints viewers call and a write key can't protect (defaults 600 / 1200; 0 disables).
   Sized to stop a script, not a congregation — see [rateLimit.ts](rateLimit.ts).
-- `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
+- `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.7-flash`)
 - `SESSION_TIMEZONE` - IANA zone the congregation keeps (default: the host's zone). The
   server owns "which doc is the current session" for everyone (issue #111), so it reckons
   dates and the 4am pin expiry on this clock — a container's is UTC, which would file a
