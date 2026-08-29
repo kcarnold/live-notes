@@ -346,8 +346,6 @@ function renderPresentations(presentations: ExportedPresentation[], languages: s
             const badges: string[] = [];
             if (resolved.isFallbackLanguage)
               badges.push(`<span class="badge">${escapeHtml(resolved.displayLanguage)}</span>`);
-            if (resolved.entry.status === 'auto')
-              badges.push(`<span class="badge badge-auto">unreviewed</span>`);
             cols.push(
               `<td>${badges.join(' ')}${badges.length ? '<br>' : ''}${multiline(resolved.entry.text)}</td>`,
             );
