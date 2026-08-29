@@ -13,6 +13,7 @@ final class AppController: ObservableObject {
     enum Status: Equatable {
         case idle                    // not supposed to be running right now
         case waitingForDevice(String)
+        case resolvingSession        // asking the server which doc we are in (#111)
         case connecting
         case publishing
         case reconnecting            // was publishing; the room dropped and we're coming back
@@ -25,6 +26,7 @@ final class AppController: ObservableObject {
             // reason, and the sentence underneath this line says which reason it is.
             case .idle: return "Idle"
             case let .waitingForDevice(name): return "Waiting for device: \(name)"
+            case .resolvingSession: return "Finding the current session…"
             case .connecting: return "Connecting…"
             case .publishing: return "Publishing"
             case .reconnecting: return "Reconnecting…"
@@ -61,6 +63,13 @@ final class AppController: ObservableObject {
     private var capture: AudioCapture?
     private var publisher: Publisher?
 
+    /// What the server has told us about which doc we are in, and how long that may be acted
+    /// on. Never computed here — see `SessionClient` for why there is no local date formula,
+    /// and `SessionResolution` for the expiry rules. Published because the settings window
+    /// reports the answer rather than predicting one.
+    @Published private(set) var session = SessionResolution()
+    private var sessionResolve: Task<Void, Never>?
+
     private var tick: Timer?
     private var retryTimer: Timer?
     private var retryAfter: Date?
@@ -73,7 +82,6 @@ final class AppController: ObservableObject {
 
         Log.controller.notice("""
             launched; server \(self.config.serverURL, privacy: .public), \
-            room \(self.config.resolvedDocID(), privacy: .public), \
             \(self.devices.count, privacy: .public) input device(s)
             """)
 
@@ -159,6 +167,18 @@ final class AppController: ObservableObject {
         devices = DeviceMonitor.inputDevices()
     }
 
+    /// What the settings window says about the room, in place of the room name it used to
+    /// compute. Three honest states: an override, an answer we were given, or not yet asked.
+    var sessionSummary: String {
+        if let override = SessionClient.normalizedOverride(config.docIDOverride) {
+            return "Will publish to room: \(override) — this override outranks the server."
+        }
+        if let docID = session.docID {
+            return "Publishing to room: \(docID) — the server's current session."
+        }
+        return "The room is whatever session the server says is current when a run starts."
+    }
+
     /// The currently configured device, if connected.
     var selectedDevice: AudioInputDevice? {
         guard let uid = config.deviceUID else { return nil }
@@ -173,6 +193,11 @@ final class AppController: ObservableObject {
         // can never stretch it past four hours from the button press. See `RunHold.recomputed`.
         if config.schedule != old.schedule, let hold {
             self.hold = hold.recomputed(for: config.schedule)
+        }
+        // The answer we hold came from a particular server, under a particular override.
+        // Change either and it is no longer an answer to the question we are now asking.
+        if config.serverURL != old.serverURL || config.docIDOverride != old.docIDOverride {
+            forgetSession()
         }
         store.save(config)
         scheduleEvaluate()
@@ -217,6 +242,10 @@ final class AppController: ObservableObject {
             // A stand-down lasts for the run it happened in, no longer: next Sunday starts
             // clean, without anyone having to remember to clear it.
             clearStandDown()
+            // Same for the doc. The answer expires on its own (`SessionResolution`), so
+            // this is belt-and-braces — but it is what makes the *log* honest: every run
+            // that starts prints the session it was given, rather than silently inheriting.
+            forgetSession()
             status = .idle
             return
         }
@@ -239,6 +268,28 @@ final class AppController: ObservableObject {
         // Honor backoff after a failure before retrying.
         if let retryAfter, Date() < retryAfter { return }
 
+        // Which doc? The server owns that answer and this app does not guess at it, so
+        // nothing starts until it has said. Failures are handled in `sessionResolutionFailed`.
+        let fresh = session.isFresh(at: now)
+        if !fresh { resolveSession() }
+        // A live pipeline keeps publishing into the room it is in while a re-ask is in
+        // flight — the doc question can wait a minute, the broadcast cannot. Nothing *starts*
+        // on an answer that has aged out, which is what stops a Mac that slept through the
+        // gap between two Sunday windows from opening the mic in last week's doc.
+        guard let docID = session.docID, fresh || isPipelineRunning else { return }
+
+        // A live pipeline publishing into a room that is no longer the current session is
+        // the failure this whole path exists to prevent: the microphone left behind in the
+        // doc an operator just moved everyone off. Reconciled here rather than torn down at
+        // the point the answer changes, so it is caught however the two came to differ.
+        if isPipelineRunning, publisher?.docID != docID {
+            Log.controller.notice("""
+                publishing into \(self.publisher?.docID ?? "-", privacy: .public) but the session \
+                is \(docID, privacy: .public); rebuilding the pipeline
+                """)
+            teardown()
+        }
+
         // Reconcile the pipeline rather than only starting one. The old guard was
         // `capture == nil`, which meant a *half*-alive pipeline — capture still running, room
         // dead — was indistinguishable from a healthy one and wedged here forever. Checking
@@ -246,8 +297,85 @@ final class AppController: ObservableObject {
         // entirely (issue #97).
         if !isPipelineRunning {
             teardown()
-            startPipeline(device: device)
+            startPipeline(device: device, docID: docID)
         }
+    }
+
+    // MARK: - The current session (#111)
+
+    /// Ask the server which doc we are in.
+    ///
+    /// Whether this is blocking is not a property of the call — it is whether anything is on
+    /// air right now, which both ends read off the pipeline. A re-ask behind a live broadcast
+    /// must not touch `status`: painting "Finding the current session…" (or an error) over a
+    /// healthy pipeline is #97's defect again, the menu bar describing a state the feeder is
+    /// not in, and nothing on the success path would repaint it afterwards.
+    private func resolveSession() {
+        guard sessionResolve == nil else { return }
+        if !isPipelineRunning { status = .resolvingSession }
+
+        let client = SessionClient(serverURL: config.serverURL)
+        let override = config.docIDOverride
+        sessionResolve = Task { @MainActor [weak self] in
+            do {
+                let resolved = try await client.resolve(override: override)
+                // Cancelled means `forgetSession` already moved on — and has already cleared
+                // this reference, possibly in favour of a newer task.
+                guard !Task.isCancelled, let self else { return }
+                self.sessionResolve = nil
+                self.sessionResolved(resolved)
+            } catch {
+                guard !Task.isCancelled, let self else { return }
+                self.sessionResolve = nil
+                self.sessionResolutionFailed(error)
+            }
+        }
+    }
+
+    private func sessionResolved(_ resolved: ResolvedSession) {
+        let previous = session.docID
+        let moved = session.record(docID: resolved.docID, at: Date())
+        if moved {
+            // The pin reached us mid-run. `evaluate` does the rebuilding — a `Publisher`
+            // cannot be retargeted in place any more than it can be restarted.
+            Log.controller.notice("""
+                session moved: \(previous ?? "-", privacy: .public) -> \(resolved.docID, privacy: .public) \
+                (\(resolved.origin, privacy: .public))
+                """)
+        } else if previous == nil {
+            Log.controller.notice(
+                "session: \(resolved.docID, privacy: .public) (\(resolved.origin, privacy: .public))")
+        }
+        // Unconditionally, including when the answer came back unchanged: confirming a stale
+        // answer is what makes it usable again, and a run may be waiting on exactly that.
+        scheduleEvaluate()
+    }
+
+    private func sessionResolutionFailed(_ error: Error) {
+        let detail = String(describing: error)
+        guard !isPipelineRunning else {
+            // Failing behind a working pipeline is not a reason to drop it: a stale doc
+            // answer costs a minute, dropping the pipeline costs the broadcast. Keep the
+            // answer, and ask again after the usual interval rather than every tick.
+            Log.controller.error("""
+                session re-check failed: \(detail, privacy: .public); \
+                staying on \(self.session.docID ?? "-", privacy: .public)
+                """)
+            session.extendFreshness(from: Date())
+            return
+        }
+        // Nothing to fall back to, and deliberately so: the same server issues the LiveKit
+        // token, so a server we can't reach means a run that couldn't have started anyway.
+        // Say which failure it is instead of publishing into a doc nobody chose.
+        Log.controller.error("cannot resolve the current session: \(detail, privacy: .public)")
+        status = .error("Can't reach \(config.serverURL): \(detail)")
+        scheduleRetry()
+    }
+
+    private func forgetSession() {
+        sessionResolve?.cancel()
+        sessionResolve = nil
+        session.forget()
     }
 
     /// True only while *both* halves of the capture→publish pipeline are alive. Anything else
@@ -260,8 +388,7 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func startPipeline(device: AudioInputDevice) {
-        let docID = config.resolvedDocID()
+    private func startPipeline(device: AudioInputDevice, docID: String) {
         Log.controller.notice("""
             starting pipeline: device \(device.name, privacy: .public) \
             (\(device.inputChannelCount, privacy: .public) ch, uid \(device.uid, privacy: .public)), \

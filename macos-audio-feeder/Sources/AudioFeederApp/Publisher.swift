@@ -57,6 +57,13 @@ final class Publisher {
     }
     var onStateChange: ((State) -> Void)?
 
+    /// The room (doc id) this publisher was started for, while it is up.
+    ///
+    /// Kept here rather than mirrored in `AppController`, which compares it against the
+    /// current session so a pin that moves the doc mid-run rebuilds instead of publishing
+    /// into the room everyone just left. One copy can't drift from the other.
+    private(set) var docID: String?
+
     private let serverURL: String
     private let writeKey: String?
     private var room: Room?
@@ -80,6 +87,7 @@ final class Publisher {
     func start(room docID: String) {
         guard case .disconnected = state else { return }
         sessionID &+= 1
+        self.docID = docID
         let id = sessionID
         state = .connecting
         connectTask = Task { await self.connect(docID: docID, sessionID: id) }
@@ -97,6 +105,7 @@ final class Publisher {
         sessionID &+= 1                  // invalidate in-flight room callbacks
         connectTask?.cancel()
         connectTask = nil
+        docID = nil
         let room = self.room
         self.room = nil
         observer = nil
