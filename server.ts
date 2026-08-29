@@ -35,7 +35,12 @@ import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
 import { normalizeSourceLanguage } from './src/liveAudioConfig.ts';
 import { connectServerDoc } from './serverDoc.ts';
 import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
-import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
+import {
+  livekitIdentity,
+  makeOrganizerGate,
+  makeYsAuthHandler,
+  parseLiveKitRole,
+} from './writeAuthRoutes.ts';
 import { SessionRegistry } from './sessionRegistry.ts';
 import { makeSessionRouter } from './sessionRoutes.ts';
 import { limitFromEnv, makeRateLimit } from './rateLimit.ts';
@@ -375,15 +380,15 @@ const DEFAULT_SOURCE_LANGUAGE_ENV = normalizeSourceLanguage(process.env.LIVE_AUD
 }
 
 // Issue a LiveKit access token. role 'organizer' => can publish (the speaker);
-// anything else => subscribe-only attendee (a listener).
+// 'attendee' (the default) => subscribe-only listener. Any other role is refused rather
+// than coerced. The participant identity is derived from the role here, never taken from
+// the request — see livekitIdentity in writeAuthRoutes.ts for why that matters.
 app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) => {
   try {
     const lk = getLiveKitConfig();
     if (!lk) return res.status(503).json({ error: 'LiveKit not configured' });
 
     const room = req.body?.room as string | undefined;
-    const identity = req.body?.identity as string | undefined;
-    const role = (req.body?.role as string | undefined) ?? 'attendee';
     // The language this listener wants translated (BCP-47). Carried as a participant
     // attribute so the translation supervisor can read demand straight from room
     // presence — no refcount, no beacon. Optional: attribute-less listeners still get
@@ -393,13 +398,22 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
     // into the room as the `speaks` attribute so the translation supervisor reads it
     // from the same presence snapshot it reads everything else from.
     const speakLanguage = req.body?.speakLanguage as string | undefined;
-    if (!room || !identity) {
-      return res.status(400).json({ error: 'Missing room or identity' });
+    if (!room) {
+      return res.status(400).json({ error: 'Missing room' });
+    }
+    const role = parseLiveKitRole(req.body?.role);
+    if (!role) {
+      return res.status(400).json({ error: 'Unknown role' });
     }
 
     // Organizer requests were already gated by makeOrganizerGate above; anything that
     // reaches here either presented a valid key or didn't ask for the microphone.
     const isOrganizer = role === 'organizer';
+
+    // Derived from the role, never read from the body — a client-chosen identity is a
+    // claim on someone else's seat in the room. See livekitIdentity in writeAuthRoutes.ts.
+    // Clients may still send `identity`; it is ignored, so old ones keep working.
+    const identity = livekitIdentity(role, ORGANIZER_IDENTITY);
 
     const at = new AccessToken(lk.apiKey, lk.apiSecret, {
       identity,
@@ -432,7 +446,7 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
       // session for itself. A broadcaster publishing into a room that isn't the current
       // session is the same silent mismatch as the Proclaim service writing to last
       // week's doc, so it is recorded the same way and shows up on the same screen.
-      sessionRegistry.noteWriter(`broadcaster:${identity}`, room);
+      sessionRegistry.noteWriter('broadcaster', room);
     }
 
     // A token request means room presence is about to change — poke the translation

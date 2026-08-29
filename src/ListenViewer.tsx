@@ -234,7 +234,11 @@ export function ListenViewer({ language }: { language: string }) {
           translatorIdentity = tr.translatorIdentity;
         }
 
-        const identity = `attendee-${Math.random().toString(36).slice(2, 8)}`;
+        // No identity: the server assigns one from the role. A client-chosen identity is
+        // a claim on a seat in the room — LiveKit evicts whoever already holds it — so
+        // picking our own could knock out another listener, the translator bot, or the
+        // speaker. We learn what we were given from `room.localParticipant` on connect.
+        //
         // listenLanguage rides into the LiveKit token as a participant attribute:
         // it's how the server's translation supervisor reads demand from room
         // presence, so our bridge survives as long as we're in the room — no
@@ -245,7 +249,6 @@ export function ListenViewer({ language }: { language: string }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             room: docId,
-            identity,
             role: "attendee",
             ...(translatorLanguage ? { listenLanguage: translatorLanguage } : {}),
           }),

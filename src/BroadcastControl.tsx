@@ -45,8 +45,6 @@ interface TokenResp {
   error?: string;
 }
 
-const ORGANIZER_IDENTITY = "organizer-host";
-
 // A live level meter for the speaker's own microphone, so they can confirm their
 // audio is actually being captured before/while broadcasting.
 function MicLevelMeter() {
@@ -202,9 +200,11 @@ export function BroadcastControl() {
       const tk = (await apiFetch("/api/livekit/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // No identity: the server derives `organizer-host` from the role, and gates the
+        // role on a write key. Sending our own would let any caller claim the same seat
+        // and evict whoever is speaking.
         body: JSON.stringify({
           room: docId,
-          identity: ORGANIZER_IDENTITY,
           role: "organizer",
           speakLanguage: spokenLanguage,
         }),
