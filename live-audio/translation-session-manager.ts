@@ -135,14 +135,50 @@ export function resolveSourceLanguage(
  *     share, and the one a visiting speaker's hosts are listening in.
  *
  * Never the spoken language itself: translating a talk into the language it is already
- * in buys nothing and would make the picker's "Original" entry ambiguous.
+ * in buys nothing, would make the picker's "Original" entry ambiguous, and — because the
+ * primary bridge is also the one with `writesSourceTranscript` set — would file the
+ * translation and the transcript of the original under the same code.
+ *
+ * There is exactly one input this rule can't answer: a deployment whose default language
+ * *is* the fallback source language, where an English talk has no other language to be
+ * translated into. That is a configuration saying "translate the talk into whatever it is
+ * already in", which is incoherent rather than merely unlucky, so it is refused instead of
+ * papered over with an arbitrary third choice. {@link assertPrimaryTargetIsPossible} turns
+ * that refusal into a boot failure, where it is one constant away from being fixed, rather
+ * than a throw on some later reconcile tick mid-service.
  */
 export function primaryTargetLanguage(
   sourceLanguage: string,
   opts: { defaultLanguage: string }
 ): string {
-  if (sourceLanguage !== DEFAULT_SOURCE_LANGUAGE) return DEFAULT_SOURCE_LANGUAGE;
-  return opts.defaultLanguage === sourceLanguage ? DEFAULT_SOURCE_LANGUAGE : opts.defaultLanguage;
+  const preferred =
+    sourceLanguage === DEFAULT_SOURCE_LANGUAGE ? opts.defaultLanguage : DEFAULT_SOURCE_LANGUAGE;
+  if (preferred === sourceLanguage) {
+    throw new Error(
+      `No primary translation target: a talk in '${sourceLanguage}' with default language ` +
+        `'${opts.defaultLanguage}' leaves nothing to translate into.`
+    );
+  }
+  return preferred;
+}
+
+/**
+ * Refuse a deployment that can't name a primary target for an English talk.
+ *
+ * The degenerate case in {@link primaryTargetLanguage} reduces to a single condition on two
+ * constants — `defaultLanguage === DEFAULT_SOURCE_LANGUAGE` — because the *other* branch
+ * returns `DEFAULT_SOURCE_LANGUAGE` precisely when the source isn't it, and so can never
+ * collide. That makes it checkable once, at startup, independently of what any particular
+ * broadcaster later declares they are speaking.
+ */
+export function assertPrimaryTargetIsPossible(defaultLanguage: string): void {
+  if (defaultLanguage === DEFAULT_SOURCE_LANGUAGE) {
+    throw new Error(
+      `TranslationSessionManager.DEFAULT_LANGUAGE must not be '${DEFAULT_SOURCE_LANGUAGE}': ` +
+        `it is the always-on bridge's target for a talk spoken in ${DEFAULT_SOURCE_LANGUAGE}, ` +
+        `which would ask it to translate the talk into its own language.`
+    );
+  }
 }
 
 /**
@@ -319,6 +355,8 @@ export class TranslationSessionManager {
     this.telemetry = opts.telemetry ?? null;
     this.silenceThresholdDbfs = opts.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
     this.defaultSourceLanguage = normalizeSourceLanguage(opts.defaultSourceLanguage);
+    // Fail at boot rather than on a reconcile tick during a service.
+    assertPrimaryTargetIsPossible(TranslationSessionManager.DEFAULT_LANGUAGE);
     this.directory = opts.directory ?? roomServiceDirectory(opts.livekit);
     if (opts.bridgeFactory) this.bridgeFactory = opts.bridgeFactory;
     this.startSupervisor();

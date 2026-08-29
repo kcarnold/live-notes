@@ -7,6 +7,7 @@ import type { ServerDoc } from "../serverDoc.ts";
 import {
   computeDesiredLanguages,
   planRoomActions,
+  assertPrimaryTargetIsPossible,
   primaryTargetLanguage,
   resolveSourceLanguage,
   TranslationSessionManager,
@@ -116,6 +117,30 @@ describe("primaryTargetLanguage", () => {
 
   it("never targets the language being spoken", () => {
     expect(primaryTargetLanguage("fr", opts)).not.toBe("fr");
+  });
+
+  it("refuses the one configuration that has no answer, rather than inventing one", () => {
+    // An English talk in a deployment whose default is also English leaves nothing to
+    // translate into. Returning the source anyway would start a paid en->en bridge that
+    // no listener can select, and — since the primary bridge is the transcript writer —
+    // file the translation and the original under the same code.
+    expect(() => primaryTargetLanguage("en", { defaultLanguage: "en" })).toThrow(
+      /nothing to translate into/,
+    );
+  });
+});
+
+describe("assertPrimaryTargetIsPossible", () => {
+  it("accepts the shipped configuration", () => {
+    expect(() => assertPrimaryTargetIsPossible("fr")).not.toThrow();
+    expect(() => assertPrimaryTargetIsPossible("es")).not.toThrow();
+  });
+
+  it("refuses a default language equal to the fallback source language", () => {
+    // Checkable on the constants alone, so the refusal lands at boot rather than on some
+    // later reconcile tick — the same reason resolveWriteAuthConfig throws for
+    // `enforce` with no keys.
+    expect(() => assertPrimaryTargetIsPossible("en")).toThrow(/DEFAULT_LANGUAGE/);
   });
 });
 
