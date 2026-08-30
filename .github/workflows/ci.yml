@@ -36,3 +36,18 @@ jobs:
           enable-cache: true
       # Includes the `slow` launcher tests, which pyproject deselects locally.
       - run: uv run pytest -q -m "slow or not slow"
+
+  swift:
+    # The macOS Audio Feeder is outside the npm and uv toolchains entirely, so nothing
+    # above touches it. Only AudioFeederCore is covered here: it's a plain SwiftPM package
+    # with no external dependencies, so this needs no xcodegen, no Xcode project, and no
+    # dependency cache. The app half (CoreAudio/LiveKit/SwiftUI) has no test target and
+    # isn't built here — see macos-audio-feeder/README.md for why the split exists.
+    #
+    # Standard macOS runners are unmetered on public repos. Keep this a standard label:
+    # the larger runners (the `-xlarge` variants) are billed even here.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: macos-audio-feeder
