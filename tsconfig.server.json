@@ -23,6 +23,10 @@
     "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    // `node server.ts` also type-strips at runtime — this rejects enums, namespaces with
+    // runtime members, and other TS syntax Node's stripper can't erase before tsc does.
+    "erasableSyntaxOnly": true,
     "moduleDetection": "force",
     "noEmit": true,
 
