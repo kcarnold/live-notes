@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { act } from 'react';
-import { useStickToBottom } from './reactUtils';
+import { useStickToBottom, useAutoHideChrome } from './reactUtils';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -526,5 +526,77 @@ describe('useStickToBottom with content that arrives after mount', () => {
     act(() => fire('scroll'));
 
     expect(result.current.pinned).toBe(false);
+  });
+});
+
+describe('useAutoHideChrome', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('starts visible, then hides after the delay elapses', () => {
+    const { result } = renderHook(() => useAutoHideChrome(1000));
+
+    expect(result.current).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(999);
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it('reveals again and restarts the timer on a pointerdown anywhere', () => {
+    const { result } = renderHook(() => useAutoHideChrome(1000));
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(result.current).toBe(false);
+
+    act(() => {
+      window.dispatchEvent(new Event('pointerdown'));
+    });
+    expect(result.current).toBe(true);
+
+    // Still within the fresh window started by that tap.
+    act(() => {
+      vi.advanceTimersByTime(999);
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it('stops listening and clears its timer on unmount', () => {
+    const addSpy = vi.spyOn(window, 'addEventListener');
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+
+    const { unmount } = renderHook(() => useAutoHideChrome(1000));
+    const handler = addSpy.mock.calls.find(([type]) => type === 'pointerdown')?.[1];
+    expect(handler).toBeDefined();
+
+    unmount();
+
+    expect(removeSpy).toHaveBeenCalledWith('pointerdown', handler);
+
+    // No pending timeout fires and throws after unmount.
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 });

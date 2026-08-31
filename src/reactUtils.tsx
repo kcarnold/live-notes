@@ -199,3 +199,36 @@ export function useStickToBottom(
 
   return { pinned, scrollToEnd };
 }
+
+// How long chrome stays visible after the last tap before fading out.
+const CHROME_HIDE_DELAY_MS = 3000;
+
+/**
+ * Drives auto-hiding UI chrome (nav controls, status widgets) that's rarely
+ * used but needs to stay discoverable: visible on load and after any tap
+ * anywhere on the page, faded out after a few seconds of inactivity so it
+ * stops sitting over content. `pointerdown` (not click) so it reveals on the
+ * same gesture that scrolls or presses a button underneath, and the listener
+ * never calls preventDefault/stopPropagation, so that gesture still reaches
+ * whatever it was aimed at — this only ever adds a reveal, never blocks one.
+ */
+export function useAutoHideChrome(delayMs: number = CHROME_HIDE_DELAY_MS) {
+  const [visible, setVisible] = React.useState(true);
+
+  React.useEffect(() => {
+    let hideTimeout: ReturnType<typeof setTimeout>;
+    const reveal = () => {
+      setVisible(true);
+      clearTimeout(hideTimeout);
+      hideTimeout = setTimeout(() => setVisible(false), delayMs);
+    };
+    reveal();
+    window.addEventListener('pointerdown', reveal, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', reveal);
+      clearTimeout(hideTimeout);
+    };
+  }, [delayMs]);
+
+  return visible;
+}
