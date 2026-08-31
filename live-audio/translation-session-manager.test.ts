@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 
-import type { DocumentManager } from "@y-sweet/sdk";
+import { readSourceLanguage } from "../src/liveAudioConfig.ts";
+import type { ServerDoc } from "../serverDoc.ts";
 
 import {
   computeDesiredLanguages,
   planRoomActions,
+  primaryTargetLanguage,
+  resolveSourceLanguage,
   TranslationSessionManager,
   type PresentParticipant,
   type RoomDirectory,
@@ -16,6 +20,10 @@ import type { TranslationBridge, BridgeStatus } from "./translation-bridge.ts";
 // ---------------------------------------------------------------------------
 
 const organizer: PresentParticipant = { identity: "organizer-host", attributes: { role: "organizer" } };
+const organizerSpeaking = (code: string): PresentParticipant => ({
+  identity: "organizer-host",
+  attributes: { role: "organizer", speaks: code },
+});
 const bot = (code: string): PresentParticipant => ({ identity: `translator-${code}` });
 const listener = (id: string, listen?: string): PresentParticipant => ({
   identity: `attendee-${id}`,
@@ -58,6 +66,56 @@ describe("computeDesiredLanguages", () => {
     expect(computeDesiredLanguages([organizer, bot("es"), bot("fr")], opts)).toEqual(
       new Set(["fr"])
     );
+  });
+
+  it("never runs a bridge for the language being spoken", () => {
+    // A listener asking for the spoken language wants the speaker's own audio. Paying
+    // Gemini to translate Spanish into Spanish would produce a second, redundant
+    // Spanish track and a duplicate transcript competing with the real one.
+    const desired = computeDesiredLanguages([organizer, listener("a", "es")], {
+      ...opts,
+      sourceLanguage: "es",
+    });
+    expect(desired.has("es")).toBe(false);
+  });
+});
+
+describe("resolveSourceLanguage", () => {
+  it("reads the language off the broadcaster's presence", () => {
+    expect(resolveSourceLanguage([organizerSpeaking("es"), listener("a", "en")])).toBe("es");
+  });
+
+  it("falls back for a broadcaster that never declares one", () => {
+    // Every client and feeder built before the attribute existed lands here, which is
+    // why the fallback has to keep those deployments behaving exactly as they did.
+    expect(resolveSourceLanguage([organizer])).toBe("en");
+    expect(resolveSourceLanguage([organizer], "es")).toBe("es");
+  });
+
+  it("ignores a listener's own language", () => {
+    // `listen` says what someone wants to hear; only `speaks`, and only on the
+    // organizer, says what is being said.
+    expect(resolveSourceLanguage([listener("a", "fr")])).toBe("en");
+  });
+});
+
+describe("primaryTargetLanguage", () => {
+  const opts = { defaultLanguage: "fr" };
+
+  it("keeps the deployment default for an English talk", () => {
+    expect(primaryTargetLanguage("en", opts)).toBe("fr");
+  });
+
+  it("switches the always-on bridge to English for a non-English talk", () => {
+    // The always-on bridge is paid for either way (it's the transcript writer), so its
+    // target should be the language a mixed room is likeliest to share. With a visiting
+    // Spanish speaker that's English, not the congregation's usual French.
+    expect(primaryTargetLanguage("es", opts)).toBe("en");
+    expect(primaryTargetLanguage("ht", opts)).toBe("en");
+  });
+
+  it("never targets the language being spoken", () => {
+    expect(primaryTargetLanguage("fr", opts)).not.toBe("fr");
   });
 });
 
@@ -110,13 +168,18 @@ describe("planRoomActions", () => {
 // abandoned rooms. The pure tests above can't prove any of that.
 // ---------------------------------------------------------------------------
 
+type BridgeConfig = ConstructorParameters<typeof TranslationBridge>[3];
+
 class FakeBridge {
   status: BridgeStatus = "starting";
   subscriberCount = 0;
   readonly identity: string;
   constructor(
     readonly sessionId: string,
-    readonly targetLanguage: string
+    readonly targetLanguage: string,
+    // Captured so tests can assert what the manager *told* the bridge — which language
+    // the room is spoken in, and which single bridge writes that transcript.
+    readonly config?: BridgeConfig
   ) {
     this.identity = `translator-${targetLanguage}`;
   }
@@ -139,8 +202,19 @@ class FakeBridge {
   async simulateScenario(): Promise<void> {}
 }
 
-function makeManager(rooms: Map<string, PresentParticipant[]>) {
+function makeManager(
+  rooms: Map<string, PresentParticipant[]>,
+  opts: { defaultSourceLanguage?: string } = {}
+) {
   const created: FakeBridge[] = [];
+  // Stand a plain local Y.Doc in for the session's Y-Sweet connection, so what the
+  // manager writes into the shared doc is observable without a server.
+  const docs = new Map<string, Y.Doc>();
+  const docFactory = (docId: string): ServerDoc => {
+    const doc = new Y.Doc();
+    docs.set(docId, doc);
+    return { doc, synced: Promise.resolve(), close: () => doc.destroy() };
+  };
   const directory: RoomDirectory = {
     listRooms: async () => [...rooms.keys()],
     listParticipants: async (room) => {
@@ -151,19 +225,26 @@ function makeManager(rooms: Map<string, PresentParticipant[]>) {
   };
   const manager = new TranslationSessionManager();
   manager.init({
-    // The writer needs a real DocumentManager; null-object it — TranscriptWriter is
-    // only constructed lazily per session and these tests never await its sync.
-    documentManager: null as unknown as DocumentManager,
     livekit: { url: "ws://fake", apiKey: "k", apiSecret: "s" },
     directory,
-    bridgeFactory: (sessionId, targetLanguage) => {
-      const bridge = new FakeBridge(sessionId, targetLanguage);
+    docFactory,
+    defaultSourceLanguage: opts.defaultSourceLanguage,
+    bridgeFactory: (sessionId, targetLanguage, _organizerIdentity, config) => {
+      const bridge = new FakeBridge(sessionId, targetLanguage, config);
       created.push(bridge);
       return bridge as unknown as TranslationBridge;
     },
   });
-  return { manager, created, rooms };
+  return { manager, created, rooms, docs };
 }
+
+/**
+ * The manager defers its doc writes until the connection reports synced (a set made
+ * before the initial sync is concurrent with what the doc already holds). With a fake
+ * that is already synced, that is one microtask — but it is not zero, so tests that
+ * assert on doc contents have to let it land.
+ */
+const flushWrites = () => Promise.resolve().then(() => {});
 
 const runningLanguages = (manager: TranslationSessionManager, sessionId: string) =>
   manager
@@ -188,6 +269,82 @@ describe("TranslationSessionManager supervisor", () => {
     );
     await manager.reconcileAll();
     expect(runningLanguages(manager, "doc-1")).toEqual(["es", "fr"]);
+  });
+
+  it("follows the broadcaster's declared language end to end", async () => {
+    // The demo case, and the long-term one: a Spanish speaker in an English-hearing
+    // room. Three things have to move together — the always-on bridge targets English
+    // instead of the deployment's French, the input transcript is filed under `es`, and
+    // an English listener gets a real translator bot rather than the "original audio"
+    // special case.
+    const { manager, created } = makeManager(
+      new Map([["doc-1", [organizerSpeaking("es"), listener("a", "en")]]])
+    );
+    await manager.reconcileAll();
+
+    expect(runningLanguages(manager, "doc-1")).toEqual(["en"]);
+    const en = created.find((b) => b.targetLanguage === "en")!;
+    expect(en.config?.sourceLanguage).toBe("es");
+    // Exactly one bridge transcribes the speaker, or the transcript doubles up.
+    expect(created.filter((b) => b.config?.writesSourceTranscript)).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Publishing the spoken language into the shared doc. The server routes bridges
+  // from presence, but browsers and exports read the doc — and nothing wrote it
+  // except a broadcaster who declared one, so a feeder-fed non-English service was
+  // routed as Spanish and labelled English everywhere a human could see.
+  // -------------------------------------------------------------------------
+
+  it("publishes the declared spoken language into the session doc", async () => {
+    const { manager, docs } = makeManager(
+      new Map([["doc-1", [organizerSpeaking("ht"), listener("a", "en")]]])
+    );
+    await manager.reconcileAll();
+    await flushWrites();
+
+    expect(readSourceLanguage(docs.get("doc-1")!)).toBe("ht");
+  });
+
+  it("publishes the deployment default for a broadcaster that declares nothing", async () => {
+    // The macOS audio feeder: publishes as organizer, has no UI to ask, carries no
+    // `speaks` attribute. LIVE_AUDIO_SOURCE_LANGUAGE is the only thing that knows,
+    // and before this it reached the bridges but never a single viewer.
+    const { manager, docs } = makeManager(new Map([["doc-1", [organizer]]]), {
+      defaultSourceLanguage: "es",
+    });
+    await manager.reconcileAll();
+    await flushWrites();
+
+    expect(readSourceLanguage(docs.get("doc-1")!)).toBe("es");
+  });
+
+  it("leaves the doc alone for a room with no broadcaster", async () => {
+    // Same reason the in-memory value isn't refreshed without one: an empty room
+    // must not stamp the deployment default over a live session's declaration.
+    const { manager, docs } = makeManager(new Map([["doc-1", [listener("a", "es")]]]), {
+      defaultSourceLanguage: "es",
+    });
+    await manager.reconcileAll();
+    await flushWrites();
+
+    expect(docs.has("doc-1")).toBe(false);
+  });
+
+  it("keeps an undeclared room on the English/French arrangement it has always had", async () => {
+    const { manager, created } = makeManager(
+      new Map([["doc-1", [organizer, listener("a", "es")]]])
+    );
+    await manager.reconcileAll();
+
+    expect(runningLanguages(manager, "doc-1")).toEqual(["es", "fr"]);
+    expect(created.find((b) => b.targetLanguage === "fr")!.config?.sourceLanguage).toBe("en");
+    expect(created.find((b) => b.targetLanguage === "fr")!.config?.writesSourceTranscript).toBe(
+      true
+    );
+    expect(created.find((b) => b.targetLanguage === "es")!.config?.writesSourceTranscript).toBe(
+      false
+    );
   });
 
   it("starts nothing for a waiting room, then everything when the broadcaster arrives", async () => {
@@ -260,7 +417,6 @@ describe("TranslationSessionManager supervisor", () => {
       listParticipants: async () => [],
     };
     manager.init({
-      documentManager: null as unknown as DocumentManager,
       livekit: { url: "ws://fake", apiKey: "k", apiSecret: "s" },
       directory: blind,
     });

@@ -51,7 +51,8 @@ import {
 // tsc accepts it either way, but ESM fails at runtime with "does not provide an export named".
 import type { RemoteTrack } from "@livekit/rtc-node";
 import WebSocket from "ws";
-import type { TranscriptWriter } from "./transcript-writer.ts";
+import { DEFAULT_SOURCE_LANGUAGE } from "../src/liveAudioConfig.ts";
+import type { TranscriptSegmentLog } from "./transcript-log.ts";
 
 export type BridgeStatus = "starting" | "active" | "error" | "closed";
 
@@ -443,11 +444,16 @@ export class TranslationBridge {
   private consecutiveStallRecoveries: number = 0;
 
   // Persists finalized transcript segments into the shared Yjs doc.
-  private readonly writer: TranscriptWriter | null;
-  // Whether this bridge also writes the source-language (English) transcript,
-  // via Gemini input transcription. Only the primary bridge does, so the same
-  // English text isn't appended once per running language.
+  private readonly transcript: TranscriptSegmentLog | null;
+  // Whether this bridge also writes the *spoken*-language transcript, via Gemini
+  // input transcription. Only the primary bridge does, so the same source text isn't
+  // appended once per running language.
   private readonly writesSourceTranscript: boolean;
+  // The language the speaker is speaking (BCP-47), which is the code that transcript
+  // is filed under. Gemini detects the spoken language itself — nothing in the setup
+  // message names it — so this is purely how we *label* what comes back. Getting it
+  // wrong doesn't degrade the translation, it files a Spanish transcript under `en`.
+  private readonly sourceLanguage: string;
   // Telemetry sink (PostHog, injected by the server). Null in tests / when unset.
   private readonly recordEvent: RecordEvent | null;
   // The voice bar, in dBFS — the cost path's only knob. At SILENCE_GATING_OFF_DBFS
@@ -455,9 +461,6 @@ export class TranslationBridge {
   // plain always-on session. The goaway/reconnect buffering is independent of this
   // and always active.
   private readonly silenceThresholdDbfs: number;
-
-  // The source (input) transcript is published under this language code.
-  static readonly SOURCE_CODE = "en";
 
   constructor(
     sessionId: string,
@@ -468,8 +471,9 @@ export class TranslationBridge {
       livekitUrl: string;
       livekitApiKey: string;
       livekitApiSecret: string;
-      writer?: TranscriptWriter | null;
+      transcript?: TranscriptSegmentLog | null;
       writesSourceTranscript?: boolean;
+      sourceLanguage?: string;
       recordEvent?: RecordEvent | null;
       silenceThresholdDbfs?: number;
     }
@@ -482,8 +486,9 @@ export class TranslationBridge {
     this.livekitUrl = config.livekitUrl;
     this.livekitApiKey = config.livekitApiKey;
     this.livekitApiSecret = config.livekitApiSecret;
-    this.writer = config.writer ?? null;
+    this.transcript = config.transcript ?? null;
     this.writesSourceTranscript = config.writesSourceTranscript ?? false;
+    this.sourceLanguage = config.sourceLanguage ?? DEFAULT_SOURCE_LANGUAGE;
     this.recordEvent = config.recordEvent ?? null;
     this.silenceThresholdDbfs = config.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
   }
@@ -1091,8 +1096,10 @@ export class TranslationBridge {
       setup: {
         model: `models/${this.geminiModel}`,
         outputAudioTranscription: {},
-        // Only the primary bridge transcribes the source audio (English), so the
-        // English transcript is produced once regardless of how many languages run.
+        // Only the primary bridge transcribes the source audio, so the spoken-language
+        // transcript is produced once regardless of how many languages run. There is no
+        // source-language field to set here: Gemini Live Translate detects the input
+        // language itself, which is what makes a non-English speaker work at all.
         ...(this.writesSourceTranscript ? { inputAudioTranscription: {} } : {}),
         generationConfig: {
           responseModalities: ["AUDIO"],
@@ -1175,12 +1182,12 @@ export class TranslationBridge {
     // flow of deltas with no turnComplete, so persist each delta straight into the
     // shared Yjs transcript, which is the single source of truth for viewers.
     if (serverContent?.outputTranscription?.text) {
-      this.writer?.appendDelta(this.targetLanguage, serverContent.outputTranscription.text);
+      this.transcript?.append(this.targetLanguage, serverContent.outputTranscription.text);
     }
 
-    // Input transcription (source language / English) — only on the primary bridge.
+    // Input transcription (the spoken language) — only on the primary bridge.
     if (this.writesSourceTranscript && serverContent?.inputTranscription?.text) {
-      this.writer?.appendDelta(TranslationBridge.SOURCE_CODE, serverContent.inputTranscription.text);
+      this.transcript?.append(this.sourceLanguage, serverContent.inputTranscription.text);
     }
   }
 

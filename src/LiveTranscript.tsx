@@ -5,7 +5,7 @@
 // late joiners the full history.
 //
 // Each segment carries how much silence preceded it, measured server-side at write
-// time (see live-audio/transcript-writer.ts). A long enough gap renders as a break
+// time (see live-audio/transcript-log.ts). A long enough gap renders as a break
 // between utterances, so a reader can tell "the speaker stopped for a while" from
 // "these two sentences ran together" — which unbroken text can't express.
 //
@@ -59,9 +59,19 @@ export function LiveTranscript({ langCode }: { langCode: string }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Segments present at first render aren't animated; only later-appended ones are.
-  // Captured once via a lazy initializer (reading a ref during render is unsafe).
-  const [baselineCount] = useState(() => segments.length);
+  // Segments already there when the viewer joined aren't animated; only
+  // later-appended ones are. Latched on the first render that *has* segments
+  // rather than on mount: a viewer opening an existing session mounts before the
+  // Yjs doc syncs, and a mount-time baseline of zero would play the new-text
+  // highlight across the whole synced-in history at once.
+  // Adjusted during render rather than in an effect: React re-runs the component
+  // immediately and throws the first pass away, so the history never reaches the
+  // DOM wearing the highlight class, not even for a frame.
+  const [baseline, setBaseline] = useState<number | null>(null);
+  if (baseline === null && segments.length > 0) {
+    setBaseline(segments.length);
+  }
+  const baselineCount = baseline ?? 0;
 
   // Key on the total text length, not segments.length: deltas stream into the
   // *current* segment without adding one, so keying on the count would only re-stick

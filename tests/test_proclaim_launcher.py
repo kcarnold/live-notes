@@ -27,7 +27,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO_ROOT / 'proclaim_service_launch.sh'
 
-pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason="git is required")
+# Slow by design (real git + subprocess timeouts), so opt-in locally: `-m slow`.
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(shutil.which('git') is None, reason="git is required"),
+]
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -226,7 +230,10 @@ def test_a_hung_fetch_is_killed_and_the_service_still_starts(checkout, fake_uv, 
         '#!/bin/bash\n'
         '# Ignore `-c key=value` options the wrapper passes before the subcommand.\n'
         'while [ "$1" = "-c" ]; do shift 2; done\n'
-        'if [ "$1" = "fetch" ]; then sleep 60; exit 0; fi\n'
+        # `exec`, so the process the wrapper kills IS the sleep: a surviving
+        # child would hold the captured stdout pipe open for its full 60s and
+        # make this test cost a minute to prove a 2s timeout.
+        'if [ "$1" = "fetch" ]; then exec sleep 60; fi\n'
         'exec /usr/bin/env git "$@"\n'
     )
     fake_git.chmod(0o755)

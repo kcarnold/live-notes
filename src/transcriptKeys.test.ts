@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as Y from 'yjs';
+import { writeSourceLanguage } from './liveAudioConfig';
 import {
   TRANSCRIPT_PAUSE_MS,
   formatPauseGap,
@@ -11,7 +12,7 @@ import {
 } from './transcriptKeys';
 
 /**
- * Write a segment the way live-audio/transcript-writer.ts does. Only observations go in
+ * Write a segment the way live-audio/transcript-log.ts does. Only observations go in
  * — `startedAt`/`endedAt` — because the gap is derived, so a test can't hand-wave it.
  */
 function pushSegment(
@@ -27,7 +28,7 @@ function pushSegment(
 }
 
 describe('liveTranscriptCodes', () => {
-  it('discovers only transcript root types, English source first', () => {
+  it('discovers only transcript root types, spoken language first', () => {
     const doc = new Y.Doc();
     // Touching a root type registers it in doc.share, mirroring what the transcript
     // writer does on the server as each language comes online.
@@ -40,6 +41,18 @@ describe('liveTranscriptCodes', () => {
     // en is the source, so it sorts first; the rest by localized label
     // (English "French" < "Spanish").
     expect(liveTranscriptCodes(doc)).toEqual(['en', 'fr', 'es']);
+  });
+
+  it('leads with the language the session was actually spoken in', () => {
+    // The same doc, said to be a Spanish talk: Spanish is the speaker's own words and
+    // English is one translation among others, so the order inverts.
+    const doc = new Y.Doc();
+    pushSegment(doc, 'fr', { text: 'bonjour' });
+    pushSegment(doc, 'en', { text: 'hello' });
+    pushSegment(doc, 'es', { text: 'hola' });
+    writeSourceLanguage(doc, 'es');
+
+    expect(liveTranscriptCodes(doc)).toEqual(['es', 'en', 'fr']);
   });
 
   it('returns an empty list when no transcripts exist yet', () => {

@@ -9,7 +9,7 @@ import pLimit from 'p-limit';
 import { DocumentManager } from '@y-sweet/sdk'
 import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
-import { PostHog, setupExpressErrorHandler } from 'posthog-node';
+import { PostHog, setupExpressErrorHandler, setupExpressRequestContext } from 'posthog-node';
 
 import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider, emptyUsage, mergeUsage } from './nlp.ts';
 import type { TranslationTodo, TokenUsage, AgentObservability } from './nlp.ts';
@@ -30,10 +30,14 @@ import { buildSessionExport, renderSessionHtml, sessionExportFilename } from './
 
 import { AccessToken } from 'livekit-server-sdk';
 import { SimulateScenarioKind } from '@livekit/rtc-node';
-import TranslationSessionManager from './live-audio/translation-session-manager.ts';
+import TranslationSessionManager, { SPEAKS_ATTRIBUTE } from './live-audio/translation-session-manager.ts';
 import { parseSilenceThresholdDbfs } from './live-audio/translation-bridge.ts';
+import { normalizeSourceLanguage } from './src/liveAudioConfig.ts';
+import { connectServerDoc } from './serverDoc.ts';
 import { WriteAuth, auditDistinctId, formatAudit, resolveWriteAuthConfig } from './writeAuth.ts';
 import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
+import { SessionRegistry } from './sessionRegistry.ts';
+import { makeSessionRouter } from './sessionRoutes.ts';
 import { limitFromEnv, makeRateLimit } from './rateLimit.ts';
 
 // Get API keys from environment variables, crash if not set
@@ -64,7 +68,7 @@ const geminiProvider = new GeminiProvider({
 // translates all slides into all languages and sorts a multilingual reference dump into
 // the right languages, so capability matters more than the latency/cost of the hot
 // incremental notes path (which stays on defaultModel). Override via GEMINI_STRONG_MODEL.
-const STRONG_MODEL = process.env.GEMINI_STRONG_MODEL || 'gemini-3.5-flash';
+const STRONG_MODEL = process.env.GEMINI_STRONG_MODEL || 'gemini-3.7-flash';
 
 // General context injected into every slide-translation prompt: the setting and the intent
 // of the translations. Steers register and reminds the model these are for understanding,
@@ -102,6 +106,22 @@ const SLIDE_LIBRARY_PATH =
 const slideLibrary = new SlideLibrary(SLIDE_LIBRARY_PATH);
 await slideLibrary.load();
 console.log(`Slide translation library: ${SLIDE_LIBRARY_PATH} (${slideLibrary.list().length} entries)`);
+
+// The server-owned "current session" (#111): the pin an operator sets from /status, the
+// Proclaim service's proposal, and the recent-writer sightings that make a disagreement
+// visible. Rides the same Docker volume as the slide library so a pin survives a restart.
+const SESSION_REGISTRY_PATH =
+  process.env.SESSION_REGISTRY_PATH || path.join(AUDIO_CACHE_DIR, 'current-session.json');
+// The congregation's zone, not the container's. Moving the date formula off the browser
+// moved it onto a clock that is UTC by default, which would file a Sunday-evening service
+// under Monday. Worth logging: a wrong zone here is a wrong doc for everyone.
+const sessionRegistry = new SessionRegistry(SESSION_REGISTRY_PATH, process.env.SESSION_TIMEZONE);
+await sessionRegistry.load();
+const bootSession = sessionRegistry.current();
+console.log(
+  `Current session: ${bootSession.docId} (${bootSession.source}), ` +
+  `timezone ${sessionRegistry.zone}, state in ${SESSION_REGISTRY_PATH}`,
+);
 
 // Per-item agent conversations. The agent runs here, but the conversation is stored in the
 // per-day Y-Sweet doc (so it survives restarts and streams live to the review screen); this
@@ -254,7 +274,12 @@ app.use(express.static("dist"));
 app.use(express.json());
 app.use('/audio-cache', express.static(AUDIO_CACHE_DIR));
 
-setupExpressErrorHandler(phClient, app);
+// PostHog's express integration comes in two halves with opposite ordering rules, and both
+// matter here. This one is the *first* middleware on purpose: it opens an AsyncLocalStorage
+// context per request, so every `phClient.captureException(...)` fired deeper in a handler
+// picks up the method, path, IP and tracing headers without us threading `req` around. The
+// error handler is the other half and is registered last — see the note above `app.listen`.
+setupExpressRequestContext(phClient, app);
 
 
 // Public config for services that need to report to PostHog
@@ -275,6 +300,22 @@ app.post(
     // absent id has always meant the same thing here whether it arrived as null or not.
     issueToken: (docId, authorization) =>
       documentManager.getOrCreateDocAndToken(docId ?? undefined, { authorization }),
+    log: (message) => console.log(message),
+    // Every writable token is a sighting: this is the log line that told the truth in
+    // #111 while the service's own logs did not, now recorded where /status can show it.
+    onGrantFull: (docId, label) => {
+      if (docId) sessionRegistry.noteWriter(label ?? 'unlabeled-writer', docId);
+    },
+  }),
+);
+
+// The current session: read by every client, set by an operator, proposed by the
+// Proclaim service. See sessionRegistry.ts for why this is a server-owned fact.
+app.use(
+  '/api/session',
+  makeSessionRouter({
+    registry: sessionRegistry,
+    requireWriteKey,
     log: (message) => console.log(message),
   }),
 );
@@ -306,17 +347,25 @@ function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } 
 // which bridges exist, only what an existing one does while nobody is speaking.
 const SILENCE_THRESHOLD_DBFS = parseSilenceThresholdDbfs(process.env.LIVE_AUDIO_SILENCE_THRESHOLD_DBFS);
 
+// What a session is assumed to be spoken in when its broadcaster doesn't declare a
+// language — an older client, or the unattended macOS audio feeder, which publishes as
+// organizer with no UI to ask. Browsers say so per session (see src/liveAudioConfig.ts);
+// this is the deployment-wide fallback, and `en` keeps every existing install as it was.
+const DEFAULT_SOURCE_LANGUAGE_ENV = normalizeSourceLanguage(process.env.LIVE_AUDIO_SOURCE_LANGUAGE);
+
 // Give the translation manager what it needs to persist transcripts into Yjs and
 // reap idle translator bots. No-op for transcript/reaper if LiveKit is unconfigured.
 {
   const lk = getLiveKitConfig();
   if (lk) {
     TranslationSessionManager.getInstance().init({
-      documentManager,
+      docFactory: (docId) => connectServerDoc(docId, documentManager),
       livekit: lk,
       telemetry: phClient,
       silenceThresholdDbfs: SILENCE_THRESHOLD_DBFS,
+      defaultSourceLanguage: DEFAULT_SOURCE_LANGUAGE_ENV,
     });
+    console.log(`[server] Live-audio default spoken language: ${DEFAULT_SOURCE_LANGUAGE_ENV}`);
     console.log(
       `[server] Live-audio silence gating (cost path): ${
         Number.isFinite(SILENCE_THRESHOLD_DBFS) ? `${SILENCE_THRESHOLD_DBFS} dBFS` : 'disabled'
@@ -340,6 +389,10 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
     // presence — no refcount, no beacon. Optional: attribute-less listeners still get
     // the default bridge, and their /translate request stamps their language.
     const listenLanguage = req.body?.listenLanguage as string | undefined;
+    // The language the broadcaster is speaking (BCP-47), from the broadcast pane. Rides
+    // into the room as the `speaks` attribute so the translation supervisor reads it
+    // from the same presence snapshot it reads everything else from.
+    const speakLanguage = req.body?.speakLanguage as string | undefined;
     if (!room || !identity) {
       return res.status(400).json({ error: 'Missing room or identity' });
     }
@@ -353,7 +406,10 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
       name: identity,
       ttl: '4h',
       attributes: isOrganizer
-        ? { role: 'organizer' }
+        ? {
+            role: 'organizer',
+            ...(speakLanguage ? { [SPEAKS_ATTRIBUTE]: speakLanguage } : {}),
+          }
         : listenLanguage
           ? { listen: listenLanguage }
           : undefined,
@@ -366,6 +422,18 @@ app.post('/api/livekit/token', makeOrganizerGate(writeAuth), async (req, res) =>
       canPublishData: isOrganizer,
     });
     const token = await at.toJwt();
+
+    // Tell the supervisor now rather than waiting for the broadcaster to appear in a
+    // presence snapshot: a listener's /translate can land first, and a bridge started
+    // before the language is known would file the transcript under the wrong one.
+    if (isOrganizer) {
+      TranslationSessionManager.getInstance().setSourceLanguage(room, speakLanguage);
+      // The room name *is* the doc id — the third party in #111 that computed the current
+      // session for itself. A broadcaster publishing into a room that isn't the current
+      // session is the same silent mismatch as the Proclaim service writing to last
+      // week's doc, so it is recorded the same way and shows up on the same screen.
+      sessionRegistry.noteWriter(`broadcaster:${identity}`, room);
+    }
 
     // A token request means room presence is about to change — poke the translation
     // supervisor so it reconciles this room within seconds instead of on its next
@@ -902,6 +970,15 @@ app.get('/*splat', (req, res, next) => {
   }
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
+
+// Last middleware, after every route: Express dispatches errors *forward* from the layer
+// that threw, so an error handler only ever sees the routes registered above it. This one
+// used to sit up beside the static/json middleware, where it could see a malformed JSON body
+// and nothing else — every API route's failures went straight to Express's default handler
+// and were never reported. It captures and re-raises (`next(error)`), so the routes that
+// swallow their own errors in a try/catch still report via `phClient.captureException` there;
+// this covers the majority that don't.
+setupExpressErrorHandler(phClient, app);
 
 app.listen(app.get("port"), () => {
   console.log(`Server running on http://localhost:${PORT}`);

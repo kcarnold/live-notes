@@ -23,5 +23,11 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-q"
+# `slow` is deselected by default: it is the launcher suite, which shells out to
+# real git/uv and costs ~25s to test a file almost no change touches. CI runs it
+# (see .github/workflows/ci.yml); locally, `uv run pytest -m slow` does.
+addopts = "-q -m 'not slow'"
 testpaths = ["tests"]
+markers = [
+    "slow: shells out to real git/uv subprocesses; opt-in locally, always on in CI",
+]

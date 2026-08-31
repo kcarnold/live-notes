@@ -3,11 +3,24 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.server.tsbuildinfo",
     "target": "ES2022",
     "lib": ["ES2023"],
-    "module": "ESNext",
+    "module": "nodenext",
     "skipLibCheck": true,
 
-    /* Bundler mode */
-    "moduleResolution": "bundler",
+    /*
+     * Node runs this code directly — `node server.ts`, type-stripping, no bundler — so it
+     * is Node's ESM resolver that decides whether an import resolves, and that resolver
+     * does NOT guess extensions: `./liveAudioConfig` is a missing module, only
+     * `./liveAudioConfig.ts` is a file. `moduleResolution: nodenext` is what makes tsc
+     * apply that same rule, so `npm run typecheck` fails on an extensionless relative
+     * import instead of the server failing to boot at runtime.
+     *
+     * This matters most for the modules under src/ that both halves share
+     * (liveAudioConfig, transcriptKeys, slideTranslation...): tsconfig.app.json checks
+     * them under `bundler` resolution, where extensionless is legal and Vite resolves it
+     * happily — vitest included. Nothing in the browser-side toolchain can notice the
+     * break, so the server's own project has to.
+     */
+    "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "moduleDetection": "force",
@@ -20,6 +33,12 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
+  /*
+   * Entrypoints only — tsc follows imports from here, which is how the rest of the
+   * root .ts files, live-audio/, and the shared src/ modules get pulled in and checked
+   * under Node's resolution rules. The live-audio tests are listed because nothing
+   * imports them, and they were otherwise the only files in the repo no project checked.
+   */
   "include": [
     "server.ts",
     "nlp.ts",
@@ -27,6 +46,7 @@
     "slideLibrary.ts",
     "slideConversationStore.ts",
     "dump-docs.ts",
-    "*.test.ts"
+    "*.test.ts",
+    "live-audio/*.test.ts"
   ]
 }

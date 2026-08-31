@@ -10,6 +10,209 @@ cause, the fix.
 
 ---
 
+## 2026-08-24 — the mode picker answered a temporary question permanently
+
+**Symptom.** *"The mode picker is weird."* What an operator wants at the sound board is to
+start a few minutes early, or end a service early, and then have the schedule carry on. The
+picker (`Schedule | Always on | Always off`, from the 2026-08-05 entry below) couldn't express
+either. Starting early meant switching to **Always on** — which doesn't mean "start now", it
+means "ignore the schedule until further notice" — and then remembering to switch back. Nobody
+remembers, so the install spends the following week on Always on, or worse, parked on Always
+off through a Sunday.
+
+**Cause.** The picker was a faithful rendering of the wrong model. `manualOverride` was an
+*outer switch*, persisted, deciding whether the schedule was consulted at all. That gave four
+independent ways to end up silent — the mode, `schedule.enabled`, no days, a zero-length
+window — all of which look the same from the menu bar. `willStartUnattended` and the orange
+sentence existed to warn about a hazard the control itself created.
+
+**Fix: one durable switch, one transient action.** The schedule (Settings) is the only thing
+that starts the feeder on its own. **Start now** / **Stop now** are a `RunHold`, which lasts
+until *the schedule's next edge of the kind it preempted* — start-now ends at the next
+scheduled start (after which the schedule is on anyway and carries the run to its normal stop),
+stop-now ends at the next scheduled stop — capped at four hours, and then it expires by itself.
+Press Start at 09:40 against a 10:00–12:00 window and the feeder runs 09:40–12:00. There is no
+mode to put back.
+
+The hold is **in memory only**. `FeederConfig` lost `manualOverride` entirely, and a relaunch
+comes back following the schedule — the right answer for an unattended booth Mac, and one less
+piece of persisted state that can be wrong on a Sunday morning. The popover's one line now says
+what happens next (*"Next run Sun 10:00–12:00."*, *"Started early — runs until 12:00."*) rather
+than naming a mode; `willStartUnattended` collapses to `schedule.willEverRun`.
+
+**Three things worth not re-deriving:**
+
+- **`endsAt` is resolved at press time, not recomputed as a state comparison.** The obvious
+  cheaper rule — "the hold expires once the schedule agrees with it" — resurrects. A hold-on at
+  09:40 against a 10:00–11:00 window is satisfied at 10:00, and then at 11:30 the schedule
+  disagrees again and the hold switches the feeder back **on**. Making that safe would rest
+  correctness on the 15s tick having fired. `testHoldDoesNotResurrectWhenTheWindowClosesAgain`
+  is that bug, pinned.
+- **A schedule edit recomputes a live hold** (`RunHold.recomputed`, from the original `setAt`,
+  so the four-hour ceiling can't be walked forward). Without it: stop at 11:15 in a 10:00–12:00
+  window, then extend the stop to 14:00, and the feeder comes back on at 12:00 — partway
+  through a run the operator had just opted out of.
+- **The first draft searched minute-by-minute over the next eight days** for "when does the
+  state next flip". That worked, and it was a hand-rolled reimplementation of
+  `Calendar.nextDate(after:matching:)`. The search was the signal that the *edges*, not the
+  states, were the thing to compute; `Schedule.nextStart`/`nextStop` are now a min over at most
+  seven of those calls. The sweep survives as the **test oracle** it should always have been.
+
+**Two clocks, on purpose.** The schedule is wall-clock ("10:00 means 10:00"); a hold's cap is
+absolute elapsed time, because it bounds airtime and cost rather than naming a clock reading.
+`ScheduleDSTTests` pins both against America/New_York: consecutive scheduled starts are 23 or
+25 hours apart across a transition, a window spanning the spring-forward gap is three hours on
+the wall and two in the room, and a hold set at 01:30 ends at 06:30, not 05:30.
+
+**Known and accepted: the fall-back repeated hour.** Local 01:00–01:59 happens twice each
+November. `isWithinWindow` reads only wall-clock components, so a window ending at 01:30 stops
+and then comes back for the repeated hour. Pinned by
+`testFallBackRepeatsAnEarlyMorningWindow` rather than fixed — the ambiguity is inherent to
+wall-clock scheduling and predates this change, and the blast radius is one extra hour at 01:00
+once a year on a feeder that runs Sunday mornings. A special case would cost more than it
+saves. It should be a decision, though, not a surprise.
+
+**Rule this earns:** a control that sets a *mode* has to be undone; a control that shifts *this
+run* undoes itself. Prefer the second wherever the operator's real request is "just for now" —
+and if a fix requires the operator to remember a second step, the model is wrong, not the
+operator.
+
+---
+
+## 2026-08-05 — the weekday chips were invisible state
+
+**Symptom.** On an older macOS, clicking a day in **Settings → Schedule** changed nothing on
+screen. On a newer one it did highlight, but you still couldn't tell which appearance meant
+"the feeder will run this day" — nor, from that row, whether it would run at all.
+
+**Cause.** The row was seven `Button`s styled `.bordered` and differentiated *only* by
+`.tint(on ? .accentColor : .gray)`. `tint` is a **hint**: AppKit's bordered push button is
+free to ignore it, and older systems do exactly that, so both states rendered as the same
+grey push button. Where it is honoured, the difference is accent-tinted vs grey-tinted — a
+colour difference with no shape, no glyph and no label saying which one is "on". The state
+was there in the config the whole time; the UI just never committed to showing it.
+
+**Fix, two halves.**
+
+- **Draw the state ourselves.** `WeekdayButton` is a `.buttonStyle(.plain)` chip with its own
+  fill, border, weight and glyph: filled accent + checkmark + semibold when scheduled,
+  outlined + dash + regular when skipped. Nothing about it is a hint, so it renders the same
+  on every system we deploy to, and it survives the loss of colour (colour-blind operator,
+  washed-out booth monitor). It also gained a tooltip and proper accessibility label/value —
+  it was previously an unlabelled `Sun` with no selected state exposed at all.
+- **Say the outcome in words.** `Schedule.summary` renders one sentence — *"Runs Sun,
+  10:00–12:00."* — under the times, orange when the schedule can never fire. This is the half
+  that answers the second complaint, because *no* chip appearance can distinguish these three
+  do-nothing configurations, which look identical in the row:
+
+  | Configuration | Chip row shows | Summary says |
+  |---|---|---|
+  | `enabled == false` | a full week of chips | Schedule off — nothing will start the feeder on its own. |
+  | `days.isEmpty` | nothing selected | No days selected — the schedule will never start the feeder. |
+  | `startMinute == stopMinute` | a full week of chips | Start and stop are the same time — the schedule will never start the feeder. |
+
+  It also spells out the wrapping window (*"Runs Sat, 23:00–01:00 the next day."*), which is
+  the one place `days` doesn't mean "runs on this day" — `Scheduler.isWithinWindow` anchors a
+  wrapping run to its **start** day, so Sunday 00:30 belongs to Saturday's window. Nothing in
+  the UI had ever said so.
+
+**Where it lives.** The sentence is built in `Schedule` (`AudioFeederCore`), not the view, so
+`swift test` covers it with no Xcode and no UI. `ConfigTests` pins each inert case, and
+`testWillEverRunAgreesWithScheduler` sweeps a full week minute-by-minute through the real
+`Scheduler.shouldRun` to prove that "will never start the feeder" is the truth and not a
+second, drifting opinion about the schedule.
+
+**Rule this earns:** if a control's state is only a `tint`, the app has no state on screen.
+Anything the operator has to read at the booth gets a shape or a glyph, and anything that
+decides whether we go on air gets a sentence.
+
+**The same sentence went into the menu-bar popover**, which had the identical gap one level
+up: it said what the feeder was doing *now* ("Idle") and never whether anything would change
+that. An install with the schedule switched off sits at "Idle" indefinitely and looks exactly
+like one that is five minutes from going live.
+
+### Then the same bug turned out to be in the popover's controls (same day, on review)
+
+First run on a real Mac produced the right question: *what does "Follow schedule" do, and why
+is it separate from the "Enable schedule" checkbox?*
+
+It's a fair question because the UI never answered it. There are two switches, and the
+popover's three buttons hid which one they were:
+
+| | Where | Decides |
+|---|---|---|
+| **When to publish** (`manualOverride`) | popover | whether the schedule is consulted **at all** |
+| **Enable schedule** + days + times | settings | what "Schedule" mode *does* |
+
+The mode is the **outer** switch, and "Follow schedule" read like a sibling of "Enable
+schedule" instead — same words, opposite level. Worse, the mode was never displayed: you
+inferred it from which of `Start now` / `Stop now` was greyed out, and `Follow schedule`
+appeared *only* while an override was active, so the state you were in was the one thing the
+control couldn't show you. That is the exact defect this entry started with, one level up.
+
+Replaced by a segmented **When to publish**: `Schedule | Always on | Always off`. The
+selection *is* the state, there are visibly exactly three of them, and the sentence beneath
+now describes the effective mode (`FeederConfig.modeSummary`), not just the schedule — because
+"Runs Sun, 10:00–12:00" is actively misleading while the mode is *Always off*. It routes
+through the controller's existing `startNow()` / `stopNow()` / `followSchedule()` rather than
+writing `manualOverride`, since two of those also clear a stand-down.
+
+`FeederConfig.willStartUnattended` answers the question neither control answers alone — *will
+anything start this without a person?* — and it is what colours the line orange. For a feeder
+whose whole job is running unattended, that's the sentence worth having.
+
+**Also:** on macOS 26 the grouped-form text fields have no visible bezel, so a field holding a
+value is indistinguishable from a label holding a value — nothing said "you can type here".
+`.textFieldStyle(.roundedBorder)` on the `Form`. Same disease as the weekday chips, third
+instance in one screen: **state and affordance both have to be drawn, not implied.**
+
+### The picker's first click found a real one: publishing from inside a view update
+
+Clicking **Schedule** logged *"Publishing changes from within view updates is not allowed,
+this will cause undefined behavior."*
+
+`AppController.config` is `@Published` with a `didSet` that runs `evaluate()` **synchronously**,
+and `evaluate()` writes other `@Published` properties (`status`, `devices`, `standDown`). So
+any binding write to `config` mutates observable state; if that write happens inside SwiftUI's
+update pass, this is exactly the warning. A `Picker` writes its selection *during* that pass —
+a `Button`'s action closure does not, which is the only reason the three buttons this replaced
+never tripped it. **The defect was latent for every text field, toggle and stepper in the
+settings window**; the picker just made it fire.
+
+Fixed in two places, because two different mutations were in play:
+
+- `configChanged()` now defers `evaluate()` one runloop turn (`scheduleEvaluate()`, coalesced
+  with a pending flag). This covers every control that writes `config` — and incidentally
+  fixes the "full synchronous CoreAudio enumeration on every keystroke" noted under
+  2026-07-27, since a burst of edits now collapses into one evaluation.
+- The mode binding hops before calling `followSchedule()`/`startNow()`/`stopNow()`, since
+  those also write `standDown` directly, before any `config` mutation.
+
+**Worth keeping in view:** `Task { @MainActor in }` here is a *correctness* requirement, not
+style. Anything that mutates controller state from a `Binding` setter needs the same hop.
+
+**Verified.** `swift test` (45 tests) and `xcodebuild build` clean on macOS 26 / Swift 6.3.3;
+settings window and popover both driven by hand, and the warning is gone after the fix.
+
+Note for whoever automates this later: the popover **cannot be driven from a script** the
+obvious way. Three attempts via System Events (`click` and `AXPress` on the status item)
+reported success and opened nothing — `NSStatusItem` + `NSPopover` wants a real mouse event.
+A human clicked it.
+
+**Still open, separate from all of the above:** the **channel count** reported for the
+built-in microphone grows across repeated start/stop cycles (a 1-channel mic showing 3). Not
+the *device* count — a MacBook with virtual audio drivers installed legitimately enumerates
+several input devices, so `5 input device(s)` in the log is expected and not a symptom.
+Suspects, in order: `AudioCapture` setting `kAudioOutputUnitProperty_CurrentDevice` on the
+shared AUHAL (which binds both input and output scopes — see 2026-07-27), and
+`DeviceMonitor.stopMonitoring()` passing a *different* block to
+`AudioObjectRemovePropertyListenerBlock` than was added, so the listener is never actually
+removed and stale registrations accumulate. That second one is listed under 2026-07-27 as
+"currently harmless — nothing calls it"; a channel count that only grows *after cycling* is
+reason to re-check that assumption rather than trust it.
+
+---
+
 ## 2026-07-30 — the feeder now notices when it stops publishing (#97)
 
 **Symptom.** The app could stop publishing and never find out. The menu bar kept saying
@@ -241,7 +444,9 @@ home is a real signal.
    `com.apple.security.network.server` must be present.
 4. Launch it, grant the microphone prompt, pick the board and channel.
 5. With `log stream --predicate 'subsystem == "org.kenarnold.audio-feeder"' --style compact`
-   running, hit **Start now** and watch for, in order: `starting pipeline`, an input format
+   running, hit **Start now** — it holds the feeder on for up to four hours and then expires by
+   itself, so there is nothing to switch back afterwards (**Follow schedule** ends it sooner).
+   Watch for, in order: `starting pipeline`, an input format
    with a plausible sample rate and channel count, `token OK`, `room connected`,
    `publishing as organizer-host`.
 6. Join the session in a browser and confirm you can hear the board.

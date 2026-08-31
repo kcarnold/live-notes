@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { StatusView } from './StatusView';
+import { StatusView, type SessionControl } from './StatusView';
 
 describe('StatusView', () => {
   it('renders a working export link for the session', () => {
@@ -137,5 +137,103 @@ describe('StatusView write key', () => {
     await user.click(screen.getByRole('button', { name: 'Clear' }));
 
     expect(onWriteKeyChange).toHaveBeenCalledWith(null);
+  });
+});
+
+describe('current session (#111)', () => {
+  const session = {
+    docId: 'doc-2026-08-09',
+    source: 'date' as const,
+    since: null,
+    setBy: null,
+    expiresAt: null,
+  };
+
+  /** A whole session control, so each test only names the part it is about. */
+  const control = (overrides: Partial<SessionControl> = {}): SessionControl => ({
+    session,
+    writers: [],
+    error: null,
+    busy: false,
+    onPin: () => {},
+    onClearPin: () => {},
+    ...overrides,
+  });
+
+  it('is hidden when the container has no answer yet', () => {
+    render(<StatusView docId="doc-2026-08-09" statusEntries={{}} />);
+    expect(screen.queryByText('Current session')).not.toBeInTheDocument();
+  });
+
+  it('names the doc everything is on, and where that came from', () => {
+    render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        sessionControl={control({
+          session: { ...session, source: 'proposal', setBy: 'proclaim-service' },
+        })}
+      />,
+    );
+    // Twice: the page header names the doc this browser is on, and the section names
+    // the doc the server says is current. Them agreeing is the normal case.
+    expect(screen.getAllByText('doc-2026-08-09')).toHaveLength(2);
+    expect(screen.getByText('Proposed by the presentation service')).toBeInTheDocument();
+    expect(screen.getByText(/proclaim-service/)).toBeInTheDocument();
+  });
+
+  it('pins the doc an operator types', async () => {
+    const onPin = vi.fn();
+    render(
+      <StatusView docId="doc-2026-08-09" statusEntries={{}} sessionControl={control({ onPin })} />,
+    );
+    await userEvent.type(screen.getByLabelText('doc-YYYY-MM-DD'), 'doc-2026-08-16');
+    await userEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    expect(onPin).toHaveBeenCalledWith('doc-2026-08-16');
+  });
+
+  it('offers to clear the pin only when there is one', () => {
+    const { rerender } = render(
+      <StatusView docId="doc-2026-08-09" statusEntries={{}} sessionControl={control()} />,
+    );
+    expect(screen.queryByRole('button', { name: /clear pin/i })).not.toBeInTheDocument();
+    rerender(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        sessionControl={control({
+          session: { ...session, source: 'pin', setBy: 'status-page' },
+        })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /clear pin/i })).toBeInTheDocument();
+  });
+
+  it('flags a writer on a different doc — the #111 symptom, made visible', () => {
+    render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        sessionControl={control({
+          writers: [
+            { writer: 'proclaim', docId: 'doc-2026-08-02', at: new Date().toISOString() },
+            { writer: 'booth', docId: 'doc-2026-08-09', at: new Date().toISOString() },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText('writing to a different session')).toBeInTheDocument();
+    expect(screen.getByText('proclaim')).toBeInTheDocument();
+  });
+
+  it('reports why a pin change failed instead of silently not changing', () => {
+    render(
+      <StatusView
+        docId="doc-2026-08-09"
+        statusEntries={{}}
+        sessionControl={control({ error: 'Unauthorized' })}
+      />,
+    );
+    expect(screen.getByText(/Could not change the pin: Unauthorized/)).toBeInTheDocument();
   });
 });

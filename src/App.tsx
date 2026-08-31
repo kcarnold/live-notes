@@ -13,10 +13,10 @@ import { FontSizeControls } from "./FontSizeControls";
 import { useStrings, resolveLocale, LANGUAGE_BCP47 } from "./useLocale";
 import {
   LISTEN_LANGUAGE_CODES,
-  LISTEN_FAVORITES,
-  LISTEN_ORIGINAL_CODE,
-  DEFAULT_LISTEN_CODE,
+  listenFavorites,
+  defaultListenCode,
 } from "./listenLanguages";
+import { useSourceLanguage } from "./useSourceLanguage";
 import { LayoutDiagram } from "./LayoutDiagram";
 import type { ClientToken } from "@y-sweet/sdk";
 import { SourceTextTranslationManager } from "./SourceTextTranslationManager";
@@ -27,6 +27,7 @@ import { SlideReviewContainer } from "./SlideReviewContainer";
 import { SlideTranslationViewerContainer } from "./SlideTranslationViewer";
 import { StatusViewContainer } from "./StatusView";
 import { getDocId } from "./getDocId";
+import { SessionGate } from "./SessionGate";
 import { apiFetch, promptForWriteKeyOnce } from "./writeKey";
 
 // Lazy-loaded so the heavy LiveKit client SDK is only fetched when a live-audio
@@ -90,6 +91,7 @@ const availableLayouts = [
 function HomePage() {
   const s = useStrings();
   const locale = resolveLocale();
+  const sourceLanguage = useSourceLanguage();
   const [selectedLang, setSelectedLang] = useState<string>(languages[0]);
 
   const langDisplayNames = new Intl.DisplayNames([locale], { type: 'language' });
@@ -100,7 +102,7 @@ function HomePage() {
   const listenCode =
     LISTEN_LANGUAGE_CODES.includes(LANGUAGE_BCP47[selectedLang])
       ? LANGUAGE_BCP47[selectedLang]
-      : DEFAULT_LISTEN_CODE;
+      : defaultListenCode(sourceLanguage);
 
   // Substitute the selected language into a layout component's bare name.
   const applyLanguage = (component: string): string => {
@@ -181,6 +183,10 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
   (window as any).ydoc = ydoc; // Expose YDoc on window for debugging
   const s = useStrings();
   const locale = resolveLocale();
+  // What the speaker is speaking. The listen picker's "Original" entry is this
+  // language, not a constant, so a session spoken in Spanish offers "Original /
+  // Spanish" and lists English among the translations like any other target.
+  const sourceLanguage = useSourceLanguage();
 
   const onLanguageChange = (prefix: string) => (newLang: string) => {
     onReplace(`${prefix}-${newLang}`);
@@ -203,10 +209,12 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
   );
 
   // The listen picker offers the full Gemini-supported language set (keyed by
-  // BCP-47 code), with "Original / English" and favorites pinned on top. Names are
-  // localized via Intl.DisplayNames; the long list is sorted by localized name.
+  // BCP-47 code), with "Original" and favorites pinned on top. Names are localized
+  // via Intl.DisplayNames; the long list is sorted by localized name. The spoken
+  // language is filtered out of both groups — it is the "Original" entry.
+  const favoriteListenLangs = listenFavorites(sourceLanguage);
   const sortedListenLangs = LISTEN_LANGUAGE_CODES
-    .filter((c) => c !== LISTEN_ORIGINAL_CODE && !LISTEN_FAVORITES.includes(c))
+    .filter((c) => c !== sourceLanguage && !favoriteListenLangs.includes(c))
     .sort((a, b) =>
       (langDisplayNames.of(a) ?? a).localeCompare(langDisplayNames.of(b) ?? b, locale)
     );
@@ -217,9 +225,11 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
       value={language}
       onChange={(e) => onLanguageChange('listen')(e.target.value)}
     >
-      <option value={LISTEN_ORIGINAL_CODE}>{s.listenOriginal}</option>
+      <option value={sourceLanguage}>
+        {`${s.listenOriginal} / ${langDisplayNames.of(sourceLanguage) ?? sourceLanguage}`}
+      </option>
       <optgroup label={s.favorites}>
-        {LISTEN_FAVORITES.map((c) => (
+        {favoriteListenLangs.map((c) => (
           <option key={c} value={c}>{langDisplayNames.of(c) ?? c}</option>
         ))}
       </optgroup>
@@ -295,9 +305,9 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
   if (componentStr.startsWith('listen-')) {
     const language = componentStr.substring('listen-'.length);
     const validLanguage =
-      language === LISTEN_ORIGINAL_CODE || LISTEN_LANGUAGE_CODES.includes(language)
+      language === sourceLanguage || LISTEN_LANGUAGE_CODES.includes(language)
         ? language
-        : DEFAULT_LISTEN_CODE;
+        : defaultListenCode(sourceLanguage);
     return (
       <div className={cardClass + " flex-1/2 bg-gray-100/80 dark:bg-gray-900/60 text-gray-900 dark:text-gray-100 overflow-hidden"}>
         <div className="flex items-center">
@@ -447,12 +457,16 @@ function EditorDeniedBanner() {
   );
 }
 
-const App = () => {
+/**
+ * Everything below the session gate. Split out so `getDocId()` — and every pane that
+ * calls it — runs only after the server has told us which session we are in (#111).
+ */
+const SessionApp = () => {
   // We're an editor only if location hash includes #editor
   const isEditor = window.location.hash.includes("editor");
 
-  // Default doc id is `doc-${today}`, overridable via ?doc=. Shared with the
-  // live-audio panes via getDocId() so the LiveKit room matches the session.
+  // The server's answer, or the ?doc= override. Shared with the live-audio panes via
+  // getDocId() so the LiveKit room matches the session.
   const docId = getDocId();
 
   const [, setIsEditor] = useAtom(isEditorAtom);
@@ -523,5 +537,11 @@ const App = () => {
     </YDocProvider>
   );
 };
+
+const App = () => (
+  <SessionGate>
+    <SessionApp />
+  </SessionGate>
+);
 
 export default App;

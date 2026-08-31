@@ -11,14 +11,14 @@
  * Each conversation is stored as a single plain-object value; updates replace the whole
  * snapshot (the server is the sole writer, so there's no need for nested Y types). This
  * mirrors the server-side Yjs writer pattern already used for live transcripts
- * (live-audio/transcript-writer.ts).
+ * (live-audio/transcript-log.ts), and opens its connection the same way (serverDoc.ts).
  */
 import { createHash } from 'crypto';
 import * as Y from 'yjs';
-import { createYjsProvider, type YSweetProvider } from '@y-sweet/client';
 import type { DocumentManager } from '@y-sweet/sdk';
 import type { Content } from '@google/genai';
 import type { TokenUsage } from './nlp.ts';
+import { connectServerDoc, type ServerDoc } from './serverDoc.ts';
 
 export type SlideConversationStatus = 'running' | 'idle' | 'error';
 
@@ -114,13 +114,6 @@ export function setStatusIn(
 
 // --- Connection manager ---------------------------------------------------------------
 
-interface DocEntry {
-  doc: Y.Doc;
-  provider: YSweetProvider;
-  /** Resolves once the initial Y-Sweet sync completes, so reads don't clobber the doc. */
-  synced: Promise<void>;
-}
-
 /**
  * Manages one Y-Sweet provider per doc id and hands out the doc's `slideConversations`
  * Y.Map, already synced. Providers are opened lazily on first use and kept for the process
@@ -128,7 +121,7 @@ interface DocEntry {
  */
 export class SlideConversationStore {
   private documentManager: DocumentManager;
-  private docs = new Map<string, DocEntry>();
+  private docs = new Map<string, ServerDoc>();
 
   constructor(documentManager: DocumentManager) {
     this.documentManager = documentManager;
@@ -141,32 +134,16 @@ export class SlideConversationStore {
   async getConversationsMap(docId: string): Promise<ConversationMap> {
     let entry = this.docs.get(docId);
     if (!entry) {
-      const doc = new Y.Doc();
-      const provider = createYjsProvider(
-        doc,
-        docId,
-        () => this.documentManager.getClientToken(docId),
-        { connect: true },
-      );
-      // `sync` fires when the initial sync completes (and on reconnects). Resolve at once if
-      // we somehow already synced before attaching the listener.
-      const synced = new Promise<void>((resolve) => {
-        if (provider.synced) resolve();
-        else provider.on('sync', () => resolve());
-      });
-      entry = { doc, provider, synced };
+      entry = connectServerDoc(docId, this.documentManager);
       this.docs.set(docId, entry);
     }
     await entry.synced;
     return entry.doc.getMap<SlideConversation>(CONVERSATIONS_MAP);
   }
 
-  /** Tear down all providers (shutdown / tests). */
+  /** Tear down all connections (shutdown / tests). */
   close(): void {
-    for (const { doc, provider } of this.docs.values()) {
-      provider.destroy();
-      doc.destroy();
-    }
+    for (const entry of this.docs.values()) entry.close();
     this.docs.clear();
   }
 }

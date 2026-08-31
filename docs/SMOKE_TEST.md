@@ -30,11 +30,26 @@ an incident happens that this list would not have caught, add a line.
 
 ## 3. Proclaim sync
 
-- [ ] Proclaim service running (LaunchAgent) and pointed at today's doc.
+- [ ] Proclaim service running (LaunchAgent), and its log line after a show goes on air
+      names the doc the *server* gave it (not one it computed) — see
+      [CURRENT_SESSION.md](CURRENT_SESSION.md).
 - [ ] Advance a slide in Proclaim; current-slide view updates on both devices within ~2 s.
 - [ ] Slide translations show for the on-air item; review screen loads its conversation.
 - [ ] `/status` shows the Proclaim service's SHA/branch, and no "update pending" flag
       (if it flags one, restart the service — restarting is what applies an update).
+
+## 3b. Current session (#111)
+
+- [ ] `/status` "Current session" names the doc this browser is on, and says where it came
+      from (pinned / proposed / today's date).
+- [ ] "Who is writing where" lists the Proclaim service and the editor browsers, all green
+      (same doc). Any amber row is a component writing somewhere else — fix that first.
+- [ ] Pin a scratch doc from `/status`, reload a viewer: it lands on the pinned doc. Clear
+      the pin, reload: it goes back. The Proclaim service follows within ~a minute without
+      going off air — watch its log say so. **Still: rehearse this before the service.**
+- [ ] `?doc=doc-scratch` still overrides everything, pin included.
+- [ ] Server boot log shows the intended `SESSION_TIMEZONE` — a wrong zone is a wrong doc
+      for everyone, and an evening service is when it shows up.
 
 ## 4. Live audio translation
 
@@ -74,8 +89,18 @@ an incident happens that this list would not have caught, add a line.
       fails, so it can't be provoked by running longer. `scenario` also accepts
       `signalReconnect`, `nodeFailure`, `migration`, `serverLeave`.
 
-- [ ] With **no listener yet**, the English transcript still flows — the default translator
+- [ ] With **no listener yet**, the source transcript still flows — the primary translator
       runs whenever the broadcaster is present, whatever the cost path is set to.
+
+Non-English speaker (only when the service isn't in English):
+
+- [ ] In the broadcast pane, set **Spoken language** before going live. The transcript pane
+      beside it fills with *what the speaker actually said*, in that language — the fastest
+      way to catch a wrong declaration, since a mislabelled transcript still scrolls happily.
+- [ ] In a listen pane, the picker's first entry reads **Original / <that language>**, and
+      **English appears in the language list as an ordinary target**. Choosing English gets a
+      `translator-en` bot and English audio; choosing the spoken language gets the speaker's
+      own voice and no bot (the broadcast dashboard shows no `translator-<spoken>` bridge).
 
 Cost path (only when `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level — off by default; the
 startup log line reports which):

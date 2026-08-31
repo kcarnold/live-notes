@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as Y from 'yjs';
+import { writeSourceLanguage } from './src/liveAudioConfig.ts';
 import {
   buildSessionExport,
   renderSessionHtml,
@@ -8,7 +9,7 @@ import {
 import { slideTranslationKey, type SlideTranslationEntry } from './src/slideTranslation.ts';
 
 /**
- * Append a transcript segment the way live-audio/transcript-writer.ts does: stored
+ * Append a transcript segment the way live-audio/transcript-log.ts does: stored
  * timings are observations only (when the utterance started and last grew), and the
  * silence between utterances is derived from them at read time.
  */
@@ -165,6 +166,23 @@ describe('buildSessionExport', () => {
     expect(html).toContain('Live speech translation');
     expect(html).toContain('English (source)');
     expect(html).toContain("L'Éternel est mon berger.");
+  });
+
+  it('marks the language the service was spoken in as the source, not English', () => {
+    // An export is read long after the room emptied, so the doc is the only place that
+    // can still say which transcript is the speaker's own words. A visiting Spanish
+    // preacher's talk must not come back labelled as a translation of English.
+    const doc = new Y.Doc();
+    transcriptSegment(doc, 'es', 'El Señor es mi pastor.', { startedAt: 1000 });
+    transcriptSegment(doc, 'en', 'The Lord is my shepherd.', { startedAt: 1000 });
+    writeSourceLanguage(doc, 'es');
+
+    const data = buildSessionExport(doc, 'doc-2026-07-13');
+
+    expect(data.liveTranscripts.map((t) => t.code)).toEqual(['es', 'en']);
+    expect(data.liveTranscripts[0].isSource).toBe(true);
+    expect(data.liveTranscripts[1].isSource).toBe(false);
+    expect(renderSessionHtml(data)).toContain('Spanish (source)');
   });
 
   it('marks a long silence between utterances, and leaves short gaps alone', () => {

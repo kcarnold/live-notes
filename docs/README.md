@@ -12,6 +12,10 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 
 - [SMOKE_TEST.md](SMOKE_TEST.md) — the pre-service manual smoke-test checklist, and how PRs
   declare which sections they touch.
+- [CURRENT_SESSION.md](CURRENT_SESSION.md) — which doc everything reads and writes, and who
+  decides: the server-owned pin/proposal/date precedence, the operator control on `/status`,
+  and why `SESSION_TIMEZONE` has to be the church's zone. **Read before changing anything
+  that resolves a doc id.**
 - [WRITE_KEYS.md](WRITE_KEYS.md) — shared-key write authorization: what needs a key, the
   observe→enforce rollout, how each device is given one, and how to rotate.
 - [OBSERVABILITY.md](OBSERVABILITY.md) — what to observe about the live-audio backend

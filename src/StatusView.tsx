@@ -1,9 +1,11 @@
-import { useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useMap, useYDoc } from '@y-sweet/react';
 import { useStrings } from './useLocale';
 import { getDocId } from './getDocId';
 import { TranscriptHealth } from './TranscriptHealth';
 import { getWriteKey, maskWriteKey, setWriteKey } from './writeKey';
+import { clearSessionPin, fetchSessionWriters, pinSession, type WriterSighting } from './sessionApi';
+import type { CurrentSession } from './sessionCurrent';
 
 /**
  * Session status / admin page.
@@ -132,6 +134,144 @@ function WriteKeySection({
   );
 }
 
+/**
+ * Everything the current-session section needs, as one value.
+ *
+ * One object rather than six loose props because the six are all-or-nothing: a `session`
+ * without an `onPin` renders a control that silently does nothing, which on this page —
+ * the one someone opens mid-service when a doc is wrong — is the worst possible failure.
+ * Making it a single optional prop lets the type say so.
+ */
+export interface SessionControl {
+  session: CurrentSession;
+  /** Writers recently seen, so a doc-id disagreement is visible rather than inferred. */
+  writers: WriterSighting[];
+  /** Why the last pin change failed, if it did. */
+  error: string | null;
+  /** True while a pin change is in flight. */
+  busy: boolean;
+  onPin: (docId: string) => void;
+  onClearPin: () => void;
+}
+
+/**
+ * The operator control from #111: which doc everything is writing to, and the pin that
+ * overrides it.
+ *
+ * This is the piece that would have let last Sunday be fixed from a pew — the whole point
+ * of moving the decision to the server. It sits next to the writer list deliberately:
+ * "the service is down" and "the service is writing to last week's doc" produced the
+ * identical empty pane, and only one of them is fixable in the next thirty seconds.
+ */
+function CurrentSessionSection({
+  session,
+  writers,
+  error,
+  busy,
+  onPin,
+  onClearPin,
+}: SessionControl) {
+  const s = useStrings();
+  const [typed, setTyped] = useState('');
+  const pending = typed.trim();
+
+  const sourceLabel = {
+    pin: s.statusSessionSourcePin,
+    proposal: s.statusSessionSourceProposal,
+    date: s.statusSessionSourceDate,
+  }[session.source];
+
+  return (
+    <section className={SECTION_CLASS}>
+      <h2 className={SECTION_TITLE_CLASS}>{s.statusSessionTitle}</h2>
+      <p className={PLACEHOLDER_CLASS}>{s.statusSessionDescription}</p>
+
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+        <code className="font-semibold">{session.docId}</code>
+        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700">
+          {sourceLabel}
+        </span>
+        {session.setBy && (
+          <span className={PLACEHOLDER_CLASS}>
+            {s.statusSessionSetBy} {session.setBy}
+          </span>
+        )}
+        {session.expiresAt && (
+          <span className={PLACEHOLDER_CLASS}>
+            · {s.statusSessionLapses} {new Date(session.expiresAt).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!pending) return;
+          onPin(pending);
+          setTyped('');
+        }}
+      >
+        <input
+          type="text"
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          placeholder={s.statusSessionPlaceholder}
+          aria-label={s.statusSessionPlaceholder}
+          autoComplete="off"
+          spellCheck={false}
+          className="flex-1 min-w-40 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm font-mono"
+        />
+        <button
+          type="submit"
+          disabled={!pending || busy}
+          className="px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40 disabled:hover:bg-blue-500 text-sm"
+        >
+          {s.statusSessionPin}
+        </button>
+        {session.source === 'pin' && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClearPin}
+            className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-40"
+          >
+            {s.statusSessionClearPin}
+          </button>
+        )}
+      </form>
+      {error && (
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {s.statusSessionFailed}: {error}
+        </p>
+      )}
+
+      <h3 className="text-sm font-semibold mt-1">{s.statusWritersTitle}</h3>
+      {writers.length === 0 ? (
+        <p className={PLACEHOLDER_CLASS}>{s.statusWritersEmpty}</p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-sm">
+          {writers.map((writer) => {
+            const elsewhere = writer.docId !== session.docId;
+            return (
+              <li key={`${writer.writer} ${writer.docId}`} className="flex flex-wrap items-baseline gap-2">
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${elsewhere ? 'bg-amber-500' : 'bg-green-500'}`} />
+                <span>{writer.writer}</span>
+                <code className="text-xs text-gray-500 dark:text-gray-400">{writer.docId}</code>
+                {elsewhere && (
+                  <span className="text-xs text-amber-700 dark:text-amber-400">
+                    {s.statusWritersElsewhere}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export interface StatusViewProps {
   /** The session's doc id (drives the export link). */
   docId: string;
@@ -152,6 +292,11 @@ export interface StatusViewProps {
    * section entirely, which is what keeps the section out of tests that don't care.
    */
   onWriteKeyChange?: (key: string | null) => void;
+  /**
+   * The current session and the pin control over it (#111). Omitting it hides the
+   * section, on the same principle as the write key above.
+   */
+  sessionControl?: SessionControl;
 }
 
 export function StatusView({
@@ -160,6 +305,7 @@ export function StatusView({
   liveTranscripts,
   writeKey = null,
   onWriteKeyChange,
+  sessionControl,
 }: StatusViewProps) {
   const s = useStrings();
   const exportHref = `/api/session/export?doc=${encodeURIComponent(docId)}`;
@@ -177,6 +323,10 @@ export function StatusView({
           <h1 className="text-2xl font-bold">{s.statusTitle}</h1>
           <code className="text-xs text-gray-500 dark:text-gray-400">{docId}</code>
         </header>
+
+        {/* Which session everything is writing to (#111). First, because every other
+            tile on this page is meaningless if the answer is the wrong doc. */}
+        {sessionControl && <CurrentSessionSection {...sessionControl} />}
 
         {/* Health — placeholder tiles until #72 wires component heartbeats. */}
         <section className={sectionClass}>
@@ -268,6 +418,69 @@ export function StatusView({
   );
 }
 
+/** How often the writer list refreshes. Fast enough to watch a service come up. */
+const WRITERS_POLL_MS = 10_000;
+
+/**
+ * The current session and who is writing where, wired to the pin endpoints.
+ *
+ * Polled rather than pushed: it lives on the server, not in the doc — deliberately, since
+ * a doc-scoped view of "which doc is current" could only ever agree with itself. Undefined
+ * until the first answer arrives, which is what keeps the section off the page rather than
+ * showing an empty one.
+ */
+function useSessionControl(): SessionControl | undefined {
+  const [session, setSession] = useState<CurrentSession | null>(null);
+  const [writers, setWriters] = useState<WriterSighting[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Bumped after a pin change so the poll re-runs at once instead of on its next tick.
+  // Restarting the effect also retires any read that was already in flight, which would
+  // otherwise answer with the pre-pin session and undo the change on screen.
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const { current, writers: seen } = await fetchSessionWriters();
+        if (!active) return;
+        setSession(current);
+        setWriters(seen);
+      } catch (err) {
+        console.warn('[status] could not read the current session', err);
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), WRITERS_POLL_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [refreshToken]);
+
+  /** Run a pin change, then re-read rather than trusting our own optimistic guess. */
+  const change = useCallback(async (action: () => Promise<CurrentSession>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setSession(await action());
+      setRefreshToken((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const onPin = useCallback((docId: string) => void change(() => pinSession(docId)), [change]);
+  const onClearPin = useCallback(() => void change(() => clearSessionPin()), [change]);
+
+  if (!session) return undefined;
+  return { session, writers, error, busy, onPin, onClearPin };
+}
+
 /** Yjs connector: reads the `status` Y.Map and the session doc id. */
 export function StatusViewContainer() {
   useYDoc(); // Ensure this renders within the session's YDocProvider.
@@ -278,6 +491,9 @@ export function StatusViewContainer() {
   });
   // The stored key isn't reactive, so mirror it into state to re-render on a change.
   const [writeKey, setWriteKeyState] = useState<string | null>(() => getWriteKey());
+
+  const sessionControl = useSessionControl();
+
   return (
     <StatusView
       docId={getDocId()}
@@ -288,6 +504,7 @@ export function StatusViewContainer() {
         setWriteKey(key);
         setWriteKeyState(key);
       }}
+      sessionControl={sessionControl}
     />
   );
 }

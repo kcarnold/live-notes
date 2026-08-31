@@ -1,6 +1,6 @@
 // The transcript's rendering half: given segments carrying gap timings, does a long
 // silence actually become a visible break in the right place? The measuring half
-// (which gaps exist at all) is covered in live-audio/transcript-writer.test.ts, and
+// (which gaps exist at all) is covered in live-audio/transcript-log.test.ts, and
 // the threshold itself in transcriptKeys.test.ts.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -129,5 +129,34 @@ describe('LiveTranscript font size', () => {
       </Provider>
     );
     expect(screen.getByText('Good morning.').parentElement?.style.fontSize).toBe('30px');
+  });
+});
+
+// A viewer opening an existing session mounts before the Yjs doc syncs, so the
+// transcript arrives one render *after* the component. Whatever is already there
+// when it lands is history, not new text.
+describe('LiveTranscript new-text highlight', () => {
+  const highlighted = () =>
+    Array.from(document.querySelectorAll('p.transcript-new')).map((el) => el.textContent);
+
+  it('does not highlight a transcript that syncs in after mount', () => {
+    const { rerender } = render(<LiveTranscript langCode="en" />);
+    expect(highlighted()).toEqual([]);
+
+    segments.current = [{ text: 'One.' }, { text: 'Two.' }, { text: 'Three.' }];
+    rerender(<LiveTranscript langCode="en" />);
+
+    expect(screen.getByText('Three.')).toBeTruthy();
+    expect(highlighted()).toEqual([]);
+  });
+
+  it('highlights utterances appended after the transcript has landed', () => {
+    segments.current = [{ text: 'One.' }];
+    const { rerender } = render(<LiveTranscript langCode="en" />);
+
+    segments.current = [{ text: 'One.' }, { text: 'Two.' }];
+    rerender(<LiveTranscript langCode="en" />);
+
+    expect(highlighted()).toEqual(['Two.']);
   });
 });

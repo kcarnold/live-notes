@@ -43,13 +43,13 @@ uv sync
 
 ```bash
 # Make sure Proclaim is running
-# Start the service. By default it targets doc-YYYY-MM-DD using the on-air show's
-# scheduled date (Proclaim's DateGiven), falling back to today's date if the show
-# has no date. This means you can pre-stage a future-dated show: bring it on air in
-# Proclaim and the service syncs to that date's doc automatically.
+# Start the service. It does not choose a doc itself: when a show goes on air it tells
+# the server the show's scheduled date (Proclaim's DateGiven) and uses whatever doc the
+# server names in reply. Pre-staging still works — a future-dated show is accepted — but
+# a show dated in the *past* no longer drags the service backwards (issue #111).
 uv run proclaim_service.py
 
-# Or specify a custom doc ID (disables date-based selection entirely)
+# Or specify a custom doc ID (an override: the server is not consulted at all)
 uv run proclaim_service.py my-custom-doc
 ```
 
@@ -84,11 +84,14 @@ reconnects:
 - **Active health checks.** The service pings the websocket each poll so a silently
   dropped connection is detected promptly and triggers a reconnect (the underlying
   library otherwise swallows the disconnect).
-- **Show-dated documents.** When using the default date-based doc, the service anchors
-  the doc to the on-air show's scheduled date (Proclaim's `DateGiven`), so a show
-  prepared the night before still syncs to its own date's doc. When a show has no usable
-  date it falls back to today's date and rolls over at midnight (with a fresh doc) without
-  needing an external restart.
+- **The server names the doc.** The service reports the on-air show's scheduled date
+  (Proclaim's `DateGiven`) to `POST /api/session/propose` and connects to the doc it is
+  given back, once per session, immediately before connecting. A future-dated show is
+  accepted, so pre-staging the night before still works; a show dated *before today* is
+  refused and the service is told to use today's doc, which is the failure in
+  [#111](https://github.com/kcarnold/live-notes/issues/111). An operator pin set from
+  `/status` outranks anything the service can see, and the service logs whenever the
+  answer differs from what it proposed. See [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
 
 ### 3. View Current Slide in Browser
 

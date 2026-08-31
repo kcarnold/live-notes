@@ -10,10 +10,10 @@ derived data) drives the testing/replay strategy.
  sound booth / stage                      server (docker compose)              external SaaS
 ┌────────────────────┐                  ┌──────────────────────────┐
 │ Broadcaster        │── mic (WebRTC) ─▶│ LiveKit room             │
-│ (BroadcastControl, │                  │   ▲            │         │
-│  future macOS      │                  │   │ translated │ source  │
-│  ingest service)   │                  │   │ audio      ▼ audio   │
-└────────────────────┘                  │ translation-bridge ──────┼──▶ Gemini Live
+│ (BroadcastControl  │                  │   ▲            │         │
+│  in a browser, OR  │                  │   │ translated │ source  │
+│  the macOS Audio   │                  │   │ audio      ▼ audio   │
+│  Feeder app)       │                  │ translation-bridge ──────┼──▶ Gemini Live
 ┌────────────────────┐                  │  (per language, spawned  │    (translate speech)
 │ Proclaim Mac       │                  │   on listener demand by  │
 │ proclaim_service.py│─┐                │   translation-session-   │
@@ -40,7 +40,7 @@ derived data) drives the testing/replay strategy.
   winds down one bridge per (session, language) to match (no refcounts or beacons). Each
   bridge subscribes to the organizer's LiveKit track (16 kHz in), streams to Gemini Live,
   publishes translated audio (24 kHz out), and writes the transcript into Yjs via
-  `transcript-writer`. When a Gemini session is swapped (goaway/reconnect), input frames are
+  `transcript-log`. When a Gemini session is swapped (goaway/reconnect), input frames are
   buffered across the gap and flushed into the fresh session, so a swap costs a little
   latency rather than dropped words (always on). A **cost path** — off unless
   `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` names a level (−30 is a guess) — additionally
@@ -49,6 +49,18 @@ derived data) drives the testing/replay strategy.
   That threshold is the feature's only switch: unset, it is −Infinity, every frame reads as
   voice, and nothing can suspend. It affects only what a bridge does while nobody speaks —
   *which* bridges exist is decided independently (see the supervisor below).
+- **macOS Audio Feeder** (`macos-audio-feeder/`): a native menu-bar app (Swift/SwiftUI) that
+  takes one channel off the sound board and publishes it to the LiveKit room on a schedule, so
+  a service doesn't depend on someone opening the browser broadcast page. It joins as the
+  *same* identity that page uses (`organizer-host`), and LiveKit permits one participant per
+  identity, so **the app and the browser page are mutually exclusive** — whichever connects
+  last evicts the other (handled deliberately: `DisconnectPolicy`). Split into
+  `AudioFeederCore` (pure logic — schedule, config, levels, channel extraction, token
+  contract; `swift test`, no Xcode) and `AudioFeederApp` (CoreAudio capture, LiveKit publish,
+  UI; built by an XcodeGen-generated project). Publishing spends the room's microphone, so it
+  carries a write key like everything else. Its own `README.md` covers operation and
+  `NOTEBOOK.md` records why it looks the way it does — read the notebook before changing
+  packaging, entitlements, or the connect/retry logic.
 - **proclaim_service.py**: polls Proclaim's local HTTP API (~1 s) and reads its SQLite DB,
   pushes presentations + slide status into Yjs. Internally decoupled into a **slide feed**
   (`ProclaimFeed`, the source) and **consumers** (a Yjs publisher + a translation worker),
@@ -69,7 +81,7 @@ doc is *derived* data that the system under test will regenerate.
 |---|---|---|
 | Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
 | `proclaim_service.py` (slide feed → Yjs publisher + translator) | `proclaimServiceOrder`, `proclaimPresentations`, `proclaimStatus`, `slideTranslations`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
-| translation-bridge / transcript-writer | `liveTranscriptSegments-{code}` (one utterance per entry, stamped `startedAt` + `endedAt`; the silence between utterances is derived from those, not stored) | Organizer audio track + Gemini Live responses — including *when* each delta arrived, which only the writer sees |
+| translation-bridge / transcript-log | `liveTranscriptSegments-{code}` (one utterance per entry, stamped `startedAt` + `endedAt`; the silence between utterances is derived from those, not stored) | Organizer audio track + Gemini Live responses — including *when* each delta arrived, which only the writer sees |
 | Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |
 
@@ -86,19 +98,37 @@ writer once each component announces its clientID (planned: via the status heart
 - **Bridges are presence-driven**: the supervisor (`translation-session-manager.ts`) derives
   the desired bridge set from who is in the LiveKit room — nothing runs without a broadcaster
   (a listener waiting for the talk costs nothing; bridges start the moment the organizer
-  joins), and with a broadcaster present the default/English-transcript bridge runs
+  joins), and with a broadcaster present the primary/transcript bridge runs
   unconditionally, plus each language named by a listener's `listen` attribute. So connecting
   clients *change* system behavior — preflight checks for a *translation* must include a
   synthetic listener, and "no French audio" is often just "nobody asked for French yet." The
-  English transcript is the exception and needs no listener: a talk is transcribed from the
+  source transcript is the exception and needs no listener: a talk is transcribed from the
   moment the broadcaster goes live, so the first listener to arrive gets history rather than
   a mid-sentence start. Because the loop reconciles (every ~10 s, plus pokes), bridges also
   *come back* by themselves after a server restart or a failed bridge, as long as demand
   persists. With the cost path enabled, a silent mic suspends the socket rather than tearing
   it down, so "nothing is translating" can also mean "nobody is speaking" — preflight then
   needs non-silent audio, not just a connection.
-- **Doc IDs are date-anchored** (`getDocId.ts`, and the Proclaim service anchors to the
-  show's scheduled date), so a service's state lives in one doc per date.
+- **The spoken language is per session, not a constant.** The broadcaster declares it when
+  they go live (`speaks` on their LiveKit token, plus `liveAudioConfig.sourceLanguage` in the
+  doc); everything downstream reads it rather than assuming English — the code the input
+  transcript is filed under, the listen picker's "Original" entry, and which language the
+  always-on bridge targets (English talk → the deployment default `fr`; anything else → `en`).
+  A broadcaster who declares nothing gets `LIVE_AUDIO_SOURCE_LANGUAGE`, default `en`, which is
+  what the macOS audio feeder and any pre-existing client land on. Whichever way it is
+  resolved, the supervisor mirrors the answer into `liveAudioConfig.sourceLanguage` on every
+  reconcile with a broadcaster present — presence routes the bridges, but the doc is the only
+  thing viewers and later exports can read. See
+  [src/liveAudioConfig.ts](../src/liveAudioConfig.ts).
+- **The current doc id is a server-owned fact, not a formula** — one doc per service, but
+  *which* one is decided in one place and read by everyone: `?doc=` override, else an
+  operator pin set from `/status`, else the Proclaim service's accepted proposal, else the
+  date in `SESSION_TIMEZONE`. Browsers fetch it before mounting anything (`src/getDocId.ts`,
+  `src/SessionGate.tsx`); the service proposes what is on air and connects to whatever it is
+  told (`session_client.py`). Nobody keeps a private copy of the date formula to fall back
+  on. This is issue #111 — three parties computing it independently and never comparing
+  answers — and it is worth reading [CURRENT_SESSION.md](CURRENT_SESSION.md) before touching
+  anything that resolves a doc id.
 - **Editor vs viewer** is enforced server-side via Y-Sweet token scope. The `#editor` request
   states an intent; whether it is honored depends on a shared per-device write key
   (`writeAuth.ts`, [WRITE_KEYS.md](WRITE_KEYS.md)) — as does taking the microphone, and the

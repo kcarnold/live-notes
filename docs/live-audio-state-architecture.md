@@ -45,14 +45,14 @@ flowchart LR
   subgraph Browser["Browser (per viewer)"]
     LV["ListenViewer<br/><i>state: wantLive, conn, audioOn, error</i>"]
     BC["BroadcastControl<br/><i>state: conn, error</i>"]
-    LT["LiveTranscript<br/>(stateless, reads Yjs)"]
+    LT["LiveTranscript<br/>(reads Yjs; no LiveKit dependency)"]
   end
 
   subgraph Server["Node server (singleton, in-memory)"]
     API["/api/livekit/* routes"]
     MGR["TranslationSessionManager<br/><i>state: translations map,<br/>subscriberCount, lastHealthyAt</i>"]
     BR["TranslationBridge × lang<br/><i>state: status, suspended, reconnecting,<br/>geminiWs, pendingWs, setupComplete,<br/>pendingFrames, pipedTracks</i>"]
-    TW["TranscriptWriter<br/>(per session)"]
+    TW["ServerDoc + TranscriptSegmentLog<br/>(one doc connection per session)"]
   end
 
   LK[("LiveKit room<br/><i>ground truth: who is present,<br/>what is published</i>")]
@@ -282,12 +282,12 @@ moment the session becomes healthy, so the recreation sticks.
 | 4 | Stall watchdog's reconcile isn't enough (SDK-internal desync where `setSubscribed(true)` is a no-op but no audio flows) | Watchdog re-fires forever, reconciling in place; no escalation to bridge recreation. The resilience doc names this next step; it isn't implemented. | 🔴 |
 | 5 | Broadcaster kicked/disconnected | No UI signal; speaker talks to nobody. | 🔴 |
 | 6 | Two broadcaster tabs (or reload race) | Fixed `organizer-host` identity → second join kicks first, silently (see #5). | 🟠 |
-| 7 | Sole listener refreshes page | Beacon tears the whole session down (bridge, Gemini session, TranscriptWriter) and the reload rebuilds it seconds later; unlucky ordering races teardown against re-create on the shared maps ([unsubscribe](../live-audio/translation-session-manager.ts#L354) awaits `stop()` while `ensureBridge` may be mid-flight). | 🟠 |
+| 7 | Sole listener refreshes page | Beacon tears the whole session down (bridge, Gemini session, doc connection) and the reload rebuilds it seconds later; unlucky ordering races teardown against re-create on the shared maps ([unsubscribe](../live-audio/translation-session-manager.ts#L354) awaits `stop()` while `ensureBridge` may be mid-flight). | 🟠 |
 | 8 | Suspend/stop races an in-flight `setupComplete` | Illegal state: open Gemini socket swapped in while `suspended`/`closed`; paid-for idle session, or a socket leak on a closed bridge. | 🟡 |
 | 9 | Transcript-only viewers, all audio listeners leave (gating off) | Reaper kills the session after 60s; transcript freezes with no indication. Deliberate ("read for free, opt in to hear") but indistinguishable from failure #1/#2 for the viewer. | 🟠 |
-| 10 | Long session, `TranscriptWriter.appendDelta` | `ytext.toString()` per delta ([transcript-writer.ts:61](../live-audio/transcript-writer.ts#L61)) is O(doc) — quadratic over a day-scoped doc that every language appends to ~1/s. | 🟡 |
+| 10 | Long session, `TranscriptSegmentLog.append` | `ytext.toString()` per delta ([transcript-log.ts:61](../live-audio/transcript-log.ts#L61)) is O(doc) — quadratic over a day-scoped doc that every language appends to ~1/s. | 🟡 |
 | 11 | 4h token TTL | A talk (or a broadcaster tab left open) past 4h cannot complete a LiveKit *full* reconnect — token invalid, and per #5 nobody is told. | 🟡 |
-| 12 | Yjs/Y-Sweet websocket drop in `TranscriptWriter` | Provider reconnect is assumed, never observed; writer has no health signal or telemetry at all. | 🟡 |
+| 12 | Yjs/Y-Sweet websocket drop in a session's `ServerDoc` | Provider reconnect is assumed, never observed; the connection has no health signal or telemetry at all. | 🟡 |
 | 13 | Listener opts in **before** the broadcast starts (case study above, observed 2026-07-19) | Health rule requires a broadcaster → guaranteed reap after 60s; translator joins then leaves; when the broadcast starts nothing recreates the bridge; listener shows a green dot over permanent silence. | 🔴 |
 
 Items 1–4 are all the same missing mechanism: **nothing whose job is to make the running
@@ -433,9 +433,9 @@ Ordered by (user-visible payoff ÷ diff size). Items 1–3 together close every 
    `BroadcastControl`; anything but `Connected` shows a red "not broadcasting" banner
    with a rejoin button. (~15 lines; fixes the worst *human* failure mode — a speaker
    nobody can hear.)
-7. **`TranscriptWriter` perf**: cache the last inserted character instead of
+7. **`TranscriptSegmentLog` perf**: cache the last inserted character instead of
    `ytext.toString().endsWith("\n")` per delta
-   ([transcript-writer.ts:61](../live-audio/transcript-writer.ts#L61)). (3 lines.)
+   ([transcript-log.ts:61](../live-audio/transcript-log.ts#L61)). (3 lines.)
 
 Hot fixes 1–3 are deliberately *the escalation ladder the resilience doc already
 promised* ("the next escalation is to tear down and recreate the bridge — which is

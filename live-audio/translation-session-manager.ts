@@ -13,15 +13,20 @@
  *
  * Usage:
  *   const manager = TranslationSessionManager.getInstance();
- *   manager.init({ documentManager, livekit });   // once, at server boot
+ *   manager.init({ docFactory, livekit });       // once, at server boot
  *   const bridge = await manager.getOrCreate(sessionId, targetLanguage, organizerIdentity);
  */
 
 import type { SimulateScenarioKind } from "@livekit/rtc-node";
-import type { DocumentManager } from "@y-sweet/sdk";
 import { RoomServiceClient } from "livekit-server-sdk";
 
-import { TranscriptWriter } from "./transcript-writer.ts";
+import {
+  DEFAULT_SOURCE_LANGUAGE,
+  normalizeSourceLanguage,
+  writeSourceLanguage,
+} from "../src/liveAudioConfig.ts";
+import type { ServerDoc } from "../serverDoc.ts";
+import { TranscriptSegmentLog } from "./transcript-log.ts";
 import { SILENCE_GATING_OFF_DBFS, TranslationBridge } from "./translation-bridge.ts";
 import type { BridgeHealth, BridgeStatus } from "./translation-bridge.ts";
 
@@ -70,6 +75,20 @@ export interface RoomDirectory {
 /** Participant attribute carrying a listener's requested translation language. */
 export const LISTEN_ATTRIBUTE = "listen";
 
+/**
+ * Participant attribute carrying the language the broadcaster is *speaking* (BCP-47).
+ *
+ * It rides on the organizer's token for the same reason `listen` rides on a listener's:
+ * the supervisor decides everything from one presence snapshot, so a fact it needs must
+ * be in that snapshot. The shared Yjs doc also records the spoken language (see
+ * src/liveAudioConfig.ts) — that copy is the durable one, read by viewers and by an
+ * export months later — but the supervisor can't wait on a doc sync to decide which
+ * bridges to run, and a stale read here would file a whole talk's transcript under the
+ * wrong language. Presence is authoritative for the live pipeline; the doc is
+ * authoritative for everything read afterwards; the broadcaster writes both.
+ */
+export const SPEAKS_ATTRIBUTE = "speaks";
+
 const ORGANIZER_PREFIX = "organizer-";
 const TRANSLATOR_PREFIX = "translator-";
 
@@ -83,17 +102,62 @@ const STOP_GRACE_MS = 60_000;
 const START_RETRY_MS = 30_000;
 
 /**
+ * What language this room is being spoken in, read straight from the broadcaster's
+ * presence. Falls back to the deployment's default (ultimately `en`) when the
+ * broadcaster doesn't say — which covers every client and feeder built before the
+ * attribute existed, and is why an unchanged deployment behaves exactly as it did.
+ *
+ * With two broadcasters present (a transient state around a reconnect) the first one
+ * that declares a language wins, rather than the set flapping between them.
+ */
+export function resolveSourceLanguage(
+  participants: PresentParticipant[],
+  fallback: string = DEFAULT_SOURCE_LANGUAGE
+): string {
+  for (const participant of participants) {
+    if (!participant.identity.startsWith(ORGANIZER_PREFIX)) continue;
+    const declared = participant.attributes?.[SPEAKS_ATTRIBUTE];
+    if (declared && declared.trim() !== "") return normalizeSourceLanguage(declared);
+  }
+  return normalizeSourceLanguage(fallback);
+}
+
+/**
+ * Which language the always-on bridge translates into.
+ *
+ * That bridge exists to write the *spoken*-language transcript (it's the only one with
+ * input transcription on); its target is a free choice, since one translation gets paid
+ * for either way. So spend it on the language most of the room is likely to want:
+ *
+ *   - Speaker in English → the deployment's default (`fr` here — the congregation this
+ *     was built for). Unchanged from before this function existed.
+ *   - Speaker in anything else → English, the language a mixed room is likeliest to
+ *     share, and the one a visiting speaker's hosts are listening in.
+ *
+ * Never the spoken language itself: translating a talk into the language it is already
+ * in buys nothing and would make the picker's "Original" entry ambiguous.
+ */
+export function primaryTargetLanguage(
+  sourceLanguage: string,
+  opts: { defaultLanguage: string }
+): string {
+  if (sourceLanguage !== DEFAULT_SOURCE_LANGUAGE) return DEFAULT_SOURCE_LANGUAGE;
+  return opts.defaultLanguage === sourceLanguage ? DEFAULT_SOURCE_LANGUAGE : opts.defaultLanguage;
+}
+
+/**
  * Which translation languages should be running for a room, given who is present
  * right now. The whole demand model in one pure function:
  *
  *   - No broadcaster → nothing runs. A listener waiting for the talk to start costs
  *     nothing, and the bridge starts on the tick where the organizer appears — the
  *     "waiting-room reap" outage (2026-07-19) is inexpressible in this shape.
- *   - Broadcaster present → the default language, always, plus every language some
- *     listener's `listen` attribute names.
+ *   - Broadcaster present → the primary target language, always, plus every language
+ *     some listener's `listen` attribute names — except the spoken language itself,
+ *     which needs no bridge because it *is* the speaker's own audio.
  *
- * The default bridge is unconditional because it is not really a translation: it is
- * the sole writer of the source (English) transcript, so tying it to listener count
+ * The primary bridge is unconditional because it is not really a translation: it is
+ * the sole writer of the spoken-language transcript, so tying it to listener count
  * meant a talk with nobody yet listening transcribed nothing, and the first listener
  * to arrive got a transcript starting mid-sentence. A live talk always gets its
  * transcript; whether that bridge suspends itself through the quiet parts is the
@@ -105,18 +169,22 @@ const START_RETRY_MS = 30_000;
  */
 export function computeDesiredLanguages(
   participants: PresentParticipant[],
-  opts: { defaultLanguage: string }
+  opts: { defaultLanguage: string; sourceLanguage?: string }
 ): Set<string> {
   const desired = new Set<string>();
   const hasBroadcaster = participants.some((p) => p.identity.startsWith(ORGANIZER_PREFIX));
   if (!hasBroadcaster) return desired;
 
-  desired.add(opts.defaultLanguage);
+  const sourceLanguage = normalizeSourceLanguage(opts.sourceLanguage);
+  desired.add(primaryTargetLanguage(sourceLanguage, opts));
   for (const participant of participants) {
     if (participant.identity.startsWith(ORGANIZER_PREFIX)) continue;
     if (participant.identity.startsWith(TRANSLATOR_PREFIX)) continue;
     const lang = participant.attributes?.[LISTEN_ATTRIBUTE];
-    if (lang) desired.add(lang);
+    // A listener asking for the spoken language is asking for the original audio,
+    // which the speaker is already publishing. Guarded here as well as in the client
+    // so a stale or hand-made token can't conjure a translate-X-into-X bridge.
+    if (lang && lang !== sourceLanguage) desired.add(lang);
   }
   return desired;
 }
@@ -173,15 +241,26 @@ function roomServiceDirectory(lk: LiveKitConfig): RoomDirectory {
 export class TranslationSessionManager {
   private static instance: TranslationSessionManager;
 
-  // The primary/default translation language. It runs whenever anyone is
-  // listening and is the sole writer of the source (English) transcript.
+  // This deployment's default translation language, used as the always-on bridge's
+  // target when the talk is in English. When it isn't, `primaryTargetLanguage` picks
+  // English instead — either way exactly one always-on bridge runs, and it is the sole
+  // writer of the spoken-language transcript.
   static readonly DEFAULT_LANGUAGE = "fr";
 
   // Map<sessionId, Map<languageCode, TranslationBridge>>
   private translations: Map<string, Map<string, TranslationBridge>> = new Map();
 
-  // Map<sessionId, TranscriptWriter> — one Yjs writer per session, shared by bridges.
-  private writers: Map<string, TranscriptWriter> = new Map();
+  // Map<sessionId, ServerDoc> — one connection to the session's shared doc, opened once
+  // per live session and used for everything the server writes there: every bridge's
+  // transcript, and the spoken language itself. Y-Sweet has no partial sync, so each
+  // entry is a full replica of that day's doc — one per session, never one per language.
+  private docs: Map<string, ServerDoc> = new Map();
+
+  // Map<sessionId, BCP-47> — the language each live room is being spoken in. Refreshed
+  // from presence on every reconcile (which is what makes it survive a server restart)
+  // and stamped directly by the token route, so a broadcaster who has only just asked
+  // for a token is already known to the paths that don't read presence themselves.
+  private sourceLanguages: Map<string, string> = new Map();
 
   // Map<sessionId, Map<language, epoch-ms>> — when demand for a language last existed
   // (a matching listener present, or a /translate nudge). Drives the stop grace.
@@ -191,7 +270,11 @@ export class TranslationSessionManager {
   // attempt, so a language whose bridge won't start isn't retried every tick.
   private lastStartAttemptAt: Map<string, number> = new Map();
 
-  private documentManager: DocumentManager | null = null;
+  // How a session doc gets opened — the manager's whole dependency on Y-Sweet. The
+  // server hands over `connectServerDoc` bound to its DocumentManager; tests hand over
+  // a plain local Y.Doc and read back what the manager wrote. Omitted, the manager
+  // supervises bridges and writes to no doc at all.
+  private docFactory: ((docId: string) => ServerDoc) | null = null;
   private livekitConfig: LiveKitConfig | null = null;
   private telemetry: TelemetryClient | null = null;
   private directory: RoomDirectory | null = null;
@@ -204,6 +287,12 @@ export class TranslationSessionManager {
   // say in which bridges exist (see computeDesiredLanguages).
   private silenceThresholdDbfs: number = SILENCE_GATING_OFF_DBFS;
 
+  // What a room is assumed to be spoken in when its broadcaster doesn't declare a
+  // language. Deployment-wide, so an unattended feeder (the macOS audio feeder, which
+  // publishes as organizer without a browser) can be pointed at a non-English service
+  // by configuration rather than by code.
+  private defaultSourceLanguage: string = DEFAULT_SOURCE_LANGUAGE;
+
   static getInstance(): TranslationSessionManager {
     if (!TranslationSessionManager.instance) {
       TranslationSessionManager.instance = new TranslationSessionManager();
@@ -214,23 +303,41 @@ export class TranslationSessionManager {
   /**
    * Provide the dependencies the manager needs to persist transcripts and supervise
    * bridges. Called once from the server at boot; tests construct their own instance
-   * and inject a fake directory/bridge factory.
+   * and inject a fake directory/bridge/doc factory.
    */
   init(opts: {
-    documentManager: DocumentManager;
     livekit: LiveKitConfig;
     telemetry?: TelemetryClient;
     silenceThresholdDbfs?: number;
+    defaultSourceLanguage?: string;
     directory?: RoomDirectory;
     bridgeFactory?: typeof defaultBridgeFactory;
+    docFactory?: (docId: string) => ServerDoc;
   }): void {
-    this.documentManager = opts.documentManager;
+    this.docFactory = opts.docFactory ?? null;
     this.livekitConfig = opts.livekit;
     this.telemetry = opts.telemetry ?? null;
     this.silenceThresholdDbfs = opts.silenceThresholdDbfs ?? SILENCE_GATING_OFF_DBFS;
+    this.defaultSourceLanguage = normalizeSourceLanguage(opts.defaultSourceLanguage);
     this.directory = opts.directory ?? roomServiceDirectory(opts.livekit);
     if (opts.bridgeFactory) this.bridgeFactory = opts.bridgeFactory;
     this.startSupervisor();
+  }
+
+  /**
+   * Record what a room is being spoken in, ahead of the broadcaster actually joining.
+   * The token route calls this so `getOrCreate` — which runs off a listener's request,
+   * with no presence snapshot in hand — files the transcript under the right language
+   * from the very first delta instead of from the first reconcile tick.
+   */
+  setSourceLanguage(sessionId: string, code: string | undefined): void {
+    if (!code || code.trim() === "") return;
+    this.sourceLanguages.set(sessionId, normalizeSourceLanguage(code));
+  }
+
+  /** What a room is being spoken in, falling back to the deployment default. */
+  getSourceLanguage(sessionId: string): string {
+    return this.sourceLanguages.get(sessionId) ?? this.defaultSourceLanguage;
   }
 
   /**
@@ -258,23 +365,32 @@ export class TranslationSessionManager {
     organizerIdentity: string
   ): Promise<TranslationBridge> {
     const now = Date.now();
+    const primary = this.primaryTargetFor(sessionId);
+    // Asking to be translated into the language already being spoken is a request for
+    // the original audio; hand back the primary bridge rather than starting a
+    // translate-X-into-X session nobody would hear. Mirrors the same skip in
+    // computeDesiredLanguages, so the two paths can't disagree about what exists.
+    const wanted =
+      targetLanguage === this.getSourceLanguage(sessionId) ? primary : targetLanguage;
     const stamps = this.getStamps(sessionId);
-    stamps.set(targetLanguage, now);
-    stamps.set(TranslationSessionManager.DEFAULT_LANGUAGE, now);
+    stamps.set(wanted, now);
+    stamps.set(primary, now);
 
-    const writer = this.getOrCreateWriter(sessionId);
+    const transcript = this.transcriptLogFor(sessionId);
 
-    // Always keep the default bridge alive (the source-transcript writer).
-    const defaultBridge = await this.ensureBridge(
-      sessionId,
-      TranslationSessionManager.DEFAULT_LANGUAGE,
-      organizerIdentity,
-      writer
-    );
-    if (targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE) {
-      return defaultBridge;
+    // Always keep the primary bridge alive (the spoken-language transcript writer).
+    const primaryBridge = await this.ensureBridge(sessionId, primary, organizerIdentity, transcript);
+    if (wanted === primary) {
+      return primaryBridge;
     }
-    return this.ensureBridge(sessionId, targetLanguage, organizerIdentity, writer);
+    return this.ensureBridge(sessionId, wanted, organizerIdentity, transcript);
+  }
+
+  /** The always-on bridge's target for this room, given what it's being spoken in. */
+  private primaryTargetFor(sessionId: string): string {
+    return primaryTargetLanguage(this.getSourceLanguage(sessionId), {
+      defaultLanguage: TranslationSessionManager.DEFAULT_LANGUAGE,
+    });
   }
 
   private getStamps(sessionId: string): Map<string, number> {
@@ -286,26 +402,64 @@ export class TranslationSessionManager {
     return stamps;
   }
 
-  private getOrCreateWriter(sessionId: string): TranscriptWriter | null {
-    if (!this.documentManager) return null;
-    let writer = this.writers.get(sessionId);
-    if (!writer) {
-      writer = new TranscriptWriter(sessionId, this.documentManager);
-      this.writers.set(sessionId, writer);
+  /** This session's doc connection, opened on first use and held until teardown. */
+  private getOrCreateDoc(sessionId: string): ServerDoc | null {
+    if (!this.docFactory) return null;
+    let entry = this.docs.get(sessionId);
+    if (!entry) {
+      entry = this.docFactory(sessionId);
+      this.docs.set(sessionId, entry);
     }
-    return writer;
+    return entry;
+  }
+
+  /**
+   * The transcript log the session's bridges append through. Stateless over the doc
+   * (see TranscriptSegmentLog), so this is a view, not a resource — the connection
+   * underneath is the thing with a lifetime.
+   */
+  private transcriptLogFor(sessionId: string): TranscriptSegmentLog | null {
+    const entry = this.getOrCreateDoc(sessionId);
+    return entry ? new TranscriptSegmentLog(entry.doc) : null;
+  }
+
+  /**
+   * Mirror the spoken language into the shared doc, where viewers and exports read it.
+   *
+   * Presence stays authoritative — the supervisor decides from room attributes and
+   * can't wait on a doc sync (see src/liveAudioConfig.ts). This write exists because
+   * nothing else tells a *browser* what the room is being spoken in: a broadcaster who
+   * declares one writes it themselves, but the macOS audio feeder and pre-`speaks`
+   * clients declare nothing, and the deployment default (LIVE_AUDIO_SOURCE_LANGUAGE)
+   * reached only the server. A session fed by those used to route bridges as Spanish
+   * while every viewer, and every later export, labelled the transcripts English.
+   *
+   * Deferred until the initial sync rather than awaited: reconcileRoom runs over every
+   * room in a tick, so blocking here would stall the others on one network round-trip.
+   * writeSourceLanguage no-ops when the value is unchanged, so the steady state costs
+   * nothing per tick.
+   */
+  private publishSourceLanguage(sessionId: string, code: string): void {
+    const entry = this.getOrCreateDoc(sessionId);
+    if (!entry) return;
+    void entry.synced
+      .then(() => writeSourceLanguage(entry.doc, code))
+      .catch((e) => {
+        console.warn(`[SessionManager] Publishing spoken language for ${sessionId} failed:`, e);
+      });
   }
 
   /**
    * Create-or-reuse a single language's bridge, with a short retry on transient
-   * startup failures (LiveKit region discovery / Gemini WS can blip). Only the
-   * default-language bridge transcribes the source audio.
+   * startup failures (LiveKit region discovery / Gemini WS can blip). Only the primary
+   * bridge transcribes the source audio, and it files that transcript under whatever
+   * the room is being spoken in.
    */
   private async ensureBridge(
     sessionId: string,
     targetLanguage: string,
     organizerIdentity: string,
-    writer: TranscriptWriter | null
+    transcript: TranscriptSegmentLog | null
   ): Promise<TranslationBridge> {
     let languageMap = this.translations.get(sessionId);
     if (languageMap) {
@@ -340,8 +494,9 @@ export class TranslationSessionManager {
       livekitUrl: this.livekitConfig?.url ?? process.env.LIVEKIT_URL ?? process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "ws://localhost:7880",
       livekitApiKey: this.livekitConfig?.apiKey ?? process.env.LIVEKIT_API_KEY!,
       livekitApiSecret: this.livekitConfig?.apiSecret ?? process.env.LIVEKIT_API_SECRET!,
-      writer,
-      writesSourceTranscript: targetLanguage === TranslationSessionManager.DEFAULT_LANGUAGE,
+      transcript,
+      writesSourceTranscript: targetLanguage === this.primaryTargetFor(sessionId),
+      sourceLanguage: this.getSourceLanguage(sessionId),
       recordEvent,
       silenceThresholdDbfs: this.silenceThresholdDbfs,
     };
@@ -411,7 +566,7 @@ export class TranslationSessionManager {
     return fired;
   }
 
-  /** Stop every bridge for a session and close its transcript writer. */
+  /** Stop every bridge for a session and close its doc connection. */
   private async teardownSession(sessionId: string): Promise<void> {
     const languageMap = this.translations.get(sessionId);
     if (languageMap) {
@@ -422,13 +577,14 @@ export class TranslationSessionManager {
       this.translations.delete(sessionId);
     }
 
-    const writer = this.writers.get(sessionId);
-    if (writer) {
-      writer.close();
-      this.writers.delete(sessionId);
+    const entry = this.docs.get(sessionId);
+    if (entry) {
+      entry.close();
+      this.docs.delete(sessionId);
     }
 
     this.lastDesiredAt.delete(sessionId);
+    this.sourceLanguages.delete(sessionId);
     for (const key of [...this.lastStartAttemptAt.keys()]) {
       if (key.startsWith(`${sessionId}:`)) this.lastStartAttemptAt.delete(key);
     }
@@ -485,8 +641,25 @@ export class TranslationSessionManager {
       // grace absorbs transient failures; a genuinely closed room winds down.
     }
 
+    // Presence is authoritative for the spoken language: it is the one signal that
+    // survives a server restart, and it is already in hand here. Only remember it while
+    // a broadcaster is actually present — an empty room's participants list would
+    // otherwise reset every live room to the deployment default mid-talk.
+    const hasBroadcaster = participants.some((p) => p.identity.startsWith(ORGANIZER_PREFIX));
+    if (hasBroadcaster) {
+      this.sourceLanguages.set(
+        sessionId,
+        resolveSourceLanguage(participants, this.defaultSourceLanguage)
+      );
+    }
+    const sourceLanguage = this.getSourceLanguage(sessionId);
+    // Only while a broadcaster is present, for the same reason as above: an empty
+    // room must not stamp the deployment default over a live session's declaration.
+    if (hasBroadcaster) this.publishSourceLanguage(sessionId, sourceLanguage);
+
     const desired = computeDesiredLanguages(participants, {
       defaultLanguage: TranslationSessionManager.DEFAULT_LANGUAGE,
+      sourceLanguage,
     });
 
     const now = Date.now();
@@ -526,7 +699,7 @@ export class TranslationSessionManager {
     const organizerIdentity =
       participants.find((p) => p.identity.startsWith(ORGANIZER_PREFIX))?.identity ??
       "organizer-host";
-    const writer = plan.start.length > 0 ? this.getOrCreateWriter(sessionId) : null;
+    const transcript = plan.start.length > 0 ? this.transcriptLogFor(sessionId) : null;
     for (const language of plan.start) {
       const key = `${sessionId}:${language}`;
       if (now - (this.lastStartAttemptAt.get(key) ?? 0) < START_RETRY_MS) continue;
@@ -538,7 +711,7 @@ export class TranslationSessionManager {
         properties: { sessionId, language },
       });
       try {
-        await this.ensureBridge(sessionId, language, organizerIdentity, writer);
+        await this.ensureBridge(sessionId, language, organizerIdentity, transcript);
       } catch (e) {
         console.error(`[SessionManager] Supervisor start of ${language} in ${sessionId} failed:`, e);
         this.telemetry?.capture({
@@ -562,7 +735,7 @@ export class TranslationSessionManager {
       (this.translations.get(sessionId)?.size ?? 0) === 0 &&
       desired.size === 0 &&
       participants.length === 0 &&
-      (this.writers.has(sessionId) || this.lastDesiredAt.has(sessionId))
+      (this.docs.has(sessionId) || this.lastDesiredAt.has(sessionId))
     ) {
       await this.teardownSession(sessionId);
     }

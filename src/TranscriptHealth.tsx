@@ -18,8 +18,8 @@ import { useYDoc } from '@y-sweet/react';
 import type * as Y from 'yjs';
 import { useStrings, resolveLocale } from './useLocale';
 import { useTranscriptSegments } from './useTranscriptSegments';
+import { useSourceLanguage } from './useSourceLanguage';
 import {
-  LIVE_TRANSCRIPT_SOURCE_CODE,
   liveTranscriptCodes,
   liveTranscriptLabel,
   transcriptPlainText,
@@ -67,11 +67,12 @@ function tail(text: string): string {
 
 function TranscriptHealthTile({ code }: { code: string }) {
   const s = useStrings();
+  const sourceLanguage = useSourceLanguage();
   const segments = useTranscriptSegments(code);
   // Flattened for the char count and tail preview — this view is about whether the
   // transcript is *moving*, not about its structure, so the segmentation is noise here.
   const text = useMemo(() => transcriptPlainText(segments), [segments]);
-  const isSource = code === LIVE_TRANSCRIPT_SOURCE_CODE;
+  const isSource = code === sourceLanguage;
 
   // Record when a *live* delta arrives. The first observed value is the initial
   // sync backlog, not a live update, so seed the ref with it without stamping a time.

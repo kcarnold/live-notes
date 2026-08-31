@@ -27,7 +27,7 @@ most of these signals.
    supervisor polls this every 10 s; it does not depend on any client-side beacon.
 4. **Y-Sweet / Yjs transcript doc** — the `liveTranscriptSegments-<code>` Y.Array per language
    is the product itself; its steady growth is a good end-to-end "translation is actually
-   flowing" heartbeat that no single component can fake (written by `transcript-writer.ts`).
+   flowing" heartbeat that no single component can fake (written by `transcript-log.ts`).
    Each segment is one utterance, stamped with `startedAt` and `endedAt` — the write side is
    the only place that knows when a delta arrived, so timing recorded there is the only timing
    anything downstream can ever see. Only those observations are stored; the silence between
@@ -62,8 +62,25 @@ supervisor start/stop decision.
 | `gemini_resumed_voice` | Cost path: socket reopened on returning speech. | `silentMs` |
 | `gemini_session_resumption_update` | Whether the translate model offered a resume handle (not yet used). | `resumable`, `hasHandle` |
 
-Server-level exceptions go through `phClient.captureException(...)` in
-[server.ts](../server.ts) (token issue, translate start, unsubscribe, etc.).
+Server-level exceptions reach PostHog two ways, both wired in [server.ts](../server.ts):
+
+- **Explicitly**, via `phClient.captureException(...)` inside a route's own `try`/`catch`
+  (token issue, translate start, unsubscribe, slide-conversation runs, session export). These
+  routes swallow the error so they can return a JSON 500 and clean up state, so the manual
+  call is the only report they will ever make — don't delete it.
+- **Automatically**, via `setupExpressErrorHandler(phClient, app)` for every route without
+  such a guard. Ordering is the whole trick: Express dispatches errors *forward* from the
+  layer that threw, so this is registered **after every route**, immediately before
+  `app.listen`. Its companion `setupExpressRequestContext(phClient, app)` is registered
+  **first**, and opens an AsyncLocalStorage context so reports of *both* kinds carry
+  `$request_method`, `$request_path` and `$ip` — the manual ones included, without any route
+  having to thread `req` down to the `catch`. (`$response_status_code` is added only by the
+  error handler, and is sampled before Express's default handler writes the status, so it
+  reads 200 rather than the 500 the client actually saw.)
+
+Process-level `enableExceptionAutocapture` covers neither: an error the Express router
+catches is not an `uncaughtException`, and Express 5 catches rejected promises from `async`
+handlers itself, so it is not an `unhandledRejection` either.
 
 ## Questions → where to look
 
@@ -136,7 +153,7 @@ layout component) is where these signals surface for an operator. Current state:
    `translator-*` with `status` + `subscriberCount`. Pair it visually with the transcript tiles,
    since bridge `status: active` can read healthy while deaf (see Questions above). No backend work.
 2. **Absolute transcript freshness** — if the client-relative clock isn't enough, have
-   [transcript-writer.ts](../live-audio/transcript-writer.ts) stamp `lastWrittenAt` per code into the
+   [transcript-log.ts](../live-audio/transcript-log.ts) stamp `lastWrittenAt` per code into the
    `status` Y.Map. Survives reloads and gives the tiles a real wall-clock age; this is the first
    `status`-map producer and sets the pattern for the rest.
 3. **Component heartbeats (#72)** — server, Proclaim service, and broadcaster each write a periodic

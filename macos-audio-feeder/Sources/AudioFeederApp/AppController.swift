@@ -11,7 +11,7 @@ final class AppController: ObservableObject {
 
     /// High-level status surfaced in the UI.
     enum Status: Equatable {
-        case idle                    // schedule says off
+        case idle                    // not supposed to be running right now
         case waitingForDevice(String)
         case connecting
         case publishing
@@ -21,7 +21,9 @@ final class AppController: ObservableObject {
 
         var label: String {
             switch self {
-            case .idle: return "Idle (off schedule)"
+            // Not "Idle (off schedule)": with a hold in play the schedule isn't always the
+            // reason, and the sentence underneath this line says which reason it is.
+            case .idle: return "Idle"
             case let .waitingForDevice(name): return "Waiting for device: \(name)"
             case .connecting: return "Connecting…"
             case .publishing: return "Publishing"
@@ -46,8 +48,12 @@ final class AppController: ObservableObject {
     /// end of the run window — never by the retry timer, which is the whole point.
     @Published private(set) var standDown: String?
 
+    /// A manual start/stop that outranks the schedule until the schedule's next edge. In memory
+    /// only — see `FeederConfig.schedule`.
+    @Published private(set) var hold: RunHold?
+
     @Published var config: FeederConfig {
-        didSet { configChanged() }
+        didSet { configChanged(from: oldValue) }
     }
 
     private let store = ConfigStore()
@@ -59,6 +65,7 @@ final class AppController: ObservableObject {
     private var retryTimer: Timer?
     private var retryAfter: Date?
     private var retryBackoff: TimeInterval = 2
+    private var evaluatePending = false
 
     init() {
         self.config = store.load()
@@ -88,18 +95,47 @@ final class AppController: ObservableObject {
         evaluate()
     }
 
-    // MARK: - Manual override (UI buttons)
+    // MARK: - Manual holds (UI buttons)
+    //
+    // All three go through `scheduleEvaluate()` rather than `evaluate()` directly: these run
+    // from SwiftUI button actions, and `evaluate()` mutates `@Published` state. See the comment
+    // on `scheduleEvaluate` for what that combination does inside a view update.
 
     func startNow() {
         clearStandDown()
-        config.manualOverride = .forceOn                   // didSet → save + evaluate
+        setHold(.starting(true, at: Date(), schedule: config.schedule))
     }
 
-    func stopNow() { config.manualOverride = .forceOff }
+    func stopNow() { setHold(.starting(false, at: Date(), schedule: config.schedule)) }
 
+    /// Drop the hold and let the schedule decide again, immediately.
     func followSchedule() {
-        clearStandDown()
-        config.manualOverride = .off
+        guard hold != nil else { return }
+        Log.controller.notice("hold cleared by user")
+        hold = nil
+        scheduleEvaluate()
+    }
+
+    private func setHold(_ newHold: RunHold) {
+        hold = newHold
+        Log.controller.notice("""
+            hold: \(newHold.publish ? "on" : "off", privacy: .public) until \
+            \(newHold.endsAt.description(with: .current), privacy: .public)\
+            \(newHold.capped ? " (4h cap)" : "", privacy: .public)
+            """)
+        scheduleEvaluate()
+    }
+
+    /// The current decision and the sentence explaining it — everything the popover renders.
+    var runPlan: RunPlan {
+        RunPlan.evaluate(now: Date(), schedule: config.schedule, hold: hold)
+    }
+
+    /// Whether we should be on air right now. The popover's primary button pivots on this
+    /// rather than on `isPublishing`, so a stood-down feeder still offers "Stop now" and the
+    /// separate `Reconnect` button stays the only way back into a contested room.
+    var wantRun: Bool {
+        Scheduler.shouldRun(now: Date(), schedule: config.schedule, hold: hold)
     }
 
     /// Take the room back after standing down. Separate from "Start now" because standing
@@ -131,16 +167,51 @@ final class AppController: ObservableObject {
 
     // MARK: - Core evaluation
 
-    private func configChanged() {
+    private func configChanged(from old: FeederConfig) {
+        // Re-anchor a live hold to the edited schedule, so "stop now" keeps meaning *end this
+        // run* after the run's definition changes. Anchored to the hold's own `setAt`, so this
+        // can never stretch it past four hours from the button press. See `RunHold.recomputed`.
+        if config.schedule != old.schedule, let hold {
+            self.hold = hold.recomputed(for: config.schedule)
+        }
         store.save(config)
-        evaluate()
+        scheduleEvaluate()
+    }
+
+    /// Re-evaluate on the next runloop turn rather than inside this `didSet`.
+    ///
+    /// `config` is `@Published` and every settings control writes it through a `Binding`, so
+    /// this `didSet` can run **inside SwiftUI's view-update pass** — and `evaluate()` mutates
+    /// other `@Published` state (`status`, `devices`, `standDown`). That combination is what
+    /// "Publishing changes from within view updates is not allowed, this will cause undefined
+    /// behavior" is complaining about. A segmented `Picker` is what finally tripped it (it
+    /// writes its selection during the update pass, where a `Button` action closure would
+    /// not), but the defect was latent for every text field, toggle and stepper in the
+    /// settings window.
+    ///
+    /// Hopping to the next turn also coalesces bursts: every keystroke in the settings window
+    /// is a config mutation, and `evaluate()` does a full synchronous CoreAudio device
+    /// enumeration.
+    private func scheduleEvaluate() {
+        guard !evaluatePending else { return }
+        evaluatePending = true
+        Task { @MainActor in
+            evaluatePending = false
+            evaluate()
+        }
     }
 
     /// Decide whether we should be running and reconcile the capture/publish lifecycle.
     private func evaluate() {
-        let wantRun = Scheduler.shouldRun(now: Date(),
-                                          schedule: config.schedule,
-                                          manualOverride: config.manualOverride)
+        let now = Date()
+        // Retire an expired hold so the UI stops describing one that no longer decides
+        // anything. `shouldRun` ignores it either way — this is bookkeeping, not the decision.
+        if let hold, !hold.isLive(at: now) {
+            Log.controller.notice("hold expired; following the schedule")
+            self.hold = nil
+        }
+
+        let wantRun = Scheduler.shouldRun(now: now, schedule: config.schedule, hold: hold)
         if !wantRun {
             teardown()
             // A stand-down lasts for the run it happened in, no longer: next Sunday starts

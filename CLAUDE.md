@@ -13,6 +13,7 @@ This is a **live translation application** for presentations/talks. It provides 
 - **Frontend**: React + TypeScript + Vite + Tailwind CSS
 - **Backend**: Express server
 - **Live speech translation**: LiveKit rooms + Gemini Live ([live-audio/](live-audio/)) — a broadcaster publishes mic audio; per-language translator bots stream it through Gemini Live and publish translated audio + live transcripts
+- **macOS Audio Feeder** ([macos-audio-feeder/](macos-audio-feeder/)): a **native Swift/SwiftUI menu-bar app** — the only non-web, non-Python component in the repo. It takes one channel off the sound board and publishes it to the LiveKit room on a schedule, as an unattended alternative to the browser broadcast page. Built and tested with `swift test` / Xcode, **not** `npm test`
 
 **Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the component map (what runs where, who writes what into the shared Yjs doc). [docs/README.md](docs/README.md) is the docs index; [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) is the manual pre-service smoke checklist — PR descriptions should declare which of its sections they touch.
 
@@ -44,6 +45,17 @@ Optional environment variables:
   endpoints viewers call and a write key can't protect (defaults 600 / 1200; 0 disables).
   Sized to stop a script, not a congregation — see [rateLimit.ts](rateLimit.ts).
 - `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.5-flash`)
+- `SESSION_TIMEZONE` - IANA zone the congregation keeps (default: the host's zone). The
+  server owns "which doc is the current session" for everyone (issue #111), so it reckons
+  dates and the 4am pin expiry on this clock — a container's is UTC, which would file a
+  Sunday-evening service under Monday. See [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
+- `SESSION_REGISTRY_PATH` - where the pin/proposal state is persisted (default: inside the
+  audio-cache dir, so a pin survives a restart mid-service).
+- `LIVE_AUDIO_SOURCE_LANGUAGE` - BCP-47 code a session is assumed to be *spoken* in when
+  nobody declares one (default `en`). The broadcast pane asks the speaker and publishes their
+  answer per session; this is only the fallback, for older clients and the macOS audio feeder.
+  However it is resolved, the supervisor mirrors it into the doc's `liveAudioConfig`.
+  See [src/liveAudioConfig.ts](src/liveAudioConfig.ts).
 - `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 - `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
 - `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
@@ -93,6 +105,30 @@ npm start
 - When running tests via tools/agents, use `--no-color` flag to disable ANSI color codes in output.
 - The root `tsconfig.json` is a solution-style config (`files: []` + `references`), so plain `tsc --noEmit -p .` silently checks nothing. Use `npm run typecheck` (or `tsc -b`) to actually type-check.
 
+### Swift (macOS Audio Feeder)
+
+[macos-audio-feeder/](macos-audio-feeder/) is a native macOS menu-bar app. **Nothing in the
+npm or uv toolchain touches it** — searching only `*.ts`/`*.tsx`/`*.py` will miss it entirely.
+
+```bash
+cd macos-audio-feeder
+swift test                 # AudioFeederCore: pure logic, fast, no Xcode needed
+xcodegen generate          # regenerate AudioFeeder.xcodeproj (source list is captured here,
+                           # so re-run after ADDING or REMOVING files)
+xcodebuild -project AudioFeeder.xcodeproj -scheme AudioFeederApp build
+```
+
+The split is deliberate: `AudioFeederCore` holds pure, dependency-free logic (schedule
+decisions, config, level metering, channel extraction, the LiveKit token contract) so it is
+covered by `swift test`; `AudioFeederApp` holds everything needing CoreAudio/LiveKit/SwiftUI.
+**Put new decision logic in the Core and test it there** — the app half has no test target.
+The `.xcodeproj` is generated from `project.yml` and not checked in; that YAML is the
+reviewable source of truth.
+
+Read [macos-audio-feeder/NOTEBOOK.md](macos-audio-feeder/NOTEBOOK.md) before touching
+packaging, entitlements, or connect/retry logic — it records failures that cost a service
+(the App Sandbox blocking WebRTC's UDP sockets, silent disconnects) and the rules they earned.
+
 ### Python (Proclaim service)
 
 The Proclaim integration ([proclaim_service.py](proclaim_service.py)) is a standalone Python
@@ -114,6 +150,9 @@ uv run pytest
 
 # Run a single test
 uv run pytest tests/test_slide_sync_runtime.py::test_reconnects_after_websocket_drop
+
+# Run the `slow` tests too (deselected by default; CI always runs them)
+uv run pytest -m slow
 ```
 
 Tests live in [tests/](tests/), split to match the decoupled modules: `test_slide_feed`,
@@ -123,8 +162,12 @@ re-push), `test_slide_seam` (replayed feed drives the real consumers), `test_sli
 (record → JSONL → replay through the real consumers, driven by the committed synthetic fixture
 [tests/fixtures/synthetic_service.jsonl](tests/fixtures/synthetic_service.jsonl); regenerate
 with `uv run tests/fixtures/make_synthetic_service.py`), `test_proclaim_lib`,
-`test_service_version` (the self-reported version / "update pending" flag), and
-`test_proclaim_launcher` (the auto-update launch wrapper).
+`test_service_version` (the self-reported version / "update pending" flag),
+`test_session_client` (proposing the on-air date and obeying the answer, #111), and
+`test_proclaim_launcher` (the auto-update launch wrapper — marked `slow` and deselected
+from the default run: it shells out to real git and real subprocess timeouts for ~25s to
+cover a file almost no change touches, so run it with `-m slow` when you edit
+[proclaim_service_launch.sh](proclaim_service_launch.sh); CI runs it on every push).
 The shared fakes for the Proclaim DB, the Y-Sweet websocket, and the Yjs Provider live in
 [tests/helpers.py](tests/helpers.py); timing is scaled down by injecting it (constructor args)
 so loops run in milliseconds — no real Proclaim or Y-Sweet needed. Async tests run on the
@@ -161,30 +204,79 @@ endpoints that spend money. Clients present it as `X-Write-Key`. Defaults to `ob
 which records every privileged request and allows it anyway. Full picture:
 [docs/WRITE_KEYS.md](docs/WRITE_KEYS.md).
 
+### The Current Session
+
+Which Y-Sweet doc everything reads and writes is a **server-owned fact**, not a formula each
+component re-derives ([sessionRegistry.ts](sessionRegistry.ts), routes in
+[sessionRoutes.ts](sessionRoutes.ts), browser side [src/getDocId.ts](src/getDocId.ts) +
+[src/SessionGate.tsx](src/SessionGate.tsx), Python side [session_client.py](session_client.py)).
+
+Precedence: `?doc=` / explicit `doc_id` override → an operator pin set from `/status` →
+the Proclaim service's accepted proposal → the date in `SESSION_TIMEZONE`. The service
+*proposes* what is on air and connects to whatever it is told; a show dated before today is
+refused (`stale`), which is exactly the failure in #111. Pins lapse at 4am. Nobody keeps a
+client-side copy of the date formula — an unreachable server is reported, not guessed
+around. Writer sightings (`GET /api/session/writers`, shown on `/status`) make "the service
+is down" and "the service is writing to last week's doc" look different.
+
+Full picture: [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
+
 ### Core Collaboration Flow
 
 The app uses **Yjs** for real-time collaborative state management:
 
 1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status, gated on a write key (an unauthorized editor request is downgraded to read-only, not refused)
-2. **Shared Y.Doc** per session: Each session (identified by `?doc=doc-YYYY-MM-DD`) has a shared Yjs document
-3. **Key shared data structures**:
-   - `translatedText-{language}` (Y.Text): Translated output for each language
-   - `meta` (Y.Map): Metadata (unused currently)
-   - `notesTranslationCache` (Y.Map): Translation cache to avoid re-translating unchanged text
-   - `proclaimPresentations` (Y.Map): Maps itemId → presentation data (title, slides)
-   - `proclaimStatus` (Y.Map): Current Proclaim status (itemId, slideIndex)
+2. **Shared Y.Doc** per session: Each session has a shared Yjs document, identified by the doc
+   id the server names (see *The Current Session* above); `?doc=` overrides it
+3. **Key shared data structures** (the header comment in [sessionExport.ts](sessionExport.ts) is
+   the canonical description — it has to read all of them):
+   - `sourceBlocks` (Y.Array of block Y.Maps): the notes being taken
+   - `notesTranslationCache` (Y.Map): `${language}:${content}` → translated string, so unchanged
+     text is never re-translated
+   - `proclaimPresentations` (Y.Map): itemId → `{title, itemId, slides: string[]}`
+   - `proclaimServiceOrder` (Y.Map): `order` → itemId[]
+   - `proclaimStatus` (Y.Map): current Proclaim status (itemId, slideIndex)
+   - `slideTranslations` (Y.Map): `slideTranslationKey(language, text)` → translation entry
+   - `liveTranscriptSegments-{code}` (Y.Array): live-speech utterances per language, written by
+     the server-side bridge (see [src/transcriptKeys.ts](src/transcriptKeys.ts); older sessions
+     have a `liveTranscript-{code}` Y.Text instead)
+   - `liveAudioConfig` (Y.Map): `sourceLanguage` — which of those codes is the speaker's own
+     words rather than a translation ([src/liveAudioConfig.ts](src/liveAudioConfig.ts))
+   - `slideConversations` (Y.Map), `status` (Y.Map): the slide Q&A panel, and per-service status
+     reporting (e.g. the Proclaim service's `proclaimService` entry)
+
+   Note the two language namespaces: notes/slides use display names (`French`), live-audio
+   transcripts use BCP-47 codes (`fr`).
+
+   **English is not privileged in the live-audio path.** The spoken language is a per-session
+   value: the broadcaster declares it in the broadcast pane, which writes it to
+   `liveAudioConfig` *and* onto their LiveKit token as the `speaks` attribute (the supervisor
+   decides from room presence and can't wait on a doc sync; the doc copy is what viewers and
+   exports read later). Everything that used to hard-code `en` follows it — which code the
+   input transcript is filed under, what "Original" means in the listen picker, which language
+   the always-on bridge translates into (`primaryTargetLanguage`), and which transcript an
+   export marks as the source.
 
 ### Translation Pipeline
 
-The translation system is sophisticated with caching and incremental updates:
+The unit of translation is a **block**, not a line of markdown — everything in
+[translationUtils.ts](src/translationUtils.ts) takes `TranslationBlock[]` (`type`, `level`,
+`content`), and `fetchAndCacheTranslations` is the entry point ([useTranslationManager.ts](src/useTranslationManager.ts)
+drives it). Translation is incremental: only blocks with no cache entry are sent.
 
-1. **Chunking** ([translationUtils.ts:53-90](translationUtils.ts#L53-L90)): Source text is split into chunks (lines), with whitespace handling
-2. **Decomposition** ([translationUtils.ts:30-42](translationUtils.ts#L30-L42)): Each chunk is decomposed into `format` (markdown syntax), `content`, and `trailingWhitespace`
-3. **Cache lookup** ([translationUtils.ts:112-164](translationUtils.ts#L112-L164)): Check which chunks need translation using `translationCache`
-4. **Context provision**: Untranslated chunks get 3 lines of context from already-translated chunks
-5. **Batch translation** ([server.ts:104-118](server.ts#L104-L118)): Server endpoint processes batches via Gemini
-6. **Cache update** ([translationUtils.ts:166-185](translationUtils.ts#L166-L185)): New translations are cached in the shared Y.Map
-7. **Reconstruction** ([translationUtils.ts:187-204](translationUtils.ts#L187-L204)): Final text is reassembled from cached translations with original formatting
+1. **Cache lookup** (`getBlockTranslationTodos` / `buildBlockTranslationRequests`): empty blocks are
+   dropped, and each block's *trimmed* content is looked up under `${language}:${content}`
+2. **Context provision**: up to 3 already-translated blocks before each untranslated run are marked
+   as context and sent along, rendered back to markdown (`blockToMarkdownLine`) so the model sees
+   the heading/bullet structure
+3. **Grouping** (`findContiguousBlocks`): contiguous runs become one `TranslationTodo` per request
+4. **Batch translation**: `POST /api/requestTranslatedBlocks` ([server.ts](server.ts)) runs the
+   batches through Gemini
+5. **Cache update** (`updateTranslationCache`): results are written into the shared
+   `notesTranslationCache` Y.Map, so every viewer gets them without re-asking
+
+There is no reassembly step: viewers render per block, looking each one up in the cache
+([BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx)).
 
 ### Text-to-Speech (TTS) System
 
@@ -200,11 +292,12 @@ The TTS system uses a two-layer architecture that separates "how to speak" from 
 - Provides callbacks for completion and errors
 - No knowledge of which line to play next - just plays what it's told
 
-**Layer 2: Playback logic** ([TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx))
+**Layer 2: Playback logic** ([BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx))
 - Decides which lines to play and when
 - Manages playhead cursor and auto-play mode
 - Responds to user interactions (clicks, auto-mode toggle)
-- Pure component (accepts `lines[]` prop), Yjs integration in container
+- Pure component (accepts `blocks[]` + `translations`), Yjs integration in
+  [BilingualBlockViewerContainer.tsx](src/BilingualBlockViewerContainer.tsx)
 
 **Backend** ([server.ts](server.ts))
 - ElevenLabs API integration
@@ -284,20 +377,28 @@ The app includes a **block-based collaborative editor** ([BlockEditor.tsx](src/B
 - **Parent-child structure**: `BlockEditor` manages state, `BlockItem` components handle individual blocks
 
 #### Block Structure
-Each block is a `Y.Map` with:
+Blocks live in the `sourceBlocks` Y.Array. Each is a `Y.Map` with ([blockTypes.ts](src/blockTypes.ts)):
 - `id`: UUID for stable identity
-- `type`: 'paragraph' | 'heading' | 'listItem'
+- `type`: 'heading' | 'bullet' (only two — there is no paragraph type)
 - `position`: Fractional-index string for ordering
-- `indent`: 0-3 (max indent level)
-- `text`: Y.Text for collaborative editing
+- `level`: 0-5 (`MAX_INDENT_LEVEL`); on a heading it selects the heading depth, on a bullet the indent
+- `content`: Y.Text for collaborative editing (the `Block` interface exposes it as a plain
+  string snapshot for rendering)
 
 #### Features
 - **Live collaboration**: Multiple users can edit different blocks simultaneously via Yjs
-- **Markdown serialization**: Blocks convert to markdown (headings, lists with indentation)
-- **Keyboard shortcuts**:
-  - `Enter`: Create new block below
-  - `Backspace` at start: Delete empty block or merge with previous
-  - `Tab/Shift-Tab`: Indent/dedent (for lists)
+  (each textarea is bound to its Y.Text with `y-textarea`)
+- **Markdown serialization**: Blocks convert to markdown — `level + 2` `#`s for headings,
+  two-space indentation for bullets
+- **Keyboard shortcuts** (all in `handleKeyDown`, [BlockEditor.tsx](src/BlockEditor.tsx)):
+  - `Enter`: Split at the cursor into a new block below (a heading splits into a bullet)
+  - `Cmd/Ctrl+Enter`: Trigger translation
+  - `Backspace` at start: Demote — dedent, then heading→bullet, then delete if empty
+  - `#` at start: Promote bullet→heading, or deepen the heading level
+  - `Tab` / `Shift-Tab`: Indent / dedent
+  - `Cmd/Ctrl+H`: Toggle heading
+  - `Cmd/Ctrl+↑` / `Cmd/Ctrl+↓`: Move the block up/down
+  - `↑` at start / `↓` at end: Move focus to the previous/next block
 - **Empty block filtering**: Empty blocks aren't serialized to markdown
 
 #### Textarea Auto-sizing
@@ -335,8 +436,8 @@ The Python service syncs to two Yjs data structures:
 
 #### React Components
 
-- **CurrentSlideViewer** ([CurrentSlideViewer.tsx:18-95](CurrentSlideViewer.tsx#L18-L95)): Pure component displaying current slide with optional context (previous/next slides)
-- **CurrentSlideViewerContainer** ([CurrentSlideViewer.tsx:100-146](CurrentSlideViewer.tsx#L100-L146)): Yjs connector that reads presentation data and passes to pure component
+- **CurrentSlideViewer** ([src/CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx)): Pure component displaying current slide with optional context (previous/next slides)
+- **CurrentSlideViewerContainer** ([src/CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx)): Yjs connector that reads presentation data and passes to pure component
 
 The viewer shows:
 - Header with presentation title and progress (slide X of Y)
@@ -384,14 +485,25 @@ Details in [PROCLAIM_SERVICE_SETUP.md](PROCLAIM_SERVICE_SETUP.md#automatic-updat
 
 ### Layout System
 
-The UI uses a **URL-based layout system** ([App.tsx:262-395](App.tsx#L262-L395)):
+The UI uses a **URL-based layout system** (`PagePart` in [App.tsx](src/App.tsx) resolves each name):
 
 - Layouts are encoded in the URL path: `/sourceText|translatedText-French,currentSlide`
 - Format: rows separated by `|`, columns separated by `,`
-- Components: `sourceText`, `translatedText-{language}`, `bilingual-{language}`, `currentSlide`
+- Components:
+  - `sourceText` — the block editor + translation controls
+  - `translatedText-{language}` — translation only
+  - `bilingual-{language}` — original + translation
+  - `currentSlide`, `slideTranslation-{language}` — the live Proclaim slide, untranslated / translated
+  - `slideReview` — pre-service review of slide translations
+  - `listen-{bcp47Code}` — live speech translation for a listener (audio + transcript)
+  - `broadcast` — the speaker's mic/broadcast pane (editors only)
+  - `status` — the service status dashboard
+- Note the two namespaces: the text components take a display name (`French`), `listen-` takes a
+  BCP-47 code (`fr`) from the larger Gemini Live set ([listenLanguages.ts](src/listenLanguages.ts))
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
 - Example with Proclaim: `/translatedText-French,currentSlide` shows translation and current slide side-by-side
+- Unknown names render a "Unknown component" card rather than failing the page
 
 ### Editor vs Viewer Mode
 
@@ -412,6 +524,8 @@ The app has two modes determined by URL hash (`#editor`):
 
 ### Backend
 - [server.ts](server.ts) - Express backend with Y-Sweet auth, translation API, and TTS endpoint
+- [sessionRegistry.ts](sessionRegistry.ts) / [sessionRoutes.ts](sessionRoutes.ts) - the
+  server-owned current session (#111): pin/proposal/date precedence, 4am expiry, writer sightings
 - [nlp.ts](nlp.ts) - Gemini API integration for translation
 - Proclaim → Yjs sync (Python), decoupled into a slide feed + consumers:
   - [proclaim_service.py](proclaim_service.py) - thin entrypoint: env/config, telemetry, and wiring
@@ -422,26 +536,42 @@ The app has two modes determined by URL hash (`#editor`):
   - [slide_sync_runtime.py](slide_sync_runtime.py) - `SlideSyncRuntime`: doc lifecycle, connect/reconnect, fan-out
   - [slide_replay.py](slide_replay.py) - record/replay of the `FeedSnapshot` stream (issue #70, Proclaim slice): `RecordingSlideFeed` (`--record`), `ReplaySlideFeed` (`--replay`), `replay_records_through_consumers` (offline replay through the real consumers)
   - [proclaim_lib.py](proclaim_lib.py) - DB access + rich-text/XML slide parsing (unchanged, shared)
+  - [session_client.py](session_client.py) - proposes the on-air show's date to the server and
+    takes the doc it is given back (#111); the service no longer decides its own doc
 
 ### Frontend Core
 - [App.tsx](src/App.tsx) - Main React app with routing and layout system
 - [translationUtils.ts](src/translationUtils.ts) - Translation pipeline logic (chunking, caching, reconstruction)
 - [yjsUtils.ts](src/yjsUtils.ts) - Yjs utility functions and React hooks
+- [getDocId.ts](src/getDocId.ts) / [SessionGate.tsx](src/SessionGate.tsx) / [sessionApi.ts](src/sessionApi.ts) -
+  resolving the current session before anything mounts, and the `/status` pin controls
 
 ### Components
 - [BlockEditor.tsx](src/BlockEditor.tsx) - Block-based collaborative editor with Yjs backing
 - [blockTypes.ts](src/blockTypes.ts) - Block data structures and utilities
 - [SourceTextTranslationManager.tsx](src/SourceTextTranslationManager.tsx) - Source text editor with translation controls
-- [TranslatedTextViewer.tsx](src/TranslatedTextViewer.tsx) - Markdown renderer with TTS controls and auto-play logic
-- [TranslatedTextViewerContainer.tsx](src/TranslatedTextViewerContainer.tsx) - Yjs connector for TranslatedTextViewer
-- [BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx) - Shows blocks with original text and translation side-by-side
+- [BilingualBlockViewer.tsx](src/BilingualBlockViewer.tsx) - The reading view for translated notes: blocks
+  with translation (and optionally the original), plus the TTS controls and playhead/auto-play logic
 - [BilingualBlockViewerContainer.tsx](src/BilingualBlockViewerContainer.tsx) - Yjs connector for BilingualBlockViewer
 - [CurrentSlideViewer.tsx](src/CurrentSlideViewer.tsx) - Proclaim slide viewer with pure component and Yjs container
+- [SlideTranslationViewer.tsx](src/SlideTranslationViewer.tsx) - Current slide's translation for a language
+- [SlideReview.tsx](src/SlideReview.tsx) / [SlideReviewContainer.tsx](src/SlideReviewContainer.tsx) - Pre-service
+  review and editing of slide translations
+- [StatusView.tsx](src/StatusView.tsx) / [TranscriptHealth.tsx](src/TranscriptHealth.tsx) - The `/status` dashboard
+- [useFitText.ts](src/useFitText.ts) / [SlideText.tsx](src/SlideText.tsx) - Binary-search text fitting for slide display
+
+### Live Audio (LiveKit + Gemini Live)
+Lazily imported in [App.tsx](src/App.tsx) so the LiveKit SDK stays out of the main bundle.
+- [ListenViewer.tsx](src/ListenViewer.tsx) - Listener pane: opt-in audio, translator-bot lifecycle, status light
+- [BroadcastControl.tsx](src/BroadcastControl.tsx) - Speaker pane: mic publishing, level meter, listener dashboard
+- [LiveTranscript.tsx](src/LiveTranscript.tsx) - Transcript for one language code, read from Yjs (no LiveKit dependency)
+- [transcriptKeys.ts](src/transcriptKeys.ts) / [useTranscriptSegments.ts](src/useTranscriptSegments.ts) - Doc keys and the read hook
+- [liveAudioConfig.ts](src/liveAudioConfig.ts) / [useSourceLanguage.ts](src/useSourceLanguage.ts) - The session's spoken language: doc contract and the read hook
 
 ### TTS System
 - [useTTS.ts](src/useTTS.ts) - Low-level TTS hook managing audio playback lifecycle
-- [useTTS.test.ts](src/useTTS.test.ts) - Comprehensive tests for useTTS hook (12 tests)
-- [TranslatedTextViewer.test.tsx](src/TranslatedTextViewer.test.tsx) - Component tests for playhead and auto-play (15 tests)
+- [useTTS.test.ts](src/useTTS.test.ts) - Comprehensive tests for useTTS hook
+- [BilingualBlockViewer.test.tsx](src/BilingualBlockViewer.test.tsx) - Component tests for playhead and auto-play
 
 ## Important Patterns
 
@@ -473,7 +603,7 @@ UI strings are localized via [src/strings.ts](src/strings.ts) and [src/useLocale
 
 ### Translation Cache Keys
 
-Translation cache keys combine language and content ([translationUtils.ts:106-110](translationUtils.ts#L106-L110)):
+Translation cache keys combine language and content ([src/translationUtils.ts](src/translationUtils.ts)):
 ```typescript
 translationCacheKey(language, chunkText) // Returns "{language}:{chunkText}"
 ```
@@ -483,7 +613,7 @@ translationCacheKey(language, chunkText) // Returns "{language}:{chunkText}"
 The codebase favors **separating pure components from Yjs concerns** to enable comprehensive testing:
 
 **Pattern**:
-1. **Pure component**: Accepts plain props (`lines: string[]`), no Yjs dependencies
+1. **Pure component**: Accepts plain props (e.g. `blocks: Block[]`), no Yjs dependencies
 2. **Container component**: Connects to Yjs and passes props to pure component
 3. **Tests**: Focus on pure component with mock data
 
@@ -493,18 +623,22 @@ The codebase favors **separating pure components from Yjs concerns** to enable c
 - Easy to reason about component behavior
 - Fast test execution
 
-**Example**: `TranslatedTextViewer` (pure) + `TranslatedTextViewerContainer` (Yjs connector)
+**Example**: `BilingualBlockViewer` (pure) + `BilingualBlockViewerContainer` (Yjs connector);
+`CurrentSlideViewer` and `SlideReview` follow the same split.
 
 ```typescript
 // Pure component - easy to test
-function TranslatedTextViewer({ lines, language }: Props) {
-  // All logic works with plain arrays
+function BilingualBlockViewer({ blocks, translations, language }: Props) {
+  // All logic works with plain arrays/maps
 }
 
-// Container - handles Yjs
-function TranslatedTextViewerContainer({ language }: ContainerProps) {
-  const lines = useYText(...); // Get data from Yjs
-  return <TranslatedTextViewer lines={lines} language={language} />;
+// Container - handles Yjs: observe the doc, convert to plain data
+function BilingualBlockViewerContainer({ language }: ContainerProps) {
+  const sourceBlocks = ydoc.getArray<BlockYMap>('sourceBlocks'); // observeDeep -> bump a version
+  const translationCache = useMap('notesTranslationCache');      // observe   -> bump a version
+  const blocks = /* yMapToBlock + sort by position */;
+  const translations = /* Y.Map -> plain Map */;
+  return <BilingualBlockViewer blocks={blocks} translations={translations} language={language} />;
 }
 ```
 
@@ -519,7 +653,7 @@ function TranslatedTextViewerContainer({ language }: ContainerProps) {
 
 **Examples**:
 - [useTTS.test.ts](src/useTTS.test.ts) - Low-level hook tests (race conditions, callbacks, error handling)
-- [TranslatedTextViewer.test.tsx](src/TranslatedTextViewer.test.tsx) - Component tests (playhead, auto-play, user interactions)
+- [BilingualBlockViewer.test.tsx](src/BilingualBlockViewer.test.tsx) - Component tests (playhead, auto-play, user interactions)
 - [blockTypes.test.ts](src/blockTypes.test.ts) - Pure utility function tests
 
 **Test Infrastructure**:

@@ -168,7 +168,7 @@ def service_version_info(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]
 
 def make_status_announcer(
     version_info: Optional[Dict[str, Any]] = None,
-) -> Callable[[Doc], None]:
+) -> Callable[[Doc, str], None]:
     """Build the runtime's per-session announcement into the shared `status` map (#72/#73).
 
     The version is resolved once, at startup: the launch wrapper's fetch is what makes
@@ -181,10 +181,14 @@ def make_status_announcer(
     info = service_version_info() if version_info is None else version_info
     started_at = datetime.now(timezone.utc).isoformat()
 
-    def announce(doc: Doc) -> None:
+    def announce(doc: Doc, doc_id: str) -> None:
         entry = {
             **info,
             'role': 'proclaim-service',
+            # The doc this service is actually writing to. #111 was invisible because
+            # nothing anyone could see said this; now it is in the status map the /status
+            # screen reads, next to the doc that screen itself is on.
+            'docId': doc_id,
             'clientId': doc.client_id,
             'host': socket.gethostname(),
             'startedAt': started_at,
@@ -342,8 +346,9 @@ async def main():
     parser.add_argument(
         'doc_id',
         nargs='?',
-        help="Document ID override. Default: doc-YYYY-MM-DD from the on-air show's "
-             "DateGiven (falling back to today's date).",
+        help="Document ID override. Overrides the server's answer entirely — use it to "
+             "target a throwaway doc, or when the server is wrong. Default: ask the server "
+             "which session is current (issue #111).",
     )
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     parser.add_argument(

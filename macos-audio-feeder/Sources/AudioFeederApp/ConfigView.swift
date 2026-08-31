@@ -7,13 +7,14 @@ struct ConfigView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var launchAtLogin = LoginItem.isEnabled
 
-    private let weekdaySymbols = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] // index 0 => weekday 1
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Audio Feeder Settings").font(.headline).padding()
             Divider()
             Form {
+                // Recent macOS draws form text fields without a visible bezel, so a field
+                // holding a value looks exactly like a label holding a value — nothing says
+                // "you can type here". `.roundedBorder` puts the box back.
                 Section("Server") {
                     TextField("Server URL", text: $controller.config.serverURL)
                     TextField("Doc id (blank = today's doc-YYYY-MM-DD)",
@@ -52,8 +53,23 @@ struct ConfigView: View {
                     weekdayPicker
                     MinuteField(label: "Start", minute: $controller.config.schedule.startMinute)
                     MinuteField(label: "Stop", minute: $controller.config.schedule.stopMinute)
-                    Text("Manual override always wins over the schedule.")
+                    // The one line that says what the settings above actually add up to,
+                    // including the ways a full week of buttons still never runs.
+                    Label(controller.config.schedule.summary,
+                          systemImage: controller.config.schedule.willEverRun
+                              ? "calendar.badge.clock" : "calendar.badge.exclamationmark")
+                        .font(.caption)
+                        .foregroundStyle(controller.config.schedule.willEverRun ? Color.secondary : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Says which of the two places is in charge, in the place the other one
+                    // isn't. This is the durable switch; the menu bar only nudges one run.
+                    Text("""
+                         This is the only thing that starts the feeder on its own. The menu \
+                         bar's Start now / Stop now only shift the current run; it follows \
+                         the schedule again afterwards.
+                         """)
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Section("Service") {
@@ -66,6 +82,7 @@ struct ConfigView: View {
                 }
             }
             .formStyle(.grouped)
+            .textFieldStyle(.roundedBorder)
 
             Divider()
             HStack {
@@ -87,21 +104,88 @@ struct ConfigView: View {
     }
 
     private var weekdayPicker: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<7, id: \.self) { idx in
-                let weekday = idx + 1
-                let on = controller.config.schedule.days.contains(weekday)
-                Button(weekdaySymbols[idx]) {
-                    if on { controller.config.schedule.days.remove(weekday) }
-                    else { controller.config.schedule.days.insert(weekday) }
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Days the schedule starts on")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                ForEach(1...7, id: \.self) { weekday in
+                    WeekdayButton(weekday: weekday,
+                                  isOn: controller.config.schedule.days.contains(weekday)) {
+                        toggleDay(weekday)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .tint(on ? .accentColor : .gray)
-                .font(.caption)
             }
         }
     }
 
+    private func toggleDay(_ weekday: Int) {
+        if controller.config.schedule.days.contains(weekday) {
+            controller.config.schedule.days.remove(weekday)
+        } else {
+            controller.config.schedule.days.insert(weekday)
+        }
+    }
+}
+
+/// One day in the weekday row: a checkbox that happens to be shaped like a chip.
+///
+/// It draws its own selected/unselected appearance instead of leaning on
+/// `.buttonStyle(.bordered).tint(...)`, which was the previous approach and showed **no
+/// visible change at all** on some macOS versions — AppKit's bordered push button honours a
+/// tint only on newer systems, so on the tech booth Mac every day looked identically
+/// unselected and there was no way to tell what you had picked. A filled shape and a
+/// checkmark are drawn by us, so they look the same on every system we deploy to.
+///
+/// Selection is signalled three ways on purpose — fill, checkmark, and weight — because
+/// colour alone is exactly what failed, and it is also the thing a colour-blind operator or
+/// a washed-out projector-lit screen can't rely on.
+private struct WeekdayButton: View {
+    /// `Calendar` weekday: 1 = Sunday ... 7 = Saturday.
+    let weekday: Int
+    let isOn: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            VStack(spacing: 1) {
+                Text(Schedule.weekdaySymbol(weekday))
+                    .font(.caption.weight(isOn ? .semibold : .regular))
+                Image(systemName: isOn ? "checkmark" : "minus")
+                    .font(.system(size: 8, weight: .bold))
+                    .opacity(isOn ? 1 : 0.45)
+            }
+            .foregroundStyle(isOn ? Color.white : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(isOn ? Color.accentColor : Color.secondary.opacity(0.45),
+                                  lineWidth: 1)
+            )
+            // The whole chip is the hit target, not just the glyphs inside it.
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .accessibilityLabel(name)
+        .accessibilityValue(stateText)
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
+    }
+
+    // Spelled out as `String`s rather than inline ternaries so the `help`/`accessibility*`
+    // overloads have one obvious argument type to resolve against.
+    private var name: String { Schedule.weekdayName(weekday) }
+
+    private var stateText: String { isOn ? "Scheduled" : "Skipped" }
+
+    private var helpText: String {
+        isOn ? "\(name): the schedule starts the feeder this day. Click to skip it."
+             : "\(name): the schedule skips this day. Click to run it."
+    }
 }
 
 /// An `HH:mm` text field over a minutes-since-midnight value.
