@@ -3,16 +3,16 @@ name = "live-notes"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "aiohttp>=3.13.2",
+    "aiohttp>=3.14.3",
     "httpx-ws>=0.8.2",
-    "lxml>=6.0.2",
+    "lxml>=6.1.0",
     "opentelemetry-api>=1.41.1",
     "opentelemetry-exporter-otlp>=1.41.1",
     "opentelemetry-sdk>=1.41.1",
     "posthog>=7.13.1",
     "pycrdt>=0.12.43",
     "pycrdt-websocket>=0.16.0",
-    "requests>=2.32.5",
+    "requests>=2.33.0",
 ]
 
 [dependency-groups]
