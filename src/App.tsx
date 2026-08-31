@@ -194,8 +194,6 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
 
   const langDisplayNames = new Intl.DisplayNames([locale], { type: 'language' });
 
-  const fontSizeControls = <FontSizeControls />;
-
   const languageSelector = (prefix: string, language: string) => (
     <select
       className="ml-2 px-1 py-0.5 rounded text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700"
@@ -294,7 +292,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
             <>
               <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.translation}</h2>
               {languageSelector('translatedText', validLanguage)}
-              {fontSizeControls}
+              <FontSizeControls />
             </>
           }
         />
@@ -313,7 +311,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
         <div className="flex items-center">
           <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.listenLive}</h2>
           {listenLanguageSelector(validLanguage)}
-          {fontSizeControls}
+          <FontSizeControls />
         </div>
         <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-gray-400">{s.connecting}</div>}>
           <ListenViewer key={validLanguage} language={validLanguage} />
@@ -345,7 +343,7 @@ function PagePart({ componentStr, onReplace }: { componentStr: string; onReplace
             <>
               <h2 className="font-semibold text-xs text-gray-500 dark:text-gray-300 leading-tight mb-0">{s.bilingual}</h2>
               {languageSelector('bilingual', validLanguage)}
-              {fontSizeControls}
+              <FontSizeControls />
             </>
           }
         />
