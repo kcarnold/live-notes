@@ -206,7 +206,10 @@ describe("reconcileOrganizerAudio", () => {
   class FakePublication implements AudioPublicationLike {
     subscribed = false;
     setSubscribedCalls = 0;
-    constructor(readonly kind: string = "audio") {}
+    readonly kind: string;
+    constructor(kind: string = "audio") {
+      this.kind = kind;
+    }
     setSubscribed(subscribed: boolean): void {
       this.setSubscribedCalls++;
       this.subscribed = subscribed;
@@ -215,7 +218,10 @@ describe("reconcileOrganizerAudio", () => {
 
   class FakeParticipant implements AudioParticipantLike {
     readonly trackPublications = new Map<string, FakePublication>();
-    constructor(readonly identity: string) {}
+    readonly identity: string;
+    constructor(identity: string) {
+      this.identity = identity;
+    }
     publish(pub: FakePublication): this {
       this.trackPublications.set(String(this.trackPublications.size), pub);
       return this;

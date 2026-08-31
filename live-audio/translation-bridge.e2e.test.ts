@@ -96,7 +96,10 @@ class FakeRemoteTrack {
  */
 class FakeReader {
   private cancelled = false;
-  constructor(private readonly track: FakeRemoteTrack) {}
+  private readonly track: FakeRemoteTrack;
+  constructor(track: FakeRemoteTrack) {
+    this.track = track;
+  }
 
   async read(): Promise<IteratorResult<FakeAudioFrame>> {
     if (this.cancelled) return { done: true, value: undefined as never };
@@ -112,17 +115,28 @@ class FakeReader {
 }
 
 class FakeAudioFrame {
+  data: Int16Array;
+  sampleRate: number;
+  channels: number;
+  samplesPerChannel: number;
   constructor(
-    public data: Int16Array = new Int16Array(1600),
-    public sampleRate = 16000,
-    public channels = 1,
-    public samplesPerChannel = 1600
-  ) {}
+    data: Int16Array = new Int16Array(1600),
+    sampleRate = 16000,
+    channels = 1,
+    samplesPerChannel = 1600
+  ) {
+    this.data = data;
+    this.sampleRate = sampleRate;
+    this.channels = channels;
+    this.samplesPerChannel = samplesPerChannel;
+  }
 }
 
 /** `new AudioStream(track)` in the bridge resolves to a reader over that track. */
 class FakeAudioStream {
-  constructor(private readonly track: FakeRemoteTrack) {
+  private readonly track: FakeRemoteTrack;
+  constructor(track: FakeRemoteTrack) {
+    this.track = track;
     track.streamsOpened++;
   }
   getReader(): FakeReader {
@@ -135,13 +149,24 @@ class FakePublication {
   // undefined by default, like the SDK's `muted?: boolean` — the bridge must treat
   // unknown as live, so only an explicit `true` reads as a muted mic.
   muted: boolean | undefined = undefined;
+  readonly track: FakeRemoteTrack;
+  readonly participant: FakeParticipant;
+  readonly room: FakeRoom;
+  readonly kind: number;
+  readonly sid: string;
   constructor(
-    readonly track: FakeRemoteTrack,
-    readonly participant: FakeParticipant,
-    readonly room: FakeRoom,
-    readonly kind: number = TrackKind.KIND_AUDIO,
-    readonly sid = "TR_fake"
-  ) {}
+    track: FakeRemoteTrack,
+    participant: FakeParticipant,
+    room: FakeRoom,
+    kind: number = TrackKind.KIND_AUDIO,
+    sid = "TR_fake"
+  ) {
+    this.track = track;
+    this.participant = participant;
+    this.room = room;
+    this.kind = kind;
+    this.sid = sid;
+  }
 
   // The real SDK delivers TrackSubscribed after a server round-trip, never inline.
   setSubscribed(subscribed: boolean): void {
@@ -155,7 +180,10 @@ class FakePublication {
 
 class FakeParticipant {
   readonly trackPublications = new Map<string, FakePublication>();
-  constructor(readonly identity: string) {}
+  readonly identity: string;
+  constructor(identity: string) {
+    this.identity = identity;
+  }
   publish(pub: FakePublication): FakePublication {
     this.trackPublications.set(String(this.trackPublications.size), pub);
     return pub;
@@ -319,10 +347,14 @@ class FakeRoom extends EventEmitter {
 }
 
 class FakeAudioSource {
-  constructor(
-    readonly sampleRate: number,
-    readonly channels: number
-  ) {}
+  readonly sampleRate: number;
+  readonly channels: number;
+
+  constructor(sampleRate: number, channels: number) {
+    this.sampleRate = sampleRate;
+    this.channels = channels;
+  }
+
   async captureFrame(): Promise<void> {}
 }
 
@@ -368,8 +400,10 @@ class FakeGeminiSocket extends EventEmitter {
   /** Setup messages this socket was handed, so tests can assert what we asked Gemini for. */
   readonly setups: Record<string, unknown>[] = [];
 
-  constructor(readonly url: string) {
+  readonly url: string;
+  constructor(url: string) {
     super();
+    this.url = url;
     FakeGeminiSocket.instances.push(this);
     setTimeout(() => this.emit("open"), 0);
   }

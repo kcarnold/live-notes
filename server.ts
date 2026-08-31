@@ -621,7 +621,7 @@ app.post('/api/translateItem', requireWriteKey('/api/translateItem'), async (req
   // screen can find it by itemId), else a content hash for ad-hoc pastes.
   const itemId = (req.body?.itemId as string | undefined)?.trim();
   // The per-day doc the conversation belongs to (where the browser reads it live).
-  let docId = (req.body?.docId as string | undefined)?.trim();
+  const docId = (req.body?.docId as string | undefined)?.trim();
   if (!Array.isArray(slides) || requestedLanguages.length === 0) {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
   }

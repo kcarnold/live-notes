@@ -174,13 +174,19 @@ class FakeBridge {
   status: BridgeStatus = "starting";
   subscriberCount = 0;
   readonly identity: string;
+  readonly sessionId: string;
+  readonly targetLanguage: string;
+  // Captured so tests can assert what the manager *told* the bridge — which language
+  // the room is spoken in, and which single bridge writes that transcript.
+  readonly config?: BridgeConfig;
   constructor(
-    readonly sessionId: string,
-    readonly targetLanguage: string,
-    // Captured so tests can assert what the manager *told* the bridge — which language
-    // the room is spoken in, and which single bridge writes that transcript.
-    readonly config?: BridgeConfig
+    sessionId: string,
+    targetLanguage: string,
+    config?: BridgeConfig
   ) {
+    this.sessionId = sessionId;
+    this.targetLanguage = targetLanguage;
+    this.config = config;
     this.identity = `translator-${targetLanguage}`;
   }
   async start(): Promise<void> {
