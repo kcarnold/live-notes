@@ -22,6 +22,7 @@ import { useYDoc } from "@y-sweet/react";
 import { isEditorAtom } from "./configAtoms";
 import { useStrings, resolveLocale } from "./useLocale";
 import { LiveTranscript } from "./LiveTranscript";
+import { FontSizeControls } from "./FontSizeControls";
 import { LISTEN_LANGUAGE_CODES } from "./listenLanguages";
 import { writeSourceLanguage } from "./liveAudioConfig";
 import { useSourceLanguage } from "./useSourceLanguage";
@@ -121,11 +122,14 @@ function BroadcastDashboard({
         </span>
       </div>
       <MicLevelMeter />
-      <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
-        {s.sourceTranscript} ·{" "}
-        {new Intl.DisplayNames([locale], { type: "language" }).of(sourceLanguage) ??
-          sourceLanguage}
-      </h3>
+      <div className="flex items-center">
+        <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
+          {s.sourceTranscript} ·{" "}
+          {new Intl.DisplayNames([locale], { type: "language" }).of(sourceLanguage) ??
+            sourceLanguage}
+        </h3>
+        <FontSizeControls />
+      </div>
       {/* The primary bridge transcribes the speaker's own audio under the language
           they declared below, so this is a direct read-back of what's being captured —
           and the fastest way to notice a wrong declaration. */}
