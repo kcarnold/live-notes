@@ -32,6 +32,9 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
   live-translation subsystem (client + server state machines, edge-case catalog), a proposed
   supervisor/reconciler architecture, and the hot-fix ladder to apply before it.
 - [slide-translations-plan.md](slide-translations-plan.md) — slide translation agent design.
+- [LANDING_PAGE.md](LANDING_PAGE.md) — landing-page redesign brief (proposal): what a
+  first-time attendee hits today, the one-question reframe, the per-deployment config set,
+  and the capability model that decides which language card goes where.
 - Replay harness design: [#70](https://github.com/kcarnold/live-notes/issues/70) —
   record-at-the-boundary replay of full services for testing and accountability.
 
