@@ -11,8 +11,8 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 import { PostHog, setupExpressErrorHandler, setupExpressRequestContext } from 'posthog-node';
 
-import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider, emptyUsage, mergeUsage } from './nlp.ts';
-import type { TranslationTodo, TokenUsage, AgentObservability } from './nlp.ts';
+import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, synthesizeNotesTurn, GeminiProvider, emptyUsage, mergeUsage } from './nlp.ts';
+import type { TranslationTodo, TokenUsage, AgentObservability, OutlineSnapshotBlock } from './nlp.ts';
 import { BIBLE_TRANSLATIONS, type BibleToolCall } from './bible.ts';
 import { SlideLibrary } from './slideLibrary.ts';
 import { translateItem } from './src/slideItemTranslation.ts';
@@ -24,6 +24,7 @@ import {
   appendMessageTo,
   setStatusIn,
 } from './slideConversationStore.ts';
+import { NoteSynthSessionStore } from './noteSynthSessionStore.ts';
 import type { Content } from '@google/genai';
 import * as Y from 'yjs';
 import { buildSessionExport, renderSessionHtml, sessionExportFilename } from './sessionExport.ts';
@@ -127,6 +128,10 @@ console.log(
 // per-day Y-Sweet doc (so it survives restarts and streams live to the review screen); this
 // store manages the server's write connection to that doc.
 const slideConversations = new SlideConversationStore(documentManager);
+
+// Per-session live note-synthesis conversations (in-memory, ephemeral). One continuous
+// conversation per talk turns the transcript into proposed outline blocks.
+const noteSynthSessions = new NoteSynthSessionStore();
 
 /** Stable conversation key: the Proclaim itemId when present, else a content hash. */
 function conversationKey(itemId: string | undefined, slides: string[]): string {
@@ -579,6 +584,40 @@ app.post('/api/requestTranslatedBlocks', requireWriteKey('/api/requestTranslated
     ok: true,
     results
   });
+});
+
+// One turn of live note-outline synthesis. The editor tab posts the new transcript slice and
+// the current outline; we append to that session's continuous conversation and return the
+// blocks the model proposes (possibly none) for the browser to write into Yjs as `proposed`.
+// Pass `reset: true` to start a fresh conversation (e.g. when the editor (re)starts synthesis).
+app.post('/api/synthesizeNotes', async (req, res) => {
+  const sessionId = (req.body?.sessionId as string | undefined)?.trim();
+  const newTranscript = (req.body?.newTranscript as string | undefined) ?? '';
+  const outline = (req.body?.outline as OutlineSnapshotBlock[]) ?? [];
+  const reset = req.body?.reset === true;
+  if (!sessionId) {
+    return res.status(400).json({ ok: false, error: 'Missing sessionId' });
+  }
+  if (reset) noteSynthSessions.reset(sessionId);
+  // Nothing new to summarize (e.g. a reset-only ping): don't spend a model call.
+  if (newTranscript.trim() === '') {
+    return res.json({ ok: true, blocks: [] });
+  }
+
+  try {
+    const messages = noteSynthSessions.ensure(sessionId);
+    const result = await synthesizeNotesTurn(geminiProvider, {
+      messages, // mutated in place
+      newTranscript,
+      outline,
+    });
+    noteSynthSessions.touch(sessionId);
+    return res.json({ ok: true, blocks: result.blocks });
+  } catch (err) {
+    console.error('synthesizeNotes failed:', err);
+    if (err instanceof Error) phClient.captureException(err);
+    return res.status(500).json({ ok: false, error: 'Note synthesis failed' });
+  }
 });
 
 // --- Slide translation library (persistent reviewed tier) ---

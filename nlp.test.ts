@@ -4,11 +4,14 @@ import {
   draftItemTranslations,
   buildSeedConversationPrompt,
   runSlideTranslationAgent,
+  parseProposedBlocks,
+  synthesizeNotesTurn,
   GeminiProvider,
   emptyUsage,
   addUsage,
   mergeUsage,
 } from './nlp.ts';
+import type { OutlineSnapshotBlock } from './nlp.ts';
 
 /**
  * A provider whose model calls `set_translations` with the given args, then ends its turn.
@@ -524,5 +527,94 @@ describe('buildSeedConversationPrompt', () => {
     expect(prompt).toContain('<translations language="French">');
     expect(prompt).toContain('<slide id="0">\nSainte nuit\nNuit paisible\n</slide>');
     expect(prompt).not.toContain('\\n');
+  });
+});
+
+/** A provider whose model returns the given JSON text as its structured response. */
+function fakeJsonProvider(text: string): {
+  provider: GeminiProvider;
+  generateContent: ReturnType<typeof vi.fn>;
+} {
+  const generateContent = vi.fn().mockResolvedValue({
+    text,
+    candidates: [{ content: { role: 'model', parts: [{ text }] } }],
+  });
+  const provider = {
+    apiClient: { models: { generateContent } },
+    defaultModel: 'fake-model',
+    maxTokens: 1000,
+  } as unknown as GeminiProvider;
+  return { provider, generateContent };
+}
+
+describe('parseProposedBlocks', () => {
+  it('parses well-formed blocks and clamps level', () => {
+    const blocks = parseProposedBlocks(
+      JSON.stringify({ blocks: [{ type: 'heading', level: 9, content: 'Intro' }, { type: 'bullet', level: 1, content: 'A point' }] })
+    );
+    expect(blocks).toEqual([
+      { type: 'heading', level: 5, content: 'Intro' },
+      { type: 'bullet', level: 1, content: 'A point' },
+    ]);
+  });
+
+  it('returns an empty array for an empty proposal (quiet turn)', () => {
+    expect(parseProposedBlocks(JSON.stringify({ blocks: [] }))).toEqual([]);
+  });
+
+  it('is tolerant of bad JSON and missing fields', () => {
+    expect(parseProposedBlocks('not json')).toEqual([]);
+    expect(parseProposedBlocks(undefined)).toEqual([]);
+    expect(parseProposedBlocks(JSON.stringify({ blocks: [{ level: 0, content: '' }, { content: 'x' }] })))
+      .toEqual([{ type: 'bullet', level: 0, content: 'x' }]); // empty dropped, missing type -> bullet
+  });
+});
+
+describe('synthesizeNotesTurn', () => {
+  const outline: OutlineSnapshotBlock[] = [
+    { type: 'heading', level: 0, content: 'Welcome', status: 'confirmed' },
+  ];
+
+  it('prepends standing instructions on the first turn and returns parsed blocks', async () => {
+    const { provider, generateContent } = fakeJsonProvider(
+      JSON.stringify({ blocks: [{ type: 'bullet', level: 0, content: 'New idea' }] })
+    );
+    const messages: never[] = [];
+    const result = await synthesizeNotesTurn(provider, {
+      messages,
+      newTranscript: 'The speaker introduces a new idea.',
+      outline,
+    });
+
+    expect(result.blocks).toEqual([{ type: 'bullet', level: 0, content: 'New idea' }]);
+    // First user turn carries the instructions, the outline, and the transcript.
+    const firstUserText = generateContent.mock.calls[0][0].contents[0].parts[0].text as string;
+    expect(firstUserText).toContain('live outline of a talk');
+    expect(firstUserText).toContain('[CONFIRMED]');
+    expect(firstUserText).toContain('new idea');
+    // History grows: user turn + model turn kept verbatim.
+    expect(result.messages.map((m) => m.role)).toEqual(['user', 'model']);
+  });
+
+  it('omits instructions on later turns and can propose nothing', async () => {
+    const { provider, generateContent } = fakeJsonProvider(JSON.stringify({ blocks: [] }));
+    // A continuing conversation already has history.
+    const messages = [
+      { role: 'user', parts: [{ text: 'earlier' }] },
+      { role: 'model', parts: [{ text: '{"blocks":[]}' }] },
+    ];
+    const result = await synthesizeNotesTurn(provider, {
+      messages,
+      newTranscript: 'um, so, yeah',
+      outline,
+    });
+
+    expect(result.blocks).toEqual([]);
+    expect(generateContent).toHaveBeenCalledTimes(1);
+    // The turn we appended is the last user message (a model turn is added after the call).
+    const userTurns = result.messages.filter((m) => m.role === 'user');
+    const laterUserText = userTurns.at(-1)?.parts?.[0].text as string;
+    expect(laterUserText).not.toContain('live outline of a talk');
+    expect(laterUserText).toContain('<transcript>');
   });
 });

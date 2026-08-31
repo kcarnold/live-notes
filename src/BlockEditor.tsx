@@ -41,6 +41,8 @@ interface BlockItemProps {
   onMoveBlock: (blockId: string, direction: 'up' | 'down') => void;
   onIndent: (blockId: string) => void;
   onDedent: (blockId: string) => void;
+  onAcceptBlock: (blockId: string) => void;
+  onRejectBlock: (blockId: string) => void;
 }
 
 const BlockItem = memo(function BlockItem({
@@ -57,6 +59,8 @@ const BlockItem = memo(function BlockItem({
   onMoveBlock,
   onIndent,
   onDedent,
+  onAcceptBlock,
+  onRejectBlock,
 }: BlockItemProps) {
   const [version, setVersion] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -114,9 +118,16 @@ const BlockItem = memo(function BlockItem({
     ? '#'.repeat(block.level + 2) + ' '
     : '- ';
 
+  // Unaccepted AI suggestion: render dimmed with an amber rail and accept/reject controls.
+  const isProposed = block.status === 'proposed';
+
   return (
     <div
-      className="flex items-start gap-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-900 text-gray-900 dark:text-gray-100"
+      className={`flex items-start gap-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-900 text-gray-900 dark:text-gray-100 ${
+        isProposed
+          ? 'border-l-2 border-amber-400 bg-amber-50/40 dark:bg-amber-900/10 opacity-90'
+          : 'border-l-2 border-transparent'
+      }`}
       style={{ paddingLeft: `${indentPadding}px` }}
     >
 
@@ -169,6 +180,30 @@ const BlockItem = memo(function BlockItem({
           </div>
         )}
       </div>
+      {/* Review controls for AI proposals - shown whenever a proposal is present */}
+      {editable && isProposed && (
+        <div
+          className="flex gap-0 pt-1 flex-shrink-0"
+          onMouseDown={(e) => e.preventDefault()} // Prevent blur when clicking
+        >
+          <button
+            type="button"
+            onClick={() => onAcceptBlock(blockId)}
+            className="px-1 text-xs border rounded text-green-700 border-green-400 hover:bg-green-50 dark:text-green-300"
+            title="Accept suggestion"
+          >
+            ✓
+          </button>
+          <button
+            type="button"
+            onClick={() => onRejectBlock(blockId)}
+            className="px-1 text-xs border rounded text-red-700 border-red-400 hover:bg-red-50 dark:text-red-300"
+            title="Reject suggestion"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Operation buttons - only shown when focused */}
       {SHOW_BUTTONS && editable && isFocused && (
         <div
@@ -425,6 +460,27 @@ export function BlockEditor({ yArray, onTextChanged, onBlocksChanged, editable =
     [yArray, updateBlock]
   );
 
+  // Accept an AI proposal: flip it to a confirmed block in place (identity/position kept),
+  // so it flows into translation and the viewers.
+  const acceptBlock = useCallback(
+    (blockId: string) => {
+      updateBlock(blockId, { status: 'confirmed' });
+    },
+    [updateBlock]
+  );
+
+  // Reject an AI proposal: remove it outright. Unlike deleteBlock, this may remove the last
+  // block (a lone proposal) — the empty-editor affordance handles that case.
+  const rejectBlock = useCallback(
+    (blockId: string) => {
+      const arrayIndex = yArray.toArray().findIndex((yMap) => yMap.get('id') === blockId);
+      if (arrayIndex !== -1) {
+        yArray.delete(arrayIndex, 1);
+      }
+    },
+    [yArray]
+  );
+
   const handleClickEmptyArea = useCallback(() => {
     if (!editable) return;
 
@@ -582,6 +638,8 @@ export function BlockEditor({ yArray, onTextChanged, onBlocksChanged, editable =
               onMoveBlock={moveBlock}
               onIndent={indent}
               onDedent={dedent}
+              onAcceptBlock={acceptBlock}
+              onRejectBlock={rejectBlock}
             />
           ))}
           {editable && (

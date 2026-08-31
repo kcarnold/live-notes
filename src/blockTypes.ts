@@ -5,12 +5,27 @@ import { generateKeyBetween } from 'fractional-indexing';
 
 export type BlockType = 'heading' | 'bullet';
 
+// Review state of a block. `confirmed` blocks are part of the real outline (they feed
+// translation and the read-only/listener viewers). `proposed` blocks are AI suggestions
+// awaiting the editor's review — they render only in the editor and never leak to the
+// audience/translator until accepted (status flipped to `confirmed`).
+export type BlockStatus = 'confirmed' | 'proposed';
+
+// Provenance, for styling and as a signal to the note synthesizer. Legacy blocks and
+// anything a human types default to `human`; AI proposals are `ai`.
+export type BlockOrigin = 'human' | 'ai';
+
+export const DEFAULT_BLOCK_STATUS: BlockStatus = 'confirmed';
+export const DEFAULT_BLOCK_ORIGIN: BlockOrigin = 'human';
+
 export interface Block {
   id: string;
   content: string; // For rendering; actual storage is Y.Text in the Y.Map
   type: BlockType;
   level: number; // 0-5 for indentation
   position: string; // Fractional index for stable ordering
+  status: BlockStatus;
+  origin: BlockOrigin;
 }
 
 // The Y.Map backing a block holds a mix of these value types (id/type/position
@@ -26,9 +41,11 @@ export function createBlock(
   content = '',
   type: BlockType = 'bullet',
   level = 0,
-  position: string
+  position: string,
+  status: BlockStatus = DEFAULT_BLOCK_STATUS,
+  origin: BlockOrigin = DEFAULT_BLOCK_ORIGIN
 ): Block {
-  if (!position) { 
+  if (!position) {
     throw new Error('Position is required to create a block');
   }
   return {
@@ -37,6 +54,8 @@ export function createBlock(
     type,
     level: Math.min(Math.max(0, level), MAX_INDENT_LEVEL),
     position,
+    status,
+    origin,
   };
 }
 
@@ -58,6 +77,10 @@ export function yMapToBlock(yMap: BlockYMap): Block {
   const type = yMap.get('type') as BlockType | undefined;
   const level = yMap.get('level') as number | undefined;
   const position = yMap.get('position') as string | undefined;
+  // status/origin are newer fields; blocks written before they existed (and every
+  // human-authored block) default to confirmed/human, preserving legacy behavior.
+  const status = yMap.get('status') as BlockStatus | undefined;
+  const origin = yMap.get('origin') as BlockOrigin | undefined;
 
   if (!id || !type || level === undefined || !position) {
     console.warn('yMapToBlock: Missing required fields in Y.Map', {
@@ -75,6 +98,8 @@ export function yMapToBlock(yMap: BlockYMap): Block {
     type: type || 'bullet',
     level: level ?? 0,
     position: position || getPosition(null, null),
+    status: status ?? DEFAULT_BLOCK_STATUS,
+    origin: origin ?? DEFAULT_BLOCK_ORIGIN,
   };
 }
 
@@ -118,6 +143,8 @@ export function updateYMap(yMap: BlockYMap, block: Partial<Block>): void {
       yMap.set('level', Math.min(Math.max(0, block.level), MAX_INDENT_LEVEL));
     }
     if (block.position !== undefined) yMap.set('position', block.position);
+    if (block.status !== undefined) yMap.set('status', block.status);
+    if (block.origin !== undefined) yMap.set('origin', block.origin);
   };
 
   // Wrap all updates in a transaction if attached to a document
@@ -147,13 +174,25 @@ export function addBlockToYArray(yArray: Y.Array<BlockYMap>, block: Block): void
   }
 }
 
+/** Whether a block is an unaccepted AI proposal. */
+export function isProposed(block: Pick<Block, 'status'>): boolean {
+  return block.status === 'proposed';
+}
+
 /**
- * Serialize blocks to markdown string
- * Skips empty blocks (blocks with no content)
+ * Serialize blocks to markdown string.
+ * Skips empty blocks (blocks with no content). By default also skips `proposed`
+ * (unaccepted AI) blocks so proposals never leak into translation source or any
+ * markdown shown to the audience — pass `{ includeProposed: true }` for contexts
+ * (like the note synthesizer) that want the full outline.
  */
-export function serializeBlocksToMarkdown(blocks: Block[]): string {
+export function serializeBlocksToMarkdown(
+  blocks: Block[],
+  { includeProposed = false }: { includeProposed?: boolean } = {}
+): string {
   return blocks
     .filter((block) => block.content.trim() !== '')
+    .filter((block) => includeProposed || !isProposed(block))
     .map((block) => {
       if (block.type === 'heading') {
         // Headings use level for number of #'s (level 0 = ##, level 1 = ###, etc.)
