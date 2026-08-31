@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Howl } from 'howler';
+import type { Howl } from 'howler';
 import { apiFetch } from './writeKey.ts';
 
 /**
@@ -118,13 +118,16 @@ export function useTTS(options: UseTTSOptions = {}): UseTTSResult {
 
     // Fetch and play audio
     fetchAudio(text, language)
-      .then((audioUrl) => {
+      .then(async (audioUrl) => {
         // Check if this request is still current (not cancelled/superseded)
         if (currentRequestRef.current !== request) {
           return;
         }
 
-        // Create and play audio using Howler (better iOS support)
+        // Create and play audio using Howler (better iOS support).
+        // Howler is lazy-loaded so it stays out of the main bundle until
+        // the first time audio is actually played.
+        const { Howl } = await import('howler');
         const audio = new Howl({
           src: [audioUrl],
           html5: true, // Use HTML5 Audio for streaming
