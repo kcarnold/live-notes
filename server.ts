@@ -170,14 +170,6 @@ function recordBibleLookup(call: BibleToolCall, conversationId: string, docId: s
   });
 }
 
-// !!! TEMPORARY BACK-COMPAT SHIM — DELETE ME (see /api/translateItem) !!!
-// Mirrors the frontend's getDocId() default (`doc-YYYY-MM-DD`, local date) so a
-// Proclaim client too old to send `docId` still targets the right per-day doc.
-function currentDayDocId(): string {
-  const d = new Date();
-  const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return `doc-${ymd}`;
-}
 
 // ---------------------------------------------------------------------------
 // Write authorization (shared keys, not user logins — see writeAuth.ts).
@@ -633,24 +625,8 @@ app.post('/api/translateItem', requireWriteKey('/api/translateItem'), async (req
   if (!Array.isArray(slides) || requestedLanguages.length === 0) {
     return res.status(400).json({ ok: false, error: 'Missing slides or languages' });
   }
-  // ===========================================================================
-  // !!!  TEMPORARY BACK-COMPAT SHIM — DELETE ME  !!!
-  // ---------------------------------------------------------------------------
-  // A Proclaim client pinned to pre-#64 code (Jul 2026) doesn't send `docId`.
-  // Rather than 400 that client's slide-translation calls, default to the
-  // current-day doc so it keeps seeding translations. The translations flow
-  // back in the HTTP response regardless; only the server-written conversation
-  // map lands in this defaulted doc, which nobody watches for that old client.
-  //
-  // This exists ONLY to bridge one un-updatable client. Once every Proclaim
-  // client is on code that sends `docId`, RESTORE the hard 400 below and remove
-  // this block + `currentDayDocId()`:
-  //     if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
-  // ===========================================================================
-  if (!docId) {
-    docId = currentDayDocId();
-    console.warn(`[translateItem] TEMPORARY SHIM: missing docId, defaulting to ${docId}. DELETE ME once all Proclaim clients send docId.`);
-  }
+  
+  if (!docId) return res.status(400).json({ ok: false, error: 'Missing docId' });
 
   // Stable conversation id up front so it can tag the LLM trace (and any bible_lookup events)
   // as the agent runs — this is what makes a conversation's generations group in PostHog.
