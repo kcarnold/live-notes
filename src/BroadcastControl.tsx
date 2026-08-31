@@ -124,16 +124,12 @@ function BroadcastDashboard({
       <MicLevelMeter />
       <div className="flex items-center">
         <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
-          {s.englishTranscript}
+          {s.sourceTranscript} ·{" "}
+          {new Intl.DisplayNames([locale], { type: "language" }).of(sourceLanguage) ??
+            sourceLanguage}
         </h3>
         <FontSizeControls />
       </div>
-      <LiveTranscript langCode={SOURCE_TRANSCRIPT_CODE} />
-      <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-300">
-        {s.sourceTranscript} ·{" "}
-        {new Intl.DisplayNames([locale], { type: "language" }).of(sourceLanguage) ??
-          sourceLanguage}
-      </h3>
       {/* The primary bridge transcribes the speaker's own audio under the language
           they declared below, so this is a direct read-back of what's being captured —
           and the fastest way to notice a wrong declaration. */}
