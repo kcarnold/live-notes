@@ -660,6 +660,12 @@ function BilingualBlockViewerContainer({ language }: ContainerProps) {
 - Vitest for test runner
 - @testing-library/react for component testing
 - Global Audio mock in [test/setup.ts](src/test/setup.ts)
+- [serverBoot.test.ts](serverBoot.test.ts) is the one test that boots the *real*
+  [server.ts](server.ts), as a subprocess on a real socket: everything else assembles the
+  pieces it wants into a small express app, so nothing else would notice `server.ts` failing
+  at import (a new `getEnvOrCrash`, a bad top-level `await`) or middleware registered in the
+  wrong order. It runs hermetically — dummy credentials, `LIVEKIT_*` blanked so the live-audio
+  supervisor stays off, PostHog pointed at a dead port, state in a temp dir.
 
 ## LiveKit
 

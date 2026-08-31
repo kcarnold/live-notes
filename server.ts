@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import express from "express";
+import compression from "compression";
 import path from "path";
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
@@ -262,6 +263,13 @@ const translateRateLimit = makeCostLimiter(
 );
 
 const app = express();
+// Compress before anything is served: nothing in front of us does it (Fly's proxy passes
+// bodies through), and `express.static` never compresses on its own — so this has to stay
+// *above* the static middleware to have any effect on the bundle, which is the whole point.
+// The eager JS chunk is ~680 KB on the wire uncompressed and ~210 KB gzipped.
+// `compression` negotiates br > gzip > deflate from Accept-Encoding, and skips types that
+// are already compressed, so the cached mp3s under /audio-cache pass through untouched.
+app.use(compression());
 app.use(express.static("dist"));
 app.use(express.json());
 app.use('/audio-cache', express.static(AUDIO_CACHE_DIR));
