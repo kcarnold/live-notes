@@ -12,7 +12,12 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { WriteAuth, resolveWriteAuthConfig } from './writeAuth.ts';
-import { makeOrganizerGate, makeYsAuthHandler } from './writeAuthRoutes.ts';
+import {
+  livekitIdentity,
+  makeOrganizerGate,
+  makeYsAuthHandler,
+  parseLiveKitRole,
+} from './writeAuthRoutes.ts';
 
 const GOOD_KEY = '0123456789abcdef0123';
 const STALE_KEY = 'last-months-booth-key';
@@ -197,5 +202,50 @@ describe('/api/livekit/token organizer gate', () => {
 
     expect(result.status).toBe(200);
     expect(result.body.issued).toBe(true);
+  });
+});
+
+describe('LiveKit role parsing', () => {
+  it('defaults an absent role to attendee — the microphone is asked for by name', () => {
+    expect(parseLiveKitRole(undefined)).toBe('attendee');
+    expect(parseLiveKitRole(null)).toBe('attendee');
+  });
+
+  it('accepts exactly the two roles it issues', () => {
+    expect(parseLiveKitRole('organizer')).toBe('organizer');
+    expect(parseLiveKitRole('attendee')).toBe('attendee');
+  });
+
+  it('refuses anything else instead of coercing it to attendee', () => {
+    // Coercion was safe only because two files happened to compare against the same
+    // literal. Refusing means a future role can't be half-implemented into a trapdoor.
+    for (const raw of ['admin', 'translator', 'ORGANIZER', '', ['organizer'], { role: 'organizer' }, 7]) {
+      expect(parseLiveKitRole(raw)).toBeNull();
+    }
+  });
+});
+
+describe('LiveKit participant identity', () => {
+  it('gives the organizer the one seat the write key protects', () => {
+    expect(livekitIdentity('organizer', 'organizer-host')).toBe('organizer-host');
+  });
+
+  it('gives every listener a distinct seat nobody asked for', () => {
+    let n = 0;
+    const suffix = () => `id${++n}`;
+    expect(livekitIdentity('attendee', 'organizer-host', suffix)).toBe('attendee-id1');
+    expect(livekitIdentity('attendee', 'organizer-host', suffix)).toBe('attendee-id2');
+  });
+
+  it('never lets a listener land on a reserved seat', () => {
+    // The regression: an unauthenticated `{ role: 'attendee', identity: 'organizer-host' }`
+    // used to be issued verbatim, and LiveKit evicts the incumbent holder of an identity —
+    // so it silently cut off the live speaker. Identity is derived from the role now, so
+    // there is no input to this function that can reach a reserved prefix.
+    for (let i = 0; i < 200; i++) {
+      const identity = livekitIdentity('attendee', 'organizer-host');
+      expect(identity.startsWith('organizer-')).toBe(false);
+      expect(identity.startsWith('translator-')).toBe(false);
+    }
   });
 });

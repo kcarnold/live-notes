@@ -238,7 +238,8 @@ class SlideSyncRuntime:
         Returns normally on an expected end (sustained off air); raises on a connection
         problem so ``run`` reconnects with backoff.
         """
-        assert self.doc_id is not None, "doc must be resolved before connecting"
+        if self.doc_id is None:
+            raise ValueError("doc_id is not resolved; must be resolved before connecting")
         token_data = await self.get_ysweet_token()
         ws_url = token_data['url'] + '/' + self.doc_id
         logger.info(f"Connecting to Y-Sweet: {ws_url}")

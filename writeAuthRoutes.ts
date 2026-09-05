@@ -8,6 +8,7 @@
  * they regressed (an editor silently losing the ability to edit; a stranger taking the
  * microphone), so they need to be drivable against a bare express app.
  */
+import { randomUUID } from 'crypto';
 import type { RequestHandler } from 'express';
 import type { WriteAuth } from './writeAuth.ts';
 
@@ -71,19 +72,72 @@ export function makeYsAuthHandler({
 }
 
 /**
+ * The roles `/api/livekit/token` will issue. A closed set, and refused rather than
+ * coerced: an unrecognized role used to silently become an attendee, which was safe only
+ * because two separate files happened to compare against the same `'organizer'` literal.
+ * That is a coincidence to maintain by hand, not an invariant.
+ */
+export const LIVEKIT_ROLES = ['organizer', 'attendee'] as const;
+export type LiveKitRole = (typeof LIVEKIT_ROLES)[number];
+
+/**
+ * The role a request is asking for, or null if it named one we don't issue.
+ *
+ * An absent role is `attendee` — listeners are the default and the overwhelming majority,
+ * and the microphone is the thing you have to ask for by name.
+ */
+export function parseLiveKitRole(raw: unknown): LiveKitRole | null {
+  if (raw === undefined || raw === null) return 'attendee';
+  return (LIVEKIT_ROLES as readonly unknown[]).includes(raw) ? (raw as LiveKitRole) : null;
+}
+
+/**
+ * The participant identity to issue for `role`. **Never** the one the client asked for.
+ *
+ * LiveKit allows one participant per identity and resolves a collision by evicting the
+ * incumbent, so an identity is not a name — it is a claim on a seat in the room. Three
+ * seats matter here, and each of them used to be claimable by anyone who could reach the
+ * endpoint, with no key, because the gate above keys on `role` while the token carried
+ * whatever identity the body asked for:
+ *
+ *   - `organizer-host` — evicts the live broadcaster, and makes the translation
+ *     supervisor believe a broadcaster is present (it tests the `organizer-` prefix), so
+ *     it starts a paid Gemini bridge in an otherwise empty room.
+ *   - `translator-{code}` — evicts that language's translator bot.
+ *   - another listener's `attendee-…` — evicts that listener.
+ *
+ * Deriving it here closes all three at once, and makes `makeOrganizerGate` sufficient
+ * rather than approximately right: asking for `role: 'organizer'` becomes the only way to
+ * reach an organizer identity, so gating the role really is gating the microphone.
+ *
+ * The random suffix is injectable for tests only.
+ */
+export function livekitIdentity(
+  role: LiveKitRole,
+  organizerIdentity: string,
+  randomSuffix: () => string = randomUUID,
+): string {
+  return role === 'organizer' ? organizerIdentity : `attendee-${randomSuffix()}`;
+}
+
+/**
  * Gate the broadcaster's microphone, and only the microphone.
  *
  * An organizer token is the microphone. Its holder can speak into the room and — because
  * every broadcaster joins under the same `organizer-host` identity, which LiveKit
  * resolves by evicting the incumbent — can silently cut off whoever is currently
  * speaking. Listeners ask for no such thing and need no key.
+ *
+ * An unparseable role falls through to the route, which refuses it with a 400. This gate
+ * deliberately doesn't do that itself: it has one job, and a role it doesn't recognize is
+ * by definition not a request for the microphone.
  */
 export function makeOrganizerGate(
   writeAuth: WriteAuth,
   route = '/api/livekit/token',
 ): RequestHandler {
   return (req, res, next) => {
-    if ((req.body?.role as string | undefined) !== 'organizer') return next();
+    if (parseLiveKitRole(req.body?.role) !== 'organizer') return next();
     if (writeAuth.gate(req, res, route)) next();
   };
 }
