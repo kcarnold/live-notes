@@ -116,7 +116,9 @@ public struct Schedule: Codable, Equatable, Sendable {
 public struct FeederConfig: Codable, Equatable, Sendable {
     /// Base URL of the live-notes server that issues LiveKit tokens, e.g. `https://notelate.com`.
     public var serverURL: String
-    /// Optional explicit Y-Sweet/LiveKit doc id. When nil, defaults to `doc-YYYY-MM-DD` (local).
+    /// Optional explicit Y-Sweet/LiveKit doc id, the equivalent of a browser's `?doc=`.
+    /// When nil (or blank), the doc is *asked for* — `SessionClient`, `/api/session/current`.
+    /// This app does not compute a date; see the header comment on `SessionClient`.
     public var docIDOverride: String?
     /// Shared key authorizing this machine to take the microphone (server side: writeAuth.ts).
     /// Publishing evicts whoever is currently broadcasting, so the server gates it on a key.
@@ -148,15 +150,6 @@ public struct FeederConfig: Codable, Equatable, Sendable {
         self.deviceUID = deviceUID
         self.channelIndex = channelIndex
         self.schedule = schedule
-    }
-
-    /// The effective doc id / LiveKit room name for `now`, honoring an override.
-    public func resolvedDocID(now: Date = Date(), calendar: Calendar = .current) -> String {
-        if let override = docIDOverride, !override.trimmingCharacters(in: .whitespaces).isEmpty {
-            return override
-        }
-        let c = calendar.dateComponents([.year, .month, .day], from: now)
-        return String(format: "doc-%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
     /// Whether anything will start the feeder without a person clicking — the question that

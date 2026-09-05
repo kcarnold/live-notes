@@ -119,7 +119,8 @@ xcodebuild -project AudioFeeder.xcodeproj -scheme AudioFeederApp build
 ```
 
 The split is deliberate: `AudioFeederCore` holds pure, dependency-free logic (schedule
-decisions, config, level metering, channel extraction, the LiveKit token contract) so it is
+decisions, config, level metering, channel extraction, the LiveKit token contract, and the
+current-session contract — it asks the server which doc it is in, like everyone else) so it is
 covered by `swift test`; `AudioFeederApp` holds everything needing CoreAudio/LiveKit/SwiftUI.
 **Put new decision logic in the Core and test it there** — the app half has no test target.
 The `.xcodeproj` is generated from `project.yml` and not checked in; that YAML is the
