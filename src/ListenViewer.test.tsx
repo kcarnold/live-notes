@@ -6,6 +6,8 @@ import { ListenViewer } from "./ListenViewer";
 interface MockProps {
   children: React.ReactNode;
   className?: string;
+  onError?: (e: Error) => void;
+  onDisconnected?: () => void;
 }
 
 // Who useRemoteParticipants reports; tests set this before rendering.
@@ -16,6 +18,14 @@ const roomState = vi.hoisted(() => ({
 // What the session says the speaker is speaking. `en` is the historical default;
 // a test that wants a non-English talk sets this before rendering.
 const sessionState = vi.hoisted(() => ({ sourceLanguage: "en" }));
+
+// The room's failure callbacks, captured so a test can fire the drop it is modelling,
+// and a switch for making the token fetch fail the way a sleeping phone's does.
+const roomCallbacks = vi.hoisted(() => ({
+  onError: undefined as ((e: Error) => void) | undefined,
+  onDisconnected: undefined as (() => void) | undefined,
+}));
+const netState = vi.hoisted(() => ({ tokenFails: false }));
 
 vi.mock("./useSourceLanguage", () => ({
   useSourceLanguage: () => sessionState.sourceLanguage,
@@ -32,6 +42,7 @@ vi.mock("./useLocale", () => ({
     retry: "Retry",
     connecting: "Connecting",
     liveAudioError: "Live audio error",
+    reconnecting: "Reconnecting",
     waitingForSpeech: "Waiting for speech",
   }),
 }));
@@ -48,16 +59,30 @@ vi.mock("./getDocId", () => ({
 
 vi.mock("@livekit/components-react", () => {
   return {
-    LiveKitRoom: ({ children, className }: MockProps) => (
-      <div data-testid="livekit-room" className={className}>
-        {children}
-      </div>
-    ),
+    LiveKitRoom: ({ children, className, onError, onDisconnected }: MockProps) => {
+      roomCallbacks.onError = onError;
+      roomCallbacks.onDisconnected = onDisconnected;
+      return (
+        <div data-testid="livekit-room" className={className}>
+          {children}
+        </div>
+      );
+    },
     RoomAudioRenderer: () => null,
     useRoomContext: () => null,
     useRemoteParticipants: () => roomState.participants,
   };
 });
+
+// Walk the whole reconnect ladder. Each rung is scheduled by the effect that runs when
+// the previous attempt fails, so the clock has to be advanced a rung at a time.
+const runOutTheLadder = async () => {
+  for (const rung of [1_000, 3_000, 8_000, 20_000, 30_000, 30_000]) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(rung + 500);
+    });
+  }
+};
 
 const participant = (identity: string) => ({
   identity,
@@ -75,6 +100,9 @@ describe("ListenViewer", () => {
   beforeEach(() => {
     roomState.participants = [];
     sessionState.sourceLanguage = "en";
+    roomCallbacks.onError = undefined;
+    roomCallbacks.onDisconnected = undefined;
+    netState.tokenFails = false;
     Object.defineProperty(window.navigator, "sendBeacon", {
       configurable: true,
       value: vi.fn(() => true),
@@ -92,6 +120,7 @@ describe("ListenViewer", () => {
         } as unknown as Response);
       }
       if (url.includes("/api/livekit/token")) {
+        if (netState.tokenFails) return Promise.reject(new Error("Failed to fetch"));
         return Promise.resolve({
           json: () => ({ token: "token-123", serverUrl: "wss://example.com" }),
         } as unknown as Response);
@@ -194,5 +223,82 @@ describe("ListenViewer", () => {
     expect(JSON.parse((translateCall?.[1] as RequestInit).body as string)).toMatchObject({
       targetLanguage: "en",
     });
+  });
+
+  it("reconnects on its own after the room drops", async () => {
+    // The Android case: the phone slept, livekit-client exhausted its own reconnect
+    // ladder, and the room came back Disconnected. The pane used to latch that into a
+    // terminal error and stay silent until someone tapped Retry.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    roomState.participants = [participant("organizer-host")];
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+
+    act(() => {
+      roomCallbacks.onDisconnected?.();
+    });
+
+    // Not an error: the pane says it is working on it, and the transcript stays up.
+    expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/live audio error/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("live-transcript")).toBeInTheDocument();
+
+    // First rung of the ladder, and it is back — with nobody having touched the phone.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+    expect(screen.getByTestId("livekit-room")).toBeInTheDocument();
+    expect(screen.queryByText(/reconnecting/i)).not.toBeInTheDocument();
+  });
+
+  it("stops retrying once the ladder runs out, rather than hammering the server", async () => {
+    // Each attempt re-requests the translator bot, so an endless ladder would hold a
+    // Gemini session open for a tab nobody is watching. After the last rung the pane
+    // waits for a person instead.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    roomState.participants = [participant("organizer-host")];
+    netState.tokenFails = true;
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByText(/reconnecting/i)).toBeInTheDocument());
+
+    await runOutTheLadder();
+    expect(screen.getByText(/live audio error/i)).toBeInTheDocument();
+
+    // Six automatic retries after the first failure, and then nothing.
+    const attemptsAtGiveUp = translateRequests();
+    expect(attemptsAtGiveUp).toBe(7);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(translateRequests()).toBe(attemptsAtGiveUp);
+  });
+
+  it("tries again when the listener comes back to the tab", async () => {
+    // What actually rescues a phone that was locked for a while: the ladder has long
+    // since run out, but returning to the tab means there is a network again.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    roomState.participants = [participant("organizer-host")];
+    netState.tokenFails = true;
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByText(/reconnecting/i)).toBeInTheDocument());
+    await runOutTheLadder();
+    expect(screen.getByText(/live audio error/i)).toBeInTheDocument();
+
+    netState.tokenFails = false;
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500);
+    });
+
+    expect(screen.getByTestId("livekit-room")).toBeInTheDocument();
+    expect(screen.queryByText(/live audio error/i)).not.toBeInTheDocument();
   });
 });
