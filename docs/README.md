@@ -28,6 +28,11 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 
 ## Design docs
 
+- [adr-001-server-owned-slide-sync.md](adr-001-server-owned-slide-sync.md) — **ADR (proposed):**
+  the server owns slide publishing and translation; the Proclaim service becomes a snapshot
+  pusher with no Yjs dependency. Why a CRDT client shouldn't make the "spend a model call?"
+  decision; one server-owned, operator-overridable source-selection policy for both the
+  slide feed and the audio feed; the migration.
 - [live-audio-state-architecture.md](live-audio-state-architecture.md) — state audit of the
   live-translation subsystem (client + server state machines, edge-case catalog), a proposed
   supervisor/reconciler architecture, and the hot-fix ladder to apply before it.
