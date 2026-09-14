@@ -28,7 +28,7 @@ from slide_feed import FeedItem, FeedSnapshot, SnapshotBus
 logger = logging.getLogger(__name__)
 
 # (slides, item_title, item_id, existing_translation, doc_id)
-#   -> {language: [{text, status, provenance}]}
+#   -> {language: [{text, provenance}]}
 # doc_id names the doc this session is bound to, so the server can write the agent
 # conversation into the same per-day doc. It arrives via bind() rather than being closed over
 # at construction, because a date rollover swaps the doc underneath a long-lived translator.
@@ -118,8 +118,8 @@ class SlideTranslator:
     def _has_missing_translation(self, item: FeedItem) -> bool:
         """True if any non-empty slide lacks a translation in any target language.
 
-        Reads the live map (not the snapshot) so reviewed entries written by the frontend
-        count as present.
+        Reads the live map (not the snapshot) so entries written by the frontend count as
+        present.
         """
         for language in self.languages:
             for slide in item.slides:
@@ -130,7 +130,13 @@ class SlideTranslator:
         return False
 
     def _store_translations(self, slides: List[str], translations: Dict[str, Any]) -> None:
-        """Seed per-slide results into slideTranslations, never clobbering reviewed entries."""
+        """Seed per-slide results into slideTranslations, filling gaps only.
+
+        Keys are content-addressed, so an existing entry is already a translation of this
+        exact text — whoever wrote it (a human saving in the review screen, an earlier
+        draft) knows at least as much as this run does. We only ever fill in what is
+        missing; nothing here overwrites.
+        """
         assert self.ydoc is not None, "_store_translations before bind()"
         with self.ydoc.transaction():
             for language, per_slide in translations.items():
@@ -138,11 +144,9 @@ class SlideTranslator:
                     if not slide.strip() or not entry:
                         continue
                     key = slide_translation_key(language, slide)
-                    existing = self.translations_map[key] if key in self.translations_map else None
-                    if existing is not None and existing.get('status') == 'reviewed':
+                    if key in self.translations_map:
                         continue
                     self.translations_map[key] = {
                         'text': entry.get('text', ''),
-                        'status': entry.get('status', 'auto'),
                         'provenance': entry.get('provenance', 'llm'),
                     }

@@ -23,9 +23,8 @@ export interface SlideTranslationViewerProps {
 /**
  * Pure component showing the translation of the current slide, auto-scaled to fit.
  *
- * - An `auto` (machine, unreviewed) translation gets a subtle "unreviewed" badge.
- * - When the displayed language differs from the requested one (e.g. reviewed French
- *   shown to a Haitian Creole viewer), a small language tag is shown.
+ * - When the displayed language differs from the requested one (e.g. French shown to a
+ *   Haitian Creole viewer), a small language tag is shown.
  * - A blank source slide renders blank: there is nothing to translate, so the
  *   "not translated" placeholder would be misleading.
  */
@@ -55,23 +54,14 @@ export function SlideTranslationViewer({
   }
 
   const resolved = resolvedBySlide[clampedIndex];
-  const isUnreviewed = resolved?.entry.status === 'auto';
 
-  const header =
-    isUnreviewed || resolved?.isFallbackLanguage ? (
-      <div className="flex justify-center gap-2">
-        {resolved?.isFallbackLanguage && (
-          <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-200">
-            {resolved.displayLanguage}
-          </span>
-        )}
-        {isUnreviewed && (
-          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-700/80 text-amber-50 opacity-20">
-            {s.unreviewedBadge}
-          </span>
-        )}
-      </div>
-    ) : undefined;
+  const header = resolved?.isFallbackLanguage ? (
+    <div className="flex justify-center gap-2">
+      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-200">
+        {resolved.displayLanguage}
+      </span>
+    </div>
+  ) : undefined;
 
   if (!resolved) {
     return (

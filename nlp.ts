@@ -2,7 +2,8 @@ import { FunctionCallingConfigMode, Type, type Content, type FunctionDeclaration
 import { Gemini as GoogleGenAI } from '@posthog/ai/gemini';
 import { PostHog } from 'posthog-node';
 import { BIBLE_TRANSLATIONS, lookupBiblePassage, type BibleLookupArgs, type BibleToolCall } from './bible.ts';
-import { unescapeLiteralEscapes } from './src/slideTranslation.ts';
+import { normalizeSlideText, unescapeLiteralEscapes, type SlideReviewNote } from './src/slideTranslation.ts';
+export type { SlideReviewNote };
 
 export class GeminiProvider {
   apiClient: GoogleGenAI;
@@ -344,8 +345,12 @@ const SET_TRANSLATIONS_TOOL: FunctionDeclaration = {
                                     note: {
                                         type: Type.STRING,
                                         description:
-                                            'Optional caveat for the reviewer. Omit unless there is ' +
-                                            'a genuine ambiguity or judgement call worth flagging.',
+                                            'Optional caveat for the reviewer. It is shown beside this ' +
+                                            "slide's translation on the review screen and marks the whole " +
+                                            'item as wanting a look, so omit it unless there is a genuine ' +
+                                            'ambiguity or judgement call worth flagging — a note on every ' +
+                                            'slide is worth no more than none. Rewriting a slide without a ' +
+                                            'note withdraws the one it had.',
                                     },
                                 },
                             },
@@ -425,12 +430,29 @@ const workingFor = (working: WorkingTranslations, language: string): Map<number,
     return perSlide;
 };
 
+/** The agent's working copy of the notes: language → slide id → note text. */
+type WorkingNotes = Map<string, Map<number, string>>;
+
+/** Flatten the working notes back to the stored, content-keyed shape. */
+const collectNotes = (notes: WorkingNotes, sourceSlides: string[]): SlideReviewNote[] => {
+    const out: SlideReviewNote[] = [];
+    for (const [language, perSlide] of notes) {
+        for (const segmentId of [...perSlide.keys()].sort((a, b) => a - b)) {
+            const text = perSlide.get(segmentId) ?? '';
+            if (text === '' || sourceSlides[segmentId] === undefined) continue;
+            out.push({ language, sourceText: sourceSlides[segmentId], text });
+        }
+    }
+    return out;
+};
+
 /** Apply a `set_translations` call to the working copy; returns the ids it touched. */
 const applySetTranslations = (
     args: Record<string, unknown> | undefined,
     sourceSlides: string[],
     working: WorkingTranslations,
     changed: Map<string, Set<number>>,
+    notes: WorkingNotes,
 ): void => {
     const languageResults = ((args?.languages as unknown[]) ?? []) as Array<{
         language: string;
@@ -445,6 +467,11 @@ const applySetTranslations = (
             workingFor(working, language).set(segmentId, unescapeLiteralEscapes(segment.translation ?? ''));
             if (!changed.has(language)) changed.set(language, new Set());
             changed.get(language)?.add(segmentId);
+            // Rewriting a slide restates its caveat: a note given here replaces whatever
+            // was there, and a rewrite with no note means the model no longer has one.
+            const note = (segment.note ?? '').trim();
+            if (note) workingFor(notes, language).set(segmentId, note);
+            else notes.get(language)?.delete(segmentId);
         }
     }
 };
@@ -530,6 +557,11 @@ export type SlideAgentRunResult = {
      * run never touched are absent, so a targeted edit reports only what it edited.
      */
     translations: Record<string, TranslationBlockResult[]>;
+    /**
+     * Every caveat currently attached to a slide, for the whole item — the seeded notes
+     * carried forward plus whatever this run set or cleared. Replaces the stored set.
+     */
+    notes: SlideReviewNote[];
     /** The full updated conversation (raw Gemini Content, replay-safe — keep verbatim). */
     messages: Content[];
     /** Whether the model called `set_translations` during this run. */
@@ -567,12 +599,17 @@ export const runSlideTranslationAgent = async (
          * missing are treated as "not yet translated".
          */
         currentTranslations?: Record<string, (string | null | undefined)[]>;
+        /**
+         * Caveats already attached to these slides, carried across rounds so a follow-up
+         * that touches one slide doesn't silently drop the notes on all the others.
+         */
+        currentNotes?: SlideReviewNote[];
         onToolCall?: (call: BibleToolCall) => void;
         /** PostHog trace/distinct-id tags so every round groups under one conversation. */
         observability?: AgentObservability;
     },
 ): Promise<SlideAgentRunResult> => {
-    const { sourceSlides, messages, bibleLanguages, currentTranslations, onToolCall, observability } = params;
+    const { sourceSlides, messages, bibleLanguages, currentTranslations, currentNotes, onToolCall, observability } = params;
     const model = params.model ?? provider.defaultModel;
 
     const functionDeclarations: FunctionDeclaration[] = [SET_TRANSLATIONS_TOOL, REVISE_TRANSLATION_TOOL];
@@ -589,6 +626,15 @@ export const runSlideTranslationAgent = async (
                 workingFor(working, language).set(segmentId, text);
             }
         });
+    }
+    // Notes are seeded the same way, by matching the stored source text back to a slide id.
+    // A `revise_translation` deliberately leaves them alone: only a rewrite of the whole
+    // slide restates (or withdraws) the caveat.
+    const notes: WorkingNotes = new Map();
+    const slideIdByText = new Map(sourceSlides.map((slide, i) => [normalizeSlideText(slide), i]));
+    for (const note of currentNotes ?? []) {
+        const segmentId = slideIdByText.get(normalizeSlideText(note.sourceText));
+        if (segmentId !== undefined && note.text) workingFor(notes, note.language).set(segmentId, note.text);
     }
 
     let setTranslationsCalled = false;
@@ -622,6 +668,7 @@ export const runSlideTranslationAgent = async (
                     sourceSlides,
                     working,
                     changed,
+                    notes,
                 );
                 setTranslationsCalled = true;
                 responseParts.push({
@@ -673,6 +720,7 @@ export const runSlideTranslationAgent = async (
 
     return {
         translations: collectChanged(working, changed, sourceSlides),
+        notes: collectNotes(notes, sourceSlides),
         messages,
         setTranslationsCalled,
         usage,
@@ -864,13 +912,15 @@ export const draftItemTranslations = async (
         onToolCall?: (call: BibleToolCall) => void;
         /** Receives the full agent conversation (raw Gemini Content) once drafting completes. */
         onConversation?: (messages: Content[]) => void;
+        /** Receives the per-slide caveats the model raised for the reviewer. */
+        onNotes?: (notes: SlideReviewNote[]) => void;
         /** Receives the run's token usage (incl. cache hits) once drafting completes. */
         onUsage?: (usage: TokenUsage) => void;
         /** PostHog trace/distinct-id tags so the draft's generations group by conversation. */
         observability?: AgentObservability;
     },
 ): Promise<Record<string, TranslationBlockResult[]>> => {
-    const { sourceSlides, targets, referenceText, existingTranslation, generalContext, onToolCall, onConversation, onUsage, observability } = params;
+    const { sourceSlides, targets, referenceText, existingTranslation, generalContext, onToolCall, onConversation, onNotes, onUsage, observability } = params;
     const itemTitle = params.itemTitle?.trim();
     const model = params.model ?? provider.defaultModel;
     // Languages we can actually fetch canonical Scripture for.
@@ -898,6 +948,7 @@ export const draftItemTranslations = async (
         observability,
     });
     onConversation?.(result.messages);
+    onNotes?.(result.notes);
     onUsage?.(result.usage);
     return result.translations;
 };

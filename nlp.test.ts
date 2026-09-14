@@ -526,3 +526,80 @@ describe('buildSeedConversationPrompt', () => {
     expect(prompt).not.toContain('\\n');
   });
 });
+
+describe('runSlideTranslationAgent — per-slide review notes', () => {
+  const slides = ['Praise the Lord', 'Forever'];
+
+  it('carries a note attached in set_translations, keyed by source text', async () => {
+    const { provider } = fakeAgentProvider({
+      languages: [
+        {
+          language: 'French',
+          segments: [
+            { segmentId: 0, translation: 'Louez le Seigneur' },
+            { segmentId: 1, translation: 'Pour toujours', note: '"Forever" could be liturgical here.' },
+          ],
+        },
+      ],
+    });
+
+    const result = await runSlideTranslationAgent(provider, {
+      sourceSlides: slides,
+      messages: [{ role: 'user', parts: [{ text: 'prompt' }] }],
+      bibleLanguages: [],
+    });
+
+    expect(result.notes).toEqual([
+      { language: 'French', sourceText: 'Forever', text: '"Forever" could be liturgical here.' },
+    ]);
+  });
+
+  it('withdraws a note when the slide is rewritten without one', async () => {
+    const { provider } = fakeAgentProvider({
+      languages: [
+        { language: 'French', segments: [{ segmentId: 1, translation: "Pour l'éternité" }] },
+      ],
+    });
+
+    const result = await runSlideTranslationAgent(provider, {
+      sourceSlides: slides,
+      messages: [{ role: 'user', parts: [{ text: 'prompt' }] }],
+      bibleLanguages: [],
+      currentNotes: [{ language: 'French', sourceText: 'Forever', text: 'Old caveat.' }],
+    });
+
+    expect(result.notes).toEqual([]);
+  });
+
+  it('keeps notes on the slides a follow-up never touched', async () => {
+    const provider = fakeScriptedProvider([
+      [{ name: 'revise_translation', args: { language: 'French', segmentId: 0, find: 'Louez', replace: 'Louons' } }],
+    ]);
+
+    const result = await runSlideTranslationAgent(provider, {
+      sourceSlides: slides,
+      messages: [{ role: 'user', parts: [{ text: 'prompt' }] }],
+      bibleLanguages: [],
+      currentTranslations: { French: ['Louez le Seigneur', 'Pour toujours'] },
+      currentNotes: [{ language: 'French', sourceText: 'Forever', text: 'Old caveat.' }],
+    });
+
+    // The run reports the item's whole note set, so the server can replace rather than merge.
+    expect(result.notes).toEqual([
+      { language: 'French', sourceText: 'Forever', text: 'Old caveat.' },
+    ]);
+  });
+
+  it('drops a seeded note whose source text is no longer in the item', async () => {
+    const { provider } = fakeAgentProvider({ languages: [] });
+
+    const result = await runSlideTranslationAgent(provider, {
+      sourceSlides: slides,
+      messages: [{ role: 'user', parts: [{ text: 'prompt' }] }],
+      bibleLanguages: [],
+      currentNotes: [{ language: 'French', sourceText: 'A slide that was edited away', text: 'Stale.' }],
+    });
+
+    expect(result.notes).toEqual([]);
+  });
+});

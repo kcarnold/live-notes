@@ -25,16 +25,14 @@ describe('SlideLibrary', () => {
     expect(lib.lookup('French', 'anything')).toBeUndefined();
   });
 
-  it('upserts a reviewed entry and looks it up by normalized text', async () => {
+  it('upserts an entry and looks it up by normalized text', async () => {
     const lib = new SlideLibrary(filePath);
     await lib.load();
     await lib.upsert({ language: 'French', sourceText: 'Praise the Lord', text: 'Louez le Seigneur' });
 
     const entry = lib.lookup('French', '  Praise the Lord  ');
     expect(entry?.text).toBe('Louez le Seigneur');
-    expect(entry?.status).toBe('reviewed');
     expect(entry?.provenance).toBe('human');
-    expect(entry?.reviewedAt).toBeTypeOf('number');
   });
 
   it('persists across reloads from a fresh instance', async () => {

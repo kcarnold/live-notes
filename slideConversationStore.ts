@@ -18,6 +18,7 @@ import * as Y from 'yjs';
 import type { DocumentManager } from '@y-sweet/sdk';
 import type { Content } from '@google/genai';
 import type { TokenUsage } from './nlp.ts';
+import type { SlideReviewNote } from './src/slideTranslation.ts';
 import { connectServerDoc, type ServerDoc } from './serverDoc.ts';
 
 export type SlideConversationStatus = 'running' | 'idle' | 'error';
@@ -32,6 +33,12 @@ export interface SlideConversation {
   languages: string[];
   /** Raw Gemini history, stored verbatim so a resume replays the agent faithfully. */
   messages: Content[];
+  /**
+   * Per-slide caveats the model raised for the reviewer, keyed by language + source text.
+   * This is the item's whole current set (each run returns it in full), so it is replaced
+   * rather than appended to. Absent on conversations created before this existed.
+   */
+  notes?: SlideReviewNote[];
   status: SlideConversationStatus;
   /**
    * Token usage summed across every agent run for this conversation (the initial draft plus

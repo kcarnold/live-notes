@@ -149,13 +149,15 @@ export interface AppStrings {
   save: string;
   saveAll: string;
   saving: string;
-  statusReviewed: string;
+  statusSaved: string;
   statusUnsaved: string;
   reviewSourceHeader: string;
   noSlidesToReview: string;
   editorOnlyReview: string;
   reviewSlidesLink: string;
-  unreviewedBadge: string;
+  reviewNotesLabel: string;
+  reviewNotesHint: string;
+  noReviewNotes: string;
   conversationHeader: string;
   noConversation: string;
   followUpPlaceholder: string;
@@ -276,15 +278,17 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     bibleLookupFound: 'Found in',
     bibleLookupMissing: 'No canonical text found',
     save: 'Save',
-    saveAll: 'Save all reviewed',
+    saveAll: 'Save all',
     saving: 'Saving…',
-    statusReviewed: 'Reviewed',
+    statusSaved: 'Saved',
     statusUnsaved: 'Unsaved',
     reviewSourceHeader: 'Source',
     noSlidesToReview: 'Enter or load an item to review its slides.',
     editorOnlyReview: 'Open this page with #editor to edit and save translations.',
     reviewSlidesLink: 'Review Slide Translations',
-    unreviewedBadge: 'unreviewed',
+    reviewNotesLabel: 'Translator notes',
+    reviewNotesHint: 'Slides the translator flagged for a human to look at.',
+    noReviewNotes: 'No slides flagged — nothing here needs a second opinion.',
     conversationHeader: 'Agent conversation',
     noConversation: 'No conversation yet — Suggest to start one.',
     followUpPlaceholder: 'Ask a question or give feedback…',
@@ -405,13 +409,15 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     save: 'Enregistrer',
     saveAll: 'Tout enregistrer',
     saving: 'Enregistrement…',
-    statusReviewed: 'Révisé',
+    statusSaved: 'Enregistré',
     statusUnsaved: 'Non enregistré',
     reviewSourceHeader: 'Source',
     noSlidesToReview: 'Saisissez ou chargez un élément pour réviser ses diapositives.',
     editorOnlyReview: 'Ouvrez cette page avec #editor pour modifier et enregistrer les traductions.',
     reviewSlidesLink: 'Réviser les traductions de diapositives',
-    unreviewedBadge: 'non révisé',
+    reviewNotesLabel: 'Notes du traducteur',
+    reviewNotesHint: 'Diapositives signalées par le traducteur pour un regard humain.',
+    noReviewNotes: 'Aucune diapositive signalée — rien à revoir ici.',
     conversationHeader: 'Conversation avec l’agent',
     noConversation: 'Aucune conversation pour l’instant — cliquez sur Suggérer pour en démarrer une.',
     followUpPlaceholder: 'Posez une question ou donnez un retour…',
@@ -532,13 +538,15 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     save: 'Guardar',
     saveAll: 'Guardar todo',
     saving: 'Guardando\u2026',
-    statusReviewed: 'Revisado',
+    statusSaved: 'Guardado',
     statusUnsaved: 'Sin guardar',
     reviewSourceHeader: 'Fuente',
     noSlidesToReview: 'Ingrese o cargue un elemento para revisar sus diapositivas.',
     editorOnlyReview: 'Abra esta p\u00e1gina con #editor para editar y guardar traducciones.',
     reviewSlidesLink: 'Revisar traducciones de diapositivas',
-    unreviewedBadge: 'sin revisar',
+    reviewNotesLabel: 'Notas del traductor',
+    reviewNotesHint: 'Diapositivas señaladas por el traductor para revisión humana.',
+    noReviewNotes: 'Ninguna diapositiva señalada — no hay nada que revisar aquí.',
     conversationHeader: 'Conversación con el agente',
     noConversation: 'Aún no hay conversación — pulse Sugerir para iniciar una.',
     followUpPlaceholder: 'Haga una pregunta o dé su opinión…',
@@ -659,13 +667,15 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     save: 'Anrejistre',
     saveAll: 'Anrejistre tout',
     saving: 'Ap anrejistre…',
-    statusReviewed: 'Revize',
+    statusSaved: 'Anrejistre',
     statusUnsaved: 'Pa anrejistre',
     reviewSourceHeader: 'Sous',
     noSlidesToReview: 'Antre oswa chaje yon eleman pou revize diapozitiv li yo.',
     editorOnlyReview: 'Ouvri paj sa a ak #editor pou modifye ak anrejistre tradiksyon.',
     reviewSlidesLink: 'Revize Tradiksyon Diapozitiv',
-    unreviewedBadge: 'pa revize',
+    reviewNotesLabel: 'Nòt tradiktè a',
+    reviewNotesHint: 'Djapozitiv tradiktè a make pou yon moun gade.',
+    noReviewNotes: 'Pa gen djapozitiv make — pa gen anyen pou gade isit la.',
     conversationHeader: 'Konvèsasyon ak ajan an',
     noConversation: 'Poko gen konvèsasyon — klike Sijere pou kòmanse youn.',
     followUpPlaceholder: 'Poze yon kesyon oswa bay yon kòmantè…',

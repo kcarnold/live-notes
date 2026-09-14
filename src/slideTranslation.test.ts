@@ -67,23 +67,14 @@ describe('resolveSlideTranslation', () => {
     return (language, slideText) => entries[slideTranslationKey(language, slideText)];
   }
 
-  const reviewed = (text: string): SlideTranslationEntry => ({
-    text,
-    status: 'reviewed',
-    provenance: 'human',
-    reviewedAt: 1,
-  });
-  const auto = (text: string): SlideTranslationEntry => ({
-    text,
-    status: 'auto',
-    provenance: 'llm',
-  });
+  const entry = (text: string): SlideTranslationEntry => ({ text, provenance: 'human' });
 
   const SLIDE = 'Praise the Lord';
 
-  it('returns the reviewed entry in the requested language without fallback', () => {
+  it('returns the entry in the requested language without fallback', () => {
     const lookup = makeLookup({
-      [slideTranslationKey('Haitian Creole', SLIDE)]: reviewed('Lwanj pou Senyè a'),
+      [slideTranslationKey('French', SLIDE)]: entry('Louez le Seigneur'),
+      [slideTranslationKey('Haitian Creole', SLIDE)]: entry('Lwanj pou Senyè a'),
     });
     const result = resolveSlideTranslation('Haitian Creole', SLIDE, lookup);
     expect(result?.entry.text).toBe('Lwanj pou Senyè a');
@@ -91,34 +82,21 @@ describe('resolveSlideTranslation', () => {
     expect(result?.isFallbackLanguage).toBe(false);
   });
 
-  it('prefers a reviewed French text over an unreviewed Creole one', () => {
+  it('falls back down the chain when the requested language has nothing', () => {
     const lookup = makeLookup({
-      [slideTranslationKey('French', SLIDE)]: reviewed('Louez le Seigneur'),
-      [slideTranslationKey('Haitian Creole', SLIDE)]: auto('Lwanj (otomatik)'),
+      [slideTranslationKey('French', SLIDE)]: entry('Louez le Seigneur'),
     });
     const result = resolveSlideTranslation('Haitian Creole', SLIDE, lookup);
     expect(result?.entry.text).toBe('Louez le Seigneur');
-    expect(result?.entry.status).toBe('reviewed');
     expect(result?.displayLanguage).toBe('French');
     expect(result?.isFallbackLanguage).toBe(true);
   });
 
-  it('falls back to an auto entry in the requested language when no reviewed entry exists', () => {
+  it('does not fall back for a language with no chain configured', () => {
     const lookup = makeLookup({
-      [slideTranslationKey('Haitian Creole', SLIDE)]: auto('Lwanj (otomatik)'),
+      [slideTranslationKey('French', SLIDE)]: entry('Louez le Seigneur'),
     });
-    const result = resolveSlideTranslation('Haitian Creole', SLIDE, lookup);
-    expect(result?.entry.status).toBe('auto');
-    expect(result?.displayLanguage).toBe('Haitian Creole');
-    expect(result?.isFallbackLanguage).toBe(false);
-  });
-
-  it('does not use an auto French entry as a fallback for a Creole viewer', () => {
-    // Only auto French exists; we do not surface another language's *unreviewed* text.
-    const lookup = makeLookup({
-      [slideTranslationKey('French', SLIDE)]: auto('Louez (auto)'),
-    });
-    expect(resolveSlideTranslation('Haitian Creole', SLIDE, lookup)).toBeUndefined();
+    expect(resolveSlideTranslation('Spanish', SLIDE, lookup)).toBeUndefined();
   });
 
   it('returns undefined when nothing is available', () => {

@@ -5,6 +5,7 @@ import { SlideReview } from './SlideReview';
 const baseProps = {
   slides: ['Praise the Lord', 'Forever'],
   languages: ['French'] as const,
+  notes: { French: [null, null] as (string | null)[] },
   editable: true,
   busy: false,
 };
@@ -17,6 +18,7 @@ describe('SlideReview', () => {
         slides={[]}
         drafts={{ French: [] }}
         savedTexts={{ French: [] }}
+        notes={{ French: [] }}
         onDraftChange={vi.fn()}
         onSaveCell={vi.fn()}
       />,
@@ -71,7 +73,7 @@ describe('SlideReview', () => {
     expect(onSaveCell).toHaveBeenCalledWith('French', 0);
   });
 
-  it('marks a cell reviewed and disables Save when the draft matches the saved text', () => {
+  it('marks a cell saved and disables Save when the draft matches the saved text', () => {
     render(
       <SlideReview
         {...baseProps}
@@ -81,8 +83,24 @@ describe('SlideReview', () => {
         onSaveCell={vi.fn()}
       />,
     );
-    expect(screen.getByText(/Reviewed/)).toBeInTheDocument();
+    expect(screen.getByText(/Saved/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Save' })[0]).toBeDisabled();
+  });
+
+  it('shows the translator note above the cell it belongs to, and marks the row', () => {
+    render(
+      <SlideReview
+        {...baseProps}
+        drafts={{ French: ['Louez le Seigneur', 'Toujours'] }}
+        savedTexts={{ French: [null, null] }}
+        notes={{ French: [null, 'Ambiguous: "forever" here could be liturgical.'] }}
+        onDraftChange={vi.fn()}
+        onSaveCell={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/Ambiguous: "forever"/)).toBeInTheDocument();
+    // Exactly one row is flagged — the one the note belongs to.
+    expect(screen.getAllByLabelText('Translator notes')).toHaveLength(1);
   });
 
   it('disables editing when not editable', () => {

@@ -5,8 +5,8 @@
  * item — and now the whole item is translated into every target language in a single
  * model call, so the model has full-item context (responsive readings, recurring
  * refrains) and can distribute a multilingual reference dump across the languages in one
- * pass. Slides already reviewed in the library are passed as context (so terminology
- * stays consistent) and are not re-translated.
+ * pass. Slides already in the library are passed as context (so terminology stays
+ * consistent) and are not re-translated.
  *
  * This module has no Node/Gemini/Express dependencies — the caller injects a
  * `translate` function — so it is unit-testable in isolation.
@@ -14,14 +14,12 @@
 import {
   normalizeSlideText,
   type SlideProvenance,
-  type SlideStatus,
   type SlideTranslationEntry,
   type SlideTranslationLookup,
 } from './slideTranslation.ts';
 
 export interface PerSlideTranslation {
   text: string;
-  status: SlideStatus;
   provenance: SlideProvenance;
 }
 
@@ -52,10 +50,10 @@ export type MultiLangTranslateFn = (params: {
  * model call.
  *
  * Precedence per slide+language:
- * - a `reviewed` library entry → returned as `reviewed`, fed to the model as context;
- * - else the model translates it (with the language's reviewed slides as context, plus
- *   any reference the caller wired into `translate`), returned as `auto`/`llm`.
- * Empty slides resolve to empty `auto` text without hitting the model.
+ * - a library entry → returned as-is, and fed to the model as context;
+ * - else the model translates it (with the language's library slides as context, plus
+ *   any reference the caller wired into `translate`), returned as `llm`.
+ * Empty slides resolve to empty text without hitting the model.
  */
 export async function translateItem(params: {
   slides: string[];
@@ -65,27 +63,27 @@ export async function translateItem(params: {
 }): Promise<Record<string, PerSlideTranslation[]>> {
   const { slides, languages, lookup, translate } = params;
 
-  const reviewedByLang: Record<string, (SlideTranslationEntry | undefined)[]> = {};
+  const storedByLang: Record<string, (SlideTranslationEntry | undefined)[]> = {};
   const targets: TranslateTarget[] = [];
   for (const language of languages) {
-    const reviewed = slides.map((slide) =>
+    const stored = slides.map((slide) =>
       slide.trim() === '' ? undefined : lookup(language, slide),
     );
-    reviewedByLang[language] = reviewed;
+    storedByLang[language] = stored;
     // Duplicate slides (e.g. a chorus repeated via CustomOrderSequence) share a
     // normalized text and the same read-back key, so we only ask the model to
     // translate the first occurrence — later copies resolve from that one result.
     const seen = new Set<string>();
     const isTranslationNeeded = slides.map((slide, i) => {
-      if (slide.trim() === '' || reviewed[i]) return false;
+      if (slide.trim() === '' || stored[i]) return false;
       const key = normalizeSlideText(slide);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-    // Reviewed slides are already in-language, so they feed the model as context.
+    // Library slides are already in-language, so they feed the model as context.
     const context = slides
-      .map((_, i) => reviewed[i]?.text)
+      .map((_, i) => stored[i]?.text)
       .filter((text): text is string => Boolean(text))
       .join('\n');
     targets.push({ language, isTranslationNeeded, context });
@@ -108,25 +106,17 @@ export async function translateItem(params: {
 
   const out: Record<string, PerSlideTranslation[]> = {};
   for (const language of languages) {
-    const reviewed = reviewedByLang[language];
+    const stored = storedByLang[language];
     const byText = translatedByLang[language] ?? new Map<string, string>();
     out[language] = slides.map((slide, i) => {
-      const reviewedEntry = reviewed[i];
-      if (reviewedEntry) {
-        return {
-          text: reviewedEntry.text,
-          status: 'reviewed',
-          provenance: reviewedEntry.provenance,
-        };
+      const storedEntry = stored[i];
+      if (storedEntry) {
+        return { text: storedEntry.text, provenance: storedEntry.provenance };
       }
       if (slide.trim() === '') {
-        return { text: '', status: 'auto', provenance: 'llm' };
+        return { text: '', provenance: 'llm' };
       }
-      return {
-        text: byText.get(normalizeSlideText(slide)) ?? '',
-        status: 'auto',
-        provenance: 'llm',
-      };
+      return { text: byText.get(normalizeSlideText(slide)) ?? '', provenance: 'llm' };
     });
   }
   return out;
