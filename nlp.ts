@@ -238,7 +238,7 @@ export type DraftItemTarget = {
     language: string;
     /** Per source slide: does this slide still need translating into this language? */
     isTranslationNeeded: boolean[];
-    /** Already-reviewed translations in this language, joined for style/terminology context. */
+    /** Translations already in the library for this language, joined for style/terminology context. */
     context: string;
 };
 
@@ -729,7 +729,7 @@ export const runSlideTranslationAgent = async (
 
 /**
  * Build the opening user prompt for the slide-translation agent: the numbered source slides,
- * the target languages (each with which slides still need translating and any reviewed
+ * the target languages (each with which slides still need translating and any library
  * translations as style/terminology context), an optional multilingual `referenceText` dump,
  * Bible-grounding instructions when any target language has a canonical translation, and the
  * instruction to record results via the `set_translations` tool.
@@ -880,7 +880,7 @@ useful to say.`;
  * Translate a whole item into several languages in one agent loop.
  *
  * The model receives the numbered source slides, the target languages (each with which
- * slides still need translating and any already-reviewed translations as context), and an
+ * slides still need translating and any library translations as context), and an
  * optional free-text `referenceText` dump that may hold prior translations in one or more of
  * the target languages. It may call `lookup_bible_passage` to ground Scripture, then records
  * results via `set_translations`. `onToolCall` reports each Bible lookup; `onConversation`

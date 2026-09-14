@@ -1,4 +1,4 @@
-"""Tests for SlideTranslator: content-addressed seeding, never-clobber-reviewed, active-first
+"""Tests for SlideTranslator: content-addressed seeding, fill-missing-only, active-first
 scan, attempt-once-per-content, and grounding forwarded from the snapshot."""
 
 from unittest import mock
@@ -118,7 +118,7 @@ async def test_translate_pending_skips_fully_covered():
     tr, _ = make_translator()  # translate_fn returns None
     for lang in LANGS:
         tr.translations_map[slide_translation_key(lang, "Hello")] = {
-            "text": "x", "status": "auto", "provenance": "llm"
+            "text": "x", "provenance": "llm"
         }
     s = snap(["i1"], {"i1": feed_item("i1", "X", ["Hello"])}, active="i1")
 

@@ -7,9 +7,9 @@ from the **snapshot** — not from the Yjs sink — which removes the old coupli
 worker read state back out of the maps it was feeding.
 
 It does, however, read *and* write the live ``slideTranslations`` map: cache-miss detection
-must see ``reviewed`` entries that the frontend review screen writes there, and its own
-seeding must never clobber them. Each content version is attempted once (tracked by slides
-hash) so a failed/partial translation doesn't spin.
+must see entries the frontend review screen writes there, and its own seeding only ever fills
+keys that are missing, so it can't clobber them. Each content version is attempted once
+(tracked by slides hash) so a failed/partial translation doesn't spin.
 
 The actual translation call is injected (``translate_fn``) so the source of translations
 (the server's ``/api/translateItem`` in production, a fake in tests) is swappable.
