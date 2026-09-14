@@ -37,8 +37,11 @@ function emptyNullableArrays(length: number): NullableStringArrays {
  * Yjs/network connector for the slide-translation review screen.
  *
  * Holds the editable item (pasted or loaded from the on-air Proclaim item), the
- * per-language draft translations, and the library state. "Suggest" pre-fills drafts
- * from the LLM (reusing library entries); "Save" writes a draft to the library.
+ * per-language draft translations, and the library state. The Proclaim service normally
+ * drafts every item ahead of time; "Draft" / "Re-draft" runs the same agent from here (it
+ * re-drafts without the Proclaim French screen the service passes as grounding, so on a
+ * service-drafted item it is a downgrade — see #153). "Save" writes a draft to the
+ * library.
  *
  * The screen is organized around the translator's notes: the service-item list marks
  * which items have them, and the grid leads each flagged cell with its note. In practice
@@ -166,7 +169,7 @@ export function SlideReviewContainer() {
   }, [commitSlides, slidesText]);
 
   // Load a service item's slides into the editor and pull down its agent conversation (if the
-  // Proclaim service or a prior Suggest already produced one). Used by both the picker and the
+  // Proclaim service or a prior Draft already produced one). Used by both the picker and the
   // "load on-air" button.
   const handleSelectItem = useCallback(
     (itemId: string) => {
@@ -197,7 +200,7 @@ export function SlideReviewContainer() {
     handleSelectItem(itemId);
   }, [statusMap, handleSelectItem, s.waitingForProclaim]);
 
-  const handleSuggest = useCallback(async () => {
+  const handleDraft = useCallback(async () => {
     // Parse fresh from the textarea so we never translate a stale slide set.
     const slideList = parseSlidesInput(slidesText);
     setSlides(slideList);
@@ -241,7 +244,7 @@ export function SlideReviewContainer() {
       for (const update of updates) {
         translationsMap.set(slideTranslationKey(update.language, update.sourceText), {
           text: update.text,
-          provenance: 'llm-agent',
+          provenance: 'llm',
         });
       }
       setDrafts((prev) => {
@@ -410,10 +413,10 @@ export function SlideReviewContainer() {
         <button
           type="button"
           className={buttonClass}
-          onClick={() => void handleSuggest()}
+          onClick={() => void handleDraft()}
           disabled={busy || slides.length === 0}
         >
-          {busy ? s.suggesting : s.suggestTranslations}
+          {busy ? s.drafting : conversation ? s.redraftTranslations : s.draftTranslations}
         </button>
         {message && <span className="text-xs text-green-700 dark:text-green-400">{message}</span>}
         {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}

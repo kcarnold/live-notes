@@ -790,7 +790,7 @@ app.post('/api/slideConversation/message', requireWriteKey('/api/slideConversati
     conversation.usage = mergeUsage(conversation.usage ?? emptyUsage(), result.usage);
     writeConversation(conversationsMap, conversation);
 
-    // Flatten revised translations for the browser to apply (llm-agent provenance).
+    // Flatten revised translations for the browser to apply.
     const updatedTranslations: Array<{ language: string; sourceText: string; text: string }> = [];
     for (const [language, blocks] of Object.entries(result.translations)) {
       for (const block of blocks) {

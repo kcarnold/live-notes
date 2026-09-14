@@ -17,7 +17,7 @@
  * because it is checkable rather than merely asserted: `lookup_bible_passage` already returns
  * the canonical text to check it against (a creed would need an equivalent source).
  */
-export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm' | 'llm-agent';
+export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm';
 
 export interface SlideTranslationEntry {
   /** The translated text. */

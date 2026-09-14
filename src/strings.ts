@@ -141,8 +141,9 @@ export interface AppStrings {
   slideReviewTitle: string;
   slidesInputLabel: string;
   loadOnAirItem: string;
-  suggestTranslations: string;
-  suggesting: string;
+  draftTranslations: string;
+  redraftTranslations: string;
+  drafting: string;
   bibleLookupsLabel: string;
   bibleLookupFound: string;
   bibleLookupMissing: string;
@@ -272,8 +273,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     slideReviewTitle: 'Slide Translation Review',
     slidesInputLabel: 'Item slides (separate slides with a blank line or --)',
     loadOnAirItem: 'Load on-air item',
-    suggestTranslations: 'Suggest',
-    suggesting: 'Suggesting…',
+    draftTranslations: 'Draft',
+    redraftTranslations: 'Re-draft',
+    drafting: 'Drafting…',
     bibleLookupsLabel: 'Bible lookups',
     bibleLookupFound: 'Found in',
     bibleLookupMissing: 'No canonical text found',
@@ -290,7 +292,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     reviewNotesHint: 'Slides the translator flagged for a human to look at.',
     noReviewNotes: 'No slides flagged — nothing here needs a second opinion.',
     conversationHeader: 'Agent conversation',
-    noConversation: 'No conversation yet — Suggest to start one.',
+    noConversation: 'No conversation yet — Draft to start one.',
     followUpPlaceholder: 'Ask a question or give feedback…',
     sendMessage: 'Send',
     selectItemLabel: 'Service item',
@@ -401,8 +403,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     slideReviewTitle: 'Révision des traductions de diapositives',
     slidesInputLabel: 'Diapositives de l’élément (séparez par une ligne vide ou --)',
     loadOnAirItem: 'Charger l’élément à l’antenne',
-    suggestTranslations: 'Suggérer',
-    suggesting: 'Suggestion…',
+    draftTranslations: 'Rédiger',
+    redraftTranslations: 'Rédiger à nouveau',
+    drafting: 'Rédaction…',
     bibleLookupsLabel: 'Recherches bibliques',
     bibleLookupFound: 'Trouvé en',
     bibleLookupMissing: 'Aucun texte canonique trouvé',
@@ -419,7 +422,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     reviewNotesHint: 'Diapositives signalées par le traducteur pour un regard humain.',
     noReviewNotes: 'Aucune diapositive signalée — rien à revoir ici.',
     conversationHeader: 'Conversation avec l’agent',
-    noConversation: 'Aucune conversation pour l’instant — cliquez sur Suggérer pour en démarrer une.',
+    noConversation: 'Aucune conversation pour l’instant — cliquez sur Rédiger pour en démarrer une.',
     followUpPlaceholder: 'Posez une question ou donnez un retour…',
     sendMessage: 'Envoyer',
     selectItemLabel: 'Élément du service',
@@ -530,8 +533,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     slideReviewTitle: 'Revisi\u00f3n de traducciones de diapositivas',
     slidesInputLabel: 'Diapositivas del elemento (separe con una l\u00ednea en blanco o --)',
     loadOnAirItem: 'Cargar elemento al aire',
-    suggestTranslations: 'Sugerir',
-    suggesting: 'Sugiriendo\u2026',
+    draftTranslations: 'Redactar',
+    redraftTranslations: 'Volver a redactar',
+    drafting: 'Redactando\u2026',
     bibleLookupsLabel: 'Consultas b\u00edblicas',
     bibleLookupFound: 'Encontrado en',
     bibleLookupMissing: 'No se encontr\u00f3 texto can\u00f3nico',
@@ -548,7 +552,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     reviewNotesHint: 'Diapositivas señaladas por el traductor para revisión humana.',
     noReviewNotes: 'Ninguna diapositiva señalada — no hay nada que revisar aquí.',
     conversationHeader: 'Conversación con el agente',
-    noConversation: 'Aún no hay conversación — pulse Sugerir para iniciar una.',
+    noConversation: 'Aún no hay conversación — pulse Redactar para iniciar una.',
     followUpPlaceholder: 'Haga una pregunta o dé su opinión…',
     sendMessage: 'Enviar',
     selectItemLabel: 'Elemento del servicio',
@@ -659,8 +663,9 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     slideReviewTitle: 'Revizyon Tradiksyon Diapozitiv',
     slidesInputLabel: 'Diapozitiv eleman an (separe ak yon liy vid oswa --)',
     loadOnAirItem: 'Chaje eleman k ap pase a',
-    suggestTranslations: 'Sijere',
-    suggesting: 'Ap sijere…',
+    draftTranslations: 'Ekri bouyon',
+    redraftTranslations: 'Ekri bouyon ankò',
+    drafting: 'Ap ekri bouyon…',
     bibleLookupsLabel: 'Rechèch biblik',
     bibleLookupFound: 'Jwenn nan',
     bibleLookupMissing: 'Pa jwenn tèks kanonik',
@@ -677,7 +682,7 @@ export const strings: Record<SupportedLocale, AppStrings> = {
     reviewNotesHint: 'Djapozitiv tradiktè a make pou yon moun gade.',
     noReviewNotes: 'Pa gen djapozitiv make — pa gen anyen pou gade isit la.',
     conversationHeader: 'Konvèsasyon ak ajan an',
-    noConversation: 'Poko gen konvèsasyon — klike Sijere pou kòmanse youn.',
+    noConversation: 'Poko gen konvèsasyon — klike Ekri bouyon pou kòmanse youn.',
     followUpPlaceholder: 'Poze yon kesyon oswa bay yon kòmantè…',
     sendMessage: 'Voye',
     selectItemLabel: 'Eleman sèvis la',
