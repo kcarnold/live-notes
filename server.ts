@@ -55,13 +55,25 @@ function getEnvOrCrash(name: string): string {
   return value;
 }
 
-const phClient = new PostHog(
-  getEnvOrCrash('VITE_PUBLIC_POSTHOG_KEY'),
-  {
-    host: getEnvOrCrash('VITE_PUBLIC_POSTHOG_HOST'),
-    enableExceptionAutocapture: true,
-  }
-);
+// Telemetry is genuinely optional: without a key the app still runs, which is what a
+// contributor's first `npm run dev:server` needs. Unconfigured, the client is still
+// *constructed* — in a drop-everything mode — rather than omitted, so neither the ~20
+// call sites nor `GeminiProvider`'s required `posthog` dependency need null handling.
+//
+// Exception autocapture is armed only when telemetry is real. It registers an
+// `uncaughtException` handler, and Node skips its own print-and-exit(1) when one exists,
+// which is what turns a boot-time config error into a silent hang (#139). Leaving it off
+// in dev means a missing GEMINI_API_KEY fails the way the message says it will.
+const posthogKey = process.env.VITE_PUBLIC_POSTHOG_KEY;
+const telemetryEnabled = Boolean(posthogKey);
+if (!telemetryEnabled) {
+  console.log('[telemetry] VITE_PUBLIC_POSTHOG_KEY unset — PostHog disabled, events dropped');
+}
+const phClient = new PostHog(posthogKey ?? 'phc_telemetry_disabled', {
+  host: process.env.VITE_PUBLIC_POSTHOG_HOST ?? 'https://us.i.posthog.com',
+  enableExceptionAutocapture: telemetryEnabled,
+  ...(telemetryEnabled ? {} : { before_send: () => null }),
+});
 
 const geminiProvider = new GeminiProvider({
   apiKey: getEnvOrCrash('GEMINI_API_KEY'),

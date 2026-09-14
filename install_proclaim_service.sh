@@ -10,7 +10,7 @@
 #
 # The LaunchAgent runs proclaim_service_launch.sh, which updates this checkout
 # from the release branch on every launch before starting the service. See
-# PROCLAIM_SERVICE_SETUP.md ("Automatic updates").
+# docs/PROCLAIM_SERVICE_SETUP.md ("Automatic updates").
 
 set -e
 
@@ -242,4 +242,4 @@ echo "  • Update now:         launchctl stop $SERVICE_LABEL   # restart = upda
 echo "  • Promote a release:  git push origin main:$UPDATE_BRANCH   (not after Thursday)"
 echo "  • Uninstall:          bash install_proclaim_service.sh --uninstall"
 echo ""
-echo "More info: See PROCLAIM_SERVICE_SETUP.md"
+echo "More info: See docs/PROCLAIM_SERVICE_SETUP.md"

@@ -10,15 +10,15 @@ taking that person seriously.
 
 ## 1. What that person hits today
 
-`HomePage` ([src/App.tsx:90](../src/App.tsx#L90)) shows a heading that reads **"Choose
+`HomePage` ([App.tsx](../src/App.tsx)) shows a heading that reads **"Choose
 Layout"**, a language dropdown, and three cards with wireframe diagrams. Four concrete
 problems, in descending order of how badly they burn a real attendee:
 
 ### 1a. Choosing Haitian Creole silently gives you French
 
 The homepage dropdown offers the three *text* translation languages
-([configAtoms.ts:23](../src/configAtoms.ts#L23)). The listen code is derived from the
-choice ([App.tsx:101](../src/App.tsx#L101)):
+([configAtoms.ts](../src/configAtoms.ts)). The listen code is derived from the
+choice ([App.tsx](../src/App.tsx)):
 
 ```ts
 const listenCode =
@@ -34,7 +34,7 @@ transcript, with nothing on screen admitting the substitution.
 
 The same class of bug exists in the other direction: `slideTranslation-{lang}` validates
 against `languages` and falls back to `languages[0]`
-([App.tsx:294](../src/App.tsx#L294)), so any listener whose language has no slide
+([App.tsx](../src/App.tsx)), so any listener whose language has no slide
 translation would be shown French slides.
 
 Both are the same root cause: **the UI offers a language without checking what that
@@ -42,7 +42,7 @@ language can actually do.**
 
 ### 1b. Two of the three doors lead to a blank wall
 
-`slide-and-translation` and `slide-and-bilingual` ([App.tsx:65](../src/App.tsx#L65)) both
+`slide-and-translation` and `slide-and-bilingual` ([App.tsx](../src/App.tsx)) both
 render `BilingualBlockViewerContainer`, which reads `sourceBlocks`. With note-taking off,
 an attendee picking either gets a slide pane plus a permanently empty panel and concludes
 the app is broken.
@@ -56,7 +56,7 @@ the in-pane dropdown and know that "Original" means English.
 
 ### 1d. Operator links are in everyone's face
 
-Note-Taker, Broadcaster, Review Slides, Status ([App.tsx:168](../src/App.tsx#L168)) — in
+Note-Taker, Broadcaster, Review Slides, Status ([App.tsx](../src/App.tsx)) — in
 English only, unlabeled as staff tools, two of them leading to write-key prompts.
 
 Plus, nothing on the page says what the app is, that translated audio in a shared room
@@ -72,7 +72,7 @@ attendee destination. So the page should not ask for a layout. It should ask one
 
 The read-vs-listen axis does not need to be a second question, because `ListenViewer`
 already resolves it: the transcript renders unconditionally from Yjs, and audio is opt-in
-behind the "Listen live" button ([ListenViewer.tsx:290](../src/ListenViewer.tsx#L290)).
+behind the "Listen live" button ([ListenViewer.tsx](../src/ListenViewer.tsx)).
 Someone who only wants to read simply never presses it. The landing page's job is to *say*
 so, so a reader does not assume audio is mandatory and give up.
 
@@ -91,8 +91,8 @@ bundle would defeat that.
 ### How it reaches the client
 
 `SessionGate` already blocks the whole app on `/api/session/current`
-([SessionGate.tsx:24](../src/SessionGate.tsx#L24)). Fetch the config bundle in parallel
-there, extending the existing `/api/config` ([server.ts:281](../server.ts#L281)).
+([SessionGate.tsx](../src/SessionGate.tsx)). Fetch the config bundle in parallel
+there, extending the existing `/api/config` ([server.ts](../server.ts)).
 
 - Parallel with the session fetch, so no extra wall-clock round trip.
 - Inherits the gate's honesty: config failing gives a screen that says so, rather than a
@@ -115,7 +115,7 @@ definition so nobody later "hardens" it into enforcement.
 
 `LIVE_AUDIO_SOURCE_LANGUAGE` already exists as deployment config but the client never sees
 it. Before a broadcast starts, `liveAudioConfig` is unset and `useSourceLanguage()` falls
-back to `DEFAULT_SOURCE_LANGUAGE = 'en'` ([liveAudioConfig.ts:36](../src/liveAudioConfig.ts#L36)).
+back to `DEFAULT_SOURCE_LANGUAGE = 'en'` ([liveAudioConfig.ts](../src/liveAudioConfig.ts)).
 Harmless at NCF; wrong on a Spanish-speaking deployment, where the landing page would label
 the wrong card "Original" until someone hits Broadcast.
 
@@ -128,9 +128,9 @@ the same set.
 
 | List | Where | What it actually is |
 |---|---|---|
-| `languages` | [configAtoms.ts:23](../src/configAtoms.ts#L23) | text/slide translation targets, as display names |
-| `LANGUAGE_BCP47` | [strings.ts:5](../src/strings.ts#L5) | name ↔ code map |
-| `LISTEN_FAVORITES` | [listenLanguages.ts:35](../src/listenLanguages.ts#L35) | codes pinned in the listen picker |
+| `languages` | [configAtoms.ts](../src/configAtoms.ts) | text/slide translation targets, as display names |
+| `LANGUAGE_BCP47` | [strings.ts](../src/strings.ts) | name ↔ code map |
+| `LISTEN_FAVORITES` | [listenLanguages.ts](../src/listenLanguages.ts) | codes pinned in the listen picker |
 | `SUPPORTED_LOCALES` | strings.ts | locales the UI is *actually translated into* |
 
 Three of those are capability facts a deployment cannot change by env var. Gemini Live
@@ -347,7 +347,7 @@ For contrast, the thing this replaces:
 
 **A "build your own layout" page.** Most of it already exists: inside any layout the
 per-pane selectors call `replaceComponent` and rewrite the URL
-([App.tsx:406](../src/App.tsx#L406)), so languages can already be swapped live. The only
+([App.tsx](../src/App.tsx)), so languages can already be swapped live. The only
 missing verb is adding or removing a pane.
 
 For the uncommon combinations — English + slide, French listen-only — the "More options"
@@ -357,7 +357,7 @@ cost, and if a particular example gets used a lot, that is the evidence for prom
 a real card. The one to watch: English speakers wanting the slide alongside the transcript.
 
 **Operator links** move off the attendee flow entirely — a footer "Team" link, or
-auto-revealed when `hasWriteKey()` ([writeKey.ts:114](../src/writeKey.ts#L114)) is true,
+auto-revealed when `hasWriteKey()` ([writeKey.ts](../src/writeKey.ts)) is true,
 which is exactly the devices that should see them.
 
 **Remembering the last language.** One tap is cheap enough that this is not worth the

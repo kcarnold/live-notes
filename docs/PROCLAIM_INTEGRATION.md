@@ -91,7 +91,7 @@ reconnects:
   refused and the service is told to use today's doc, which is the failure in
   [#111](https://github.com/kcarnold/live-notes/issues/111). An operator pin set from
   `/status` outranks anything the service can see, and the service logs whenever the
-  answer differs from what it proposed. See [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
+  answer differs from what it proposed. See [CURRENT_SESSION.md](CURRENT_SESSION.md).
 
 ### 3. View Current Slide in Browser
 

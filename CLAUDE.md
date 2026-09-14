@@ -28,40 +28,49 @@ cp template-.env .env
 npm install
 ```
 
-Required environment variables (`.env`):
-- `YSWEET_CONNECTION_STRING` - Y-Sweet connection string
-- `GEMINI_API_KEY` - Google Gemini API key
-- `ELEVENLABS_API_KEY` - ElevenLabs API key for text-to-speech
+Environment variables. **`template-.env` is the list**; it carries every variable with its
+comment, and a variable missing from it is a bug in the template, not something to learn from
+here. What follows is only the shape — which ones stop the server booting, and which subsystem
+each belongs to. Defaults are deliberately not repeated here: they live next to the code that
+reads them, which is where they stay correct.
 
-Optional environment variables:
-- `WRITE_KEYS` - Shared per-device keys authorizing writes (editing, the microphone, the
-  model/TTS endpoints). Comma-separated `label:key` or bare `key`. Reading needs no key.
-  See [docs/WRITE_KEYS.md](docs/WRITE_KEYS.md).
-- `WRITE_AUTH_MODE` - `off` | `observe` | `enforce` (default `observe`; forced to `off` when
-  `WRITE_KEYS` is empty). `observe` records every privileged request and allows it anyway —
-  the rollout state. `enforce` refuses unauthorized ones.
-- `TTS_MAX_CONCURRENT` - Max concurrent TTS requests (default: 2)
-- `TTS_RATE_LIMIT_PER_MIN` / `TRANSLATE_RATE_LIMIT_PER_MIN` - Per-caller caps on the two
-  endpoints viewers call and a write key can't protect (defaults 600 / 1200; 0 disables).
-  Sized to stop a script, not a congregation — see [rateLimit.ts](rateLimit.ts).
-- `GEMINI_STRONG_MODEL` - Stronger Gemini model for whole-item slide drafting via `/api/translateItem` (default: `gemini-3.7-flash`)
-- `SESSION_TIMEZONE` - IANA zone the congregation keeps (default: the host's zone). The
-  server owns "which doc is the current session" for everyone (issue #111), so it reckons
-  dates and the 4am pin expiry on this clock — a container's is UTC, which would file a
-  Sunday-evening service under Monday. See [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
-- `SESSION_REGISTRY_PATH` - where the pin/proposal state is persisted (default: inside the
-  audio-cache dir, so a pin survives a restart mid-service).
-- `LIVE_AUDIO_SOURCE_LANGUAGE` - BCP-47 code a session is assumed to be *spoken* in when
-  nobody declares one (default `en`). The broadcast pane asks the speaker and publishes their
-  answer per session; this is only the fallback, for older clients and the macOS audio feeder.
-  However it is resolved, the supervisor mirrors it into the doc's `liveAudioConfig`.
-  See [src/liveAudioConfig.ts](src/liveAudioConfig.ts).
-- `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS` - dBFS voice bar for the live-audio cost path; a bridge suspends its Gemini session after ~30s below it (`-30` is a guess, never validated against a real room). Unset = off, no suspending. Beware the sign: dBFS is negative, so `0` gates hardest, not least. goaway/reconnect fixes and the always-on default translator are independent of this. See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
-- `VITE_PUBLIC_POSTHOG_KEY` - PostHog analytics key (for usage tracking)
-- `VITE_PUBLIC_POSTHOG_HOST` - PostHog host URL (default: https://us.i.posthog.com)
-- `POSTHOG_CLI_TOKEN` - PostHog CLI token (for sourcemap uploads during Docker build)
-- `POSTHOG_CLI_ENV_ID` - PostHog environment ID (for sourcemap uploads)
-- `POSTHOG_CLI_HOST` - PostHog CLI host (for sourcemap uploads)
+**Required** — the server refuses to boot without these (`getEnvOrCrash` in `server.ts`):
+`YSWEET_CONNECTION_STRING`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`.
+
+**Optional, grouped by what they turn on:**
+
+- *Write authorization* (`WRITE_KEYS`, `WRITE_AUTH_MODE`) — shared per-device keys gating
+  editing, the microphone, and the endpoints that spend money. Reading never needs one.
+  `observe` records what it would have refused and refuses nothing; check the mode before
+  concluding a key is enforced. See [docs/WRITE_KEYS.md](docs/WRITE_KEYS.md).
+- *Live speech translation* (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) — **the
+  whole live-audio subsystem is off unless all three are set**, and the `listen-*` / `broadcast`
+  panes are disabled with it. The rest of the app runs fine without them, which is why a
+  missing translator bot is so often just an unconfigured environment.
+- *Live-audio behavior* (`LIVE_AUDIO_SOURCE_LANGUAGE`, `LIVE_AUDIO_SILENCE_THRESHOLD_DBFS`) —
+  the fallback spoken language when a broadcaster declares none, and the dBFS voice bar for
+  the cost path (unset = no suspending at all; mind the sign, dBFS is negative, so `0` gates
+  hardest). See [src/liveAudioConfig.ts](src/liveAudioConfig.ts) and
+  [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+- *The current session* (`SESSION_TIMEZONE`, `SESSION_REGISTRY_PATH`) — the congregation's IANA
+  zone, which the server reckons session dates and the pin expiry on. A container's zone is
+  UTC, which files a Sunday-evening service under Monday (issue #111). See
+  [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
+- *Cost and rate control* (`TTS_MAX_CONCURRENT`, `TTS_RATE_LIMIT_PER_MIN`,
+  `TRANSLATE_RATE_LIMIT_PER_MIN`) — the two endpoints viewers call directly and a write key
+  can't protect. Sized to stop a script, not a congregation; `0` disables. See
+  [rateLimit.ts](rateLimit.ts).
+- *Model and prompt overrides* (`GEMINI_STRONG_MODEL`, `SLIDE_TRANSLATION_CONTEXT`) — the
+  stronger model used for whole-item slide drafting via `/api/translateItem`, and the general
+  context injected into every slide-translation prompt. Both defaulted in `server.ts`.
+- *Storage paths* (`SLIDE_LIBRARY_PATH`) — the reviewed-translation library; defaults inside
+  the audio-cache dir so it rides the existing Docker volume.
+- *Telemetry* (`VITE_PUBLIC_POSTHOG_KEY`, `VITE_PUBLIC_POSTHOG_HOST`) — genuinely optional.
+  With no key the client is constructed in a drop-everything mode and the server logs
+  `[telemetry] ... disabled`; nothing else changes. `POSTHOG_CLI_TOKEN` / `POSTHOG_CLI_ENV_ID`
+  / `POSTHOG_CLI_HOST` are build-time only, for sourcemap upload in the Dockerfile.
+- *Testing escape hatch* (`ALLOW_CHAOS_ENDPOINT`, `PORT`) — the chaos endpoint is refused in
+  production unless explicitly allowed.
 
 ### Development
 ```bash
@@ -72,7 +81,7 @@ npm run dev:server
 npm run dev
 
 # OPTIONAL: Run Proclaim integration service (in separate terminal, requires Proclaim running)
-# See PROCLAIM_INTEGRATION.md for full setup instructions
+# See docs/PROCLAIM_INTEGRATION.md for full setup instructions
 uv run proclaim_service.py
 ```
 
@@ -225,7 +234,7 @@ Full picture: [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
 
 The app uses **Yjs** for real-time collaborative state management:
 
-1. **Y-Sweet authentication** ([server.ts:90-101](server.ts#L90-L101)): Backend issues read-only or full access tokens based on editor status, gated on a write key (an unauthorized editor request is downgraded to read-only, not refused)
+1. **Y-Sweet authentication** ([server.ts](server.ts)): Backend issues read-only or full access tokens based on editor status, gated on a write key (an unauthorized editor request is downgraded to read-only, not refused)
 2. **Shared Y.Doc** per session: Each session has a shared Yjs document, identified by the doc
    id the server names (see *The Current Session* above); `?doc=` overrides it
 3. **Key shared data structures** (the header comment in [sessionExport.ts](sessionExport.ts) is
@@ -413,13 +422,13 @@ This ensures textareas are exactly the right height without extra lines.
 
 ### Proclaim Integration
 
-The app integrates with **Proclaim** (church presentation software) to display current slide content in real-time. See [PROCLAIM_INTEGRATION.md](PROCLAIM_INTEGRATION.md) for full documentation.
+The app integrates with **Proclaim** (church presentation software) to display current slide content in real-time. See [docs/PROCLAIM_INTEGRATION.md](docs/PROCLAIM_INTEGRATION.md) for full documentation.
 
 #### Architecture
 
 The integration uses a **Python service** ([proclaim_service.py](proclaim_service.py)) that:
 
-1. **Polls Proclaim API** (every 1 second) for current presentation and slide status
+1. **Polls Proclaim API** for current presentation and slide status (interval set by `PROCLAIM_POLL_INTERVAL`, faster on air than off; see `proclaim_service.py`)
 2. **Parses presentation content** from Proclaim's SQLite database
 3. **Extracts translated slides** from rich text XML (supports songs, Bible passages, content slides)
 4. **Updates Yjs** via Y-Sweet WebSocket connection with presentation data and current status
@@ -455,15 +464,23 @@ The viewer shows:
 
 #### Installation as macOS LaunchAgent
 
-```bash
-bash install_proclaim_service.sh --server-url=https://dev8.kenarnold.org
-```
+Run `bash install_proclaim_service.sh --help` for the current flags and the default server
+URL — the deployment hostname has changed before, and the script is the only copy of it that
+can't go stale. [docs/PROCLAIM_SERVICE_SETUP.md](docs/PROCLAIM_SERVICE_SETUP.md) has the
+worked examples.
 
 The install script:
 1. Fetches PostHog config from `{server-url}/api/config` and injects `POSTHOG_API_KEY` + `POSTHOG_HOST`
-2. Sets `YSWEET_URL` from `--server-url` (defaults to `https://dev8.kenarnold.org`)
+2. Sets `YSWEET_URL` from `--server-url`
 3. Generates `~/Library/LaunchAgents/org.kenarnold.proclaim-service.plist` from the template
 4. Loads the service as a LaunchAgent (auto-restarts, survives reboots)
+
+**The generated plist bakes absolute paths** for the launch wrapper and the service entry
+point, and auto-update never rewrites it — it only fast-forwards the git checkout. So moving
+or renaming `proclaim_service_launch.sh` or `proclaim_service.py` breaks every already-installed
+machine on its next launch, and breaks it *after* the update has been pulled in, with launchd
+retrying a path that will never exist again. Those two files stay where they are unless every
+deployment is reinstalled. The modules they import are free to move.
 
 #### Auto-update on launch
 
@@ -477,7 +494,7 @@ an update is restarting the service. The service reports its SHA/branch/channel 
 session doc's `status` Y.Map (key `proclaimService`), and the status view flags "update
 pending — restart the service" when the channel has moved past it. Install with
 `--no-auto-update` (or set `PROCLAIM_AUTO_UPDATE=0` in the plist) to freeze an install.
-Details in [PROCLAIM_SERVICE_SETUP.md](PROCLAIM_SERVICE_SETUP.md#automatic-updates).
+Details in [docs/PROCLAIM_SERVICE_SETUP.md](docs/PROCLAIM_SERVICE_SETUP.md#automatic-updates).
 
 #### PostHog Config Endpoint
 
@@ -487,9 +504,13 @@ Details in [PROCLAIM_SERVICE_SETUP.md](PROCLAIM_SERVICE_SETUP.md#automatic-updat
 
 The UI uses a **URL-based layout system** (`PagePart` in [App.tsx](src/App.tsx) resolves each name):
 
-- Layouts are encoded in the URL path: `/sourceText|translatedText-French,currentSlide`
-- Format: rows separated by `|`, columns separated by `,`
-- Components:
+- Layouts are encoded in the URL path: `/sourceText|bilingual-French`
+- Format: **`|` separates columns, `,` stacks panes within a column.** On a wide screen the
+  `|` groups sit side by side (`flex-row`) and each group's `,` members stack (`flex-col`);
+  narrow screens stack the columns too. `LayoutDiagram.tsx` states the same shape — "a 2D
+  array: columns of rows" — and is the thing to read if this is ever in doubt.
+- Components (the authoritative list is the `PagePart` branch chain in `App.tsx`; this is a
+  summary and can fall behind it):
   - `sourceText` — the block editor + translation controls
   - `translatedText-{language}` — translation only
   - `bilingual-{language}` — original + translation
@@ -502,7 +523,7 @@ The UI uses a **URL-based layout system** (`PagePart` in [App.tsx](src/App.tsx) 
   BCP-47 code (`fr`) from the larger Gemini Live set ([listenLanguages.ts](src/listenLanguages.ts))
 - Language selection in translated views updates the URL dynamically
 - Editor mode is triggered by `#editor` hash in URL
-- Example with Proclaim: `/translatedText-French,currentSlide` shows translation and current slide side-by-side
+- Example with Proclaim: `/translatedText-French|currentSlide` puts the translation and the current slide side by side; `/translatedText-French,currentSlide` stacks them in one column
 - Unknown names render a "Unknown component" card rather than failing the page
 
 ### Editor vs Viewer Mode
@@ -519,6 +540,20 @@ The app has two modes determined by URL hash (`#editor`):
   - Receives real-time updates from editors
   - Read-only Y-Sweet token
   - Can use TTS (auto or manual mode)
+
+## Writing docs and comments
+
+**Don't hard-code in prose anything that can be looked up in the code.** Name the file and the
+symbol; let `grep` do the rest. This applies to this file too — several things in it were wrong
+for months because they restated a value the code owns.
+
+Specifically: no line numbers, no default values or timeouts or model names, no re-listing of
+what the code already enumerates (env vars, routes, Yjs doc keys, layout component names).
+Point at the single place that has to be correct for the program to run.
+
+What is worth writing down is what the code cannot say: why a design is the way it is, what
+broke to produce it, and what would break if it were changed back. [docs/README.md](docs/README.md#writing-docs-here)
+has the longer version and the evidence behind it.
 
 ## Key Files
 

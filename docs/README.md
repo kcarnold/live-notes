@@ -38,9 +38,32 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 - Replay harness design: [#70](https://github.com/kcarnold/live-notes/issues/70) —
   record-at-the-boundary replay of full services for testing and accountability.
 
-## Subsystem references (repo root)
+## Subsystem references
 
-- [PROCLAIM_INTEGRATION.md](../PROCLAIM_INTEGRATION.md), [PROCLAIM_DATA_FORMAT.md](../PROCLAIM_DATA_FORMAT.md),
-  [PROCLAIM_SERVICE_SETUP.md](../PROCLAIM_SERVICE_SETUP.md) — Proclaim sync service.
-- [DUMP_DOCS_README.md](../DUMP_DOCS_README.md) — Yjs doc dumper (end-state JSON extraction;
-  known to be stale relative to current doc structure — do not treat as source of truth).
+- [PROCLAIM_INTEGRATION.md](PROCLAIM_INTEGRATION.md), [PROCLAIM_DATA_FORMAT.md](PROCLAIM_DATA_FORMAT.md),
+  [PROCLAIM_SERVICE_SETUP.md](PROCLAIM_SERVICE_SETUP.md) — Proclaim sync service.
+- [DUMP_DOCS.md](DUMP_DOCS.md) — Yjs doc dumper: bulk end-state JSON extraction across every
+  day's doc. Knows about fewer keys than the doc holds; `sessionExport.ts` is the reader that
+  tracks it most closely.
+
+## Writing docs here
+
+**Don't hard-code in prose anything a reader could look up in the code.** Every stale thing
+found in the 2026-09 audit was a fact duplicated from code into a sentence, where the copy
+nearest the change got updated and the far copy didn't.
+
+In practice:
+
+- **No line numbers.** Link the file, name the symbol; `grep` finds it, and the anchor rots on
+  the next edit above it. (40 such anchors were deleted in that audit; several already pointed
+  at blank lines.)
+- **No default values, timeouts, model names, ports or intervals.** Name the constant or the
+  env var and say where it is read. Say *why* the value is what it is — that part doesn't rot.
+- **No re-listing of things the code enumerates**: env vars (`template-.env` is the list),
+  route names, Yjs doc keys, layout component names. Point at the one place that has to be
+  right for the program to work.
+- **Keep status out of reference docs.** "Not yet built" belongs in an issue, which has a close
+  button. A doc doesn't, so every "not yet" sentence is a future lie with no expiry.
+
+What *is* worth writing here is the part the code can't say: why a design is the way it is, what
+broke to make it that way, and what would break if someone changed it back.

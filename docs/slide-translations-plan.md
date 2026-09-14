@@ -4,7 +4,7 @@
 
 Today, presentation slides reach viewers as whatever French/Haitian text a human
 typed into **Proclaim's own translation screen** (`parse_item_translation`,
-`proclaim_lib.py:296-314`). This caps us at the languages Proclaim is configured
+`proclaim_lib.py`). This caps us at the languages Proclaim is configured
 for, offers no review/quality workflow, and the Python service only pushes the
 *on-air* item with **no detection of content changing underneath us**
 (`localRevision` is exposed by Proclaim but ignored — `proclaim_service.py`
@@ -33,7 +33,7 @@ with text we haven't reviewed.
 ## Core design: one content-addressed translation store, two tiers
 
 Reuse the notes insight — translations are keyed by **content, not position**
-(`translationCacheKey`, `translationUtils.ts:48`). A slide changing underneath us
+(`translationCacheKey`, `translationUtils.ts`). A slide changing underneath us
 then becomes a clean **cache miss on a new key** instead of silent staleness.
 
 **Value shape** (richer than the notes cache):
@@ -98,19 +98,19 @@ This encodes "prefer a reviewed French text over an unreviewed Creole one." When
 displayed language differs from the requested one, show a small "(French)" tag.
 
 ## Reused building blocks (do not rebuild)
-- `translateBlock` / `POST /api/requestTranslatedBlocks` (`nlp.ts:33`,
-  `server.ts:92`): already translates a JSON array of segments with per-segment
+- `translateBlock` / `POST /api/requestTranslatedBlocks` (`nlp.ts`,
+  `server.ts`): already translates a JSON array of segments with per-segment
   `status` `'T'`(translate)/`'C'`(context). **Whole-item translation = one call
   where each slide is a `'T'` segment and any already-`reviewed` slides of the item
   are passed as `'C'` context** — gives full-item context and reliable per-slide
   mapping via `segmentId`. Caches per slide on return.
-- `translationCacheKey` pattern (`translationUtils.ts:48`) for library + map keys.
+- `translationCacheKey` pattern (`translationUtils.ts`) for library + map keys.
 - Container/pure split: `BilingualBlockViewerContainer` + `BilingualBlockViewer`,
   and `CurrentSlideViewer`/`CurrentSlideViewerContainer` (`CurrentSlideViewer.tsx`)
   as the model for the live translated-slide view.
 - `useMap`, `PagePart` registry (`App.tsx` ~164), `isEditorAtom`
-  (`configAtoms.ts:4`), `languages` (`configAtoms.ts:6`), `LANGUAGE_BCP47`
-  (`strings.ts:4`), `useStrings`.
+  (`configAtoms.ts`), `languages` (`configAtoms.ts`), `LANGUAGE_BCP47`
+  (`strings.ts`), `useStrings`.
 - `parse_item_translation`, `split_into_slides`, `get_slides_for_song`
   (`proclaim_lib.py`) — extend to also extract the **original Main-screen** content
   and to enumerate the full service order.
@@ -229,7 +229,7 @@ it.
 
 ## Files to create / modify
 - `server.ts` — register library + `translateItem` endpoints.
-- `src/slideLibrary.ts` (new, server) — file-backed translation memory + normalize.
+- `slideLibrary.ts` (new, server) — file-backed translation memory + normalize.
 - `src/SlideReview*.tsx` (new) — review UI (pure + container), Phase A.
 - `src/SlideTranslationViewer*.tsx` (new) — live translated slide (pure + container),
   Phase C.

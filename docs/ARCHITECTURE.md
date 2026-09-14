@@ -21,7 +21,7 @@ derived data) drives the testing/replay strategy.
                        │ Y-Sweet WS     ├──────────────────────────┤
 ┌────────────────────┐ │                │ Express server           │──▶ Gemini (block +
 │ Browser clients    │ ├───────────────▶│  - Y-Sweet token auth    │     slide translation)
-│  editor / viewers /│ │                │  - /api/translate        │──▶ ElevenLabs (TTS)
+│  editor / viewers /│ │                │  - /api/requestTrans…    │──▶ ElevenLabs (TTS)
 │  listeners         │─┘                │  - /api/translateItem    │──▶ PostHog (telemetry)
 └────────────────────┘                  │  - TTS + audio cache     │
                                         ├──────────────────────────┤
@@ -61,7 +61,8 @@ derived data) drives the testing/replay strategy.
   carries a write key like everything else. Its own `README.md` covers operation and
   `NOTEBOOK.md` records why it looks the way it does — read the notebook before changing
   packaging, entitlements, or the connect/retry logic.
-- **proclaim_service.py**: polls Proclaim's local HTTP API (~1 s) and reads its SQLite DB,
+- **proclaim_service.py**: polls Proclaim's local HTTP API (sub-second while on air, backing
+  off when not — see `PROCLAIM_POLL_INTERVAL*`) and reads its SQLite DB,
   pushes presentations + slide status into Yjs. Internally decoupled into a **slide feed**
   (`ProclaimFeed`, the source) and **consumers** (a Yjs publisher + a translation worker),
   wired by a source-agnostic runtime — see "Testing seams". Installed as a macOS LaunchAgent
@@ -79,10 +80,10 @@ doc is *derived* data that the system under test will regenerate.
 
 | Writer | Writes into Yjs | True input boundary |
 |---|---|---|
-| Human editor (browser) | `sourceTextBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
+| Human editor (browser) | `sourceBlocks` edits | Keystrokes — these *are* Yjs deltas; Yjs-level recording is correct **only** for this writer |
 | `proclaim_service.py` (slide feed → Yjs publisher + translator) | `proclaimServiceOrder`, `proclaimPresentations`, `proclaimStatus`, `slideTranslations`, `status.proclaimService` | Proclaim local HTTP API responses + `PresentationManager.db` |
 | translation-bridge / transcript-log | `liveTranscriptSegments-{code}` (one utterance per entry, stamped `startedAt` + `endedAt`; the silence between utterances is derived from those, not stored) | Organizer audio track + Gemini Live responses — including *when* each delta arrived, which only the writer sees |
-| Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/translate` (Gemini) |
+| Block translation manager | per-language translations, `notesTranslationCache` | Source blocks + `/api/requestTranslatedBlocks` (Gemini) |
 | Slide translation agent | slide translations, conversations, library | Slide texts + Gemini |
 
 Recorded *outputs* of a component have exactly two legitimate uses: as a **stand-in** when
