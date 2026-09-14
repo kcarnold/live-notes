@@ -9,8 +9,15 @@
  * underneath us is a clean cache miss on a new key rather than silent staleness.
  */
 
-/** Where a translation came from. Pure metadata — the data model treats them alike. */
-export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm' | 'llm-agent' | 'imported';
+/**
+ * Where a translation came from. Nothing branches on it today.
+ *
+ * `bible` and `creed` are not written yet. They are reserved for the agent *claiming* that a
+ * slide is the published wording rather than its own rendering of it — a claim worth storing
+ * because it is checkable rather than merely asserted: `lookup_bible_passage` already returns
+ * the canonical text to check it against (a creed would need an equivalent source).
+ */
+export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm' | 'llm-agent';
 
 export interface SlideTranslationEntry {
   /** The translated text. */

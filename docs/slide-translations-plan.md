@@ -392,7 +392,11 @@ to fix mid-service, which is noise they can't act on; and in practice the thing 
 whether a slide gets a human's attention is a **note**, not a tier. What replaced it:
 
 - `SlideTranslationEntry` is `{ text, provenance }`. `provenance` still records where a
-  translation came from; nothing branches on it.
+  translation came from; nothing branches on it. `'imported'` went with the tier — it existed
+  only for the `firstDraftBySlide` path the alignment rethink removed (Phase C-import above),
+  so it had no writer left. `'bible'`/`'creed'` are still unwritten but kept: they are the
+  vocabulary for the agent *claiming* a slide is the published wording, which is worth having
+  because a harness can check the claim against the looked-up source.
 - `resolveSlideTranslation` returns the first entry along the fallback chain. A Creole
   viewer with no Creole text now sees the French one whatever produced it — previously an
   unreviewed French text was withheld and the slide read "(not translated)".
