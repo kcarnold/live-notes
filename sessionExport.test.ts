@@ -69,7 +69,6 @@ describe('buildSessionExport', () => {
     doc.getMap('proclaimPresentations').set('i1', { title: 'Reading', slides: ['A verse'] });
     doc.getMap<SlideTranslationEntry>('slideTranslations').set(slideTranslationKey('French', 'A verse'), {
       text: 'Un verset',
-      status: 'reviewed',
       provenance: 'human',
     });
     // Audio in German.
@@ -103,12 +102,10 @@ describe('buildSessionExport', () => {
     const translations = doc.getMap<SlideTranslationEntry>('slideTranslations');
     translations.set(slideTranslationKey('French', 'Line one'), {
       text: 'Ligne un',
-      status: 'reviewed',
       provenance: 'human',
     });
     translations.set(slideTranslationKey('French', 'A verse'), {
       text: 'Un verset',
-      status: 'auto',
       provenance: 'llm',
     });
 
@@ -119,7 +116,7 @@ describe('buildSessionExport', () => {
     // Service order wins: item-b before item-a.
     expect(data.presentations.map((p) => p.title)).toEqual(['Reading', 'Hymn']);
     expect(data.presentations[0].slides[0].translations.French.entry.text).toBe('Un verset');
-    expect(data.presentations[0].slides[0].translations.French.entry.status).toBe('auto');
+    expect(data.presentations[0].slides[0].translations.French.entry.provenance).toBe('llm');
     expect(data.presentations[1].slides[0].translations.French.entry.text).toBe('Ligne un');
     // Untranslated slide has no entry.
     expect(data.presentations[1].slides[1].translations.French).toBeUndefined();

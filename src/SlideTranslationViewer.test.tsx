@@ -5,12 +5,11 @@ import type { ResolvedSlideTranslation } from './slideTranslation';
 
 function resolved(
   text: string,
-  status: 'reviewed' | 'auto',
   displayLanguage: string,
   requestedLanguage: string,
 ): ResolvedSlideTranslation {
   return {
-    entry: { text, status, provenance: status === 'reviewed' ? 'human' : 'llm' },
+    entry: { text, provenance: 'human' },
     displayLanguage,
     requestedLanguage,
     isFallbackLanguage: displayLanguage !== requestedLanguage,
@@ -18,42 +17,29 @@ function resolved(
 }
 
 describe('SlideTranslationViewer', () => {
-  it('shows a reviewed translation with no badges', () => {
+  it('shows a translation with no badges', () => {
     render(
       <SlideTranslationViewer
         slides={['Praise the Lord']}
         currentIndex={0}
         language="French"
-        resolvedBySlide={[resolved('Louez le Seigneur', 'reviewed', 'French', 'French')]}
+        resolvedBySlide={[resolved('Louez le Seigneur', 'French', 'French')]}
       />,
     );
     expect(screen.getByText('Louez le Seigneur')).toBeInTheDocument();
-    expect(screen.queryByText('unreviewed')).not.toBeInTheDocument();
+    expect(screen.queryByText('French')).not.toBeInTheDocument();
   });
 
-  it('shows an unreviewed badge for an auto translation', () => {
-    render(
-      <SlideTranslationViewer
-        slides={['Praise the Lord']}
-        currentIndex={0}
-        language="French"
-        resolvedBySlide={[resolved('Louez (auto)', 'auto', 'French', 'French')]}
-      />,
-    );
-    expect(screen.getByText('unreviewed')).toBeInTheDocument();
-  });
-
-  it('tags the display language when it falls back (reviewed French for a Creole viewer)', () => {
+  it('tags the display language when it falls back (French for a Creole viewer)', () => {
     render(
       <SlideTranslationViewer
         slides={['Praise the Lord']}
         currentIndex={0}
         language="Haitian Creole"
-        resolvedBySlide={[resolved('Louez le Seigneur', 'reviewed', 'French', 'Haitian Creole')]}
+        resolvedBySlide={[resolved('Louez le Seigneur', 'French', 'Haitian Creole')]}
       />,
     );
     expect(screen.getByText('French')).toBeInTheDocument();
-    expect(screen.queryByText('unreviewed')).not.toBeInTheDocument();
   });
 
   it('shows a not-translated placeholder when the current slide has no resolution', () => {
@@ -74,7 +60,7 @@ describe('SlideTranslationViewer', () => {
         slides={['Praise the Lord', '   ']}
         currentIndex={1}
         language="French"
-        resolvedBySlide={[resolved('Louez le Seigneur', 'reviewed', 'French', 'French'), undefined]}
+        resolvedBySlide={[resolved('Louez le Seigneur', 'French', 'French'), undefined]}
       />,
     );
     expect(screen.queryByText('(not translated)')).not.toBeInTheDocument();

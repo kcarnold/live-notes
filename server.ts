@@ -13,7 +13,7 @@ import { ElevenLabs, ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import { PostHog, setupExpressErrorHandler, setupExpressRequestContext } from 'posthog-node';
 
 import { translateBlock, draftItemTranslations, runSlideTranslationAgent, buildSeedConversationPrompt, GeminiProvider, emptyUsage, mergeUsage } from './nlp.ts';
-import type { TranslationTodo, TokenUsage, AgentObservability } from './nlp.ts';
+import type { TranslationTodo, TokenUsage, AgentObservability, SlideReviewNote } from './nlp.ts';
 import { BIBLE_TRANSLATIONS, type BibleToolCall } from './bible.ts';
 import { SlideLibrary } from './slideLibrary.ts';
 import { translateItem } from './src/slideItemTranslation.ts';
@@ -693,6 +693,8 @@ app.post('/api/translateItem', requireWriteKey('/api/translateItem'), async (req
   const bibleLookups: BibleToolCall[] = [];
   // The raw agent history, captured so we can persist it for review + follow-ups.
   let conversationMessages: Content[] = [];
+  // Per-slide caveats the model raised — the review screen's "look at this one" signal.
+  let slideNotes: SlideReviewNote[] = [];
   // Token usage across the draft's model calls (surfaced so cache hits/cost are visible).
   let usage: TokenUsage = emptyUsage();
   const translations = await translateItem({
@@ -715,6 +717,9 @@ app.post('/api/translateItem', requireWriteKey('/api/translateItem'), async (req
         },
         onConversation: (messages) => {
           conversationMessages = messages;
+        },
+        onNotes: (notes) => {
+          slideNotes = notes;
         },
         onUsage: (runUsage) => {
           usage = mergeUsage(usage, runUsage);
@@ -747,6 +752,7 @@ app.post('/api/translateItem', requireWriteKey('/api/translateItem'), async (req
     slidesHash: slidesHash(slides),
     languages: requestedLanguages,
     messages: seededMessages,
+    notes: slideNotes,
     status: 'idle',
     usage,
   });
@@ -798,6 +804,7 @@ app.post('/api/slideConversation/message', requireWriteKey('/api/slideConversati
       model: STRONG_MODEL,
       bibleLanguages,
       currentTranslations,
+      currentNotes: conversation.notes,
       observability,
       onToolCall: (call) => {
         bibleLookups.push(call);
@@ -807,11 +814,13 @@ app.post('/api/slideConversation/message', requireWriteKey('/api/slideConversati
       },
     });
     conversation.status = 'idle';
+    // The run reports the item's whole note set (seeded from this one), so replace, not merge.
+    conversation.notes = result.notes;
     // Fold this run's tokens into the conversation's running total (initial draft + follow-ups).
     conversation.usage = mergeUsage(conversation.usage ?? emptyUsage(), result.usage);
     writeConversation(conversationsMap, conversation);
 
-    // Flatten revised translations for the browser to apply (auto / llm-agent provenance).
+    // Flatten revised translations for the browser to apply.
     const updatedTranslations: Array<{ language: string; sourceText: string; text: string }> = [];
     for (const [language, blocks] of Object.entries(result.translations)) {
       for (const block of blocks) {

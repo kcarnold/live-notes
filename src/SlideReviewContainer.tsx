@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useMap } from '@y-sweet/react';
 import { useAtomValue } from 'jotai';
 
@@ -37,9 +37,15 @@ function emptyNullableArrays(length: number): NullableStringArrays {
  * Yjs/network connector for the slide-translation review screen.
  *
  * Holds the editable item (pasted or loaded from the on-air Proclaim item), the
- * per-language draft translations, and the library state. "Suggest" pre-fills drafts
- * from the LLM (reusing reviewed library entries); "Save" promotes a draft to a
- * reviewed library entry.
+ * per-language draft translations, and the library state. The Proclaim service normally
+ * drafts every item ahead of time; "Draft" / "Re-draft" runs the same agent from here (it
+ * re-drafts without the Proclaim French screen the service passes as grounding, so on a
+ * service-drafted item it is a downgrade — see #153). "Save" writes a draft to the
+ * library.
+ *
+ * The screen is organized around the translator's notes: the service-item list marks
+ * which items have them, and the grid leads each flagged cell with its note. In practice
+ * an item with no notes is an item nobody needs to read.
  */
 export function SlideReviewContainer() {
   const s = useStrings();
@@ -81,28 +87,62 @@ export function SlideReviewContainer() {
       conversation.slidesHash !== livePresentation.slidesHash,
   );
 
-  // Seed the grid for these slides: `savedTexts` marks reviewed library entries; `drafts`
-  // pre-fill from the reviewed entry, else from the live slideTranslations cache (so an item
-  // the work-ahead worker auto-translated shows its text immediately, with no model call).
-  const loadSavedFor = useCallback(async (slideList: string[]) => {
+  // The translator's notes are stored content-addressed (language + source text), so map
+  // them back onto the grid's slide indexes. A note whose source text no longer appears in
+  // the item is dropped rather than shown against the wrong slide.
+  const notesBySlide = useMemo(() => {
+    const out = emptyNullableArrays(slides.length);
+    const indexByText = new Map(slides.map((slide, i) => [normalizeSlideText(slide), i]));
+    for (const note of conversation?.notes ?? []) {
+      const index = indexByText.get(normalizeSlideText(note.sourceText));
+      if (index === undefined || !out[note.language]) continue;
+      out[note.language][index] = note.text;
+    }
+    return out;
+  }, [conversation, slides]);
+
+  const noteCount = languages.reduce(
+    (total, language) => total + notesBySlide[language].filter(Boolean).length,
+    0,
+  );
+
+  /** How many notes an item carries, for the service-item list. Reads the live Yjs map. */
+  const noteCountFor = (itemId: string): number =>
+    ((conversationsMap.get(itemId) as SlideConversation | undefined)?.notes ?? []).length;
+
+  // What the library currently holds for these slides, per language (null = nothing saved).
+  // This is the whole basis of the saved/unsaved chip, so it is re-read after anything that
+  // could have changed the drafts underneath it.
+  const lookupSaved = useCallback(async (slideList: string[]) => {
     const nextSaved = emptyNullableArrays(slideList.length);
-    const nextDrafts = emptyArrays(slideList.length);
     await Promise.all(
       languages.map(async (language) => {
         const entries = await lookupLibrary(language, slideList);
         nextSaved[language] = entries.map((entry) => entry?.text ?? null);
-        nextDrafts[language] = entries.map((entry, i) => {
-          if (entry?.text) return entry.text;
-          const cached = translationsMap.get(slideTranslationKey(language, slideList[i])) as
-            | { text?: string }
-            | undefined;
-          return cached?.text ?? '';
-        });
       }),
     );
+    return nextSaved;
+  }, []);
+
+  // Seed the grid for these slides: drafts pre-fill from the library entry, else from the
+  // live slideTranslations cache (so an item the work-ahead worker already translated shows
+  // its text immediately, with no model call).
+  const loadSavedFor = useCallback(async (slideList: string[]) => {
+    const nextSaved = await lookupSaved(slideList);
+    const nextDrafts = emptyArrays(slideList.length);
+    for (const language of languages) {
+      nextDrafts[language] = slideList.map((slide, i) => {
+        const saved = nextSaved[language][i];
+        if (saved) return saved;
+        const cached = translationsMap.get(slideTranslationKey(language, slide)) as
+          | { text?: string }
+          | undefined;
+        return cached?.text ?? '';
+      });
+    }
     setSavedTexts(nextSaved);
     setDrafts(nextDrafts);
-  }, [translationsMap]);
+  }, [translationsMap, lookupSaved]);
 
   const commitSlides = useCallback(
     async (slideList: string[]) => {
@@ -129,7 +169,7 @@ export function SlideReviewContainer() {
   }, [commitSlides, slidesText]);
 
   // Load a service item's slides into the editor and pull down its agent conversation (if the
-  // Proclaim service or a prior Suggest already produced one). Used by both the picker and the
+  // Proclaim service or a prior Draft already produced one). Used by both the picker and the
   // "load on-air" button.
   const handleSelectItem = useCallback(
     (itemId: string) => {
@@ -160,7 +200,7 @@ export function SlideReviewContainer() {
     handleSelectItem(itemId);
   }, [statusMap, handleSelectItem, s.waitingForProclaim]);
 
-  const handleSuggest = useCallback(async () => {
+  const handleDraft = useCallback(async () => {
     // Parse fresh from the textarea so we never translate a stale slide set.
     const slideList = parseSlidesInput(slidesText);
     setSlides(slideList);
@@ -178,17 +218,14 @@ export function SlideReviewContainer() {
       );
       setBibleLookups(lookups);
       const nextDrafts = emptyArrays(slideList.length);
-      const nextSaved = emptyNullableArrays(slideList.length);
       for (const language of languages) {
         const perSlide = translations[language] ?? [];
         nextDrafts[language] = slideList.map((_, i) => perSlide[i]?.text ?? '');
-        // Reviewed suggestions already exist in the library; reflect that as saved.
-        nextSaved[language] = slideList.map((_, i) =>
-          perSlide[i]?.status === 'reviewed' ? perSlide[i].text : null,
-        );
       }
       setDrafts(nextDrafts);
-      setSavedTexts(nextSaved);
+      // Some of those drafts came straight back out of the library; ask it which, rather
+      // than having the response carry a flag about it.
+      setSavedTexts(await lookupSaved(slideList));
       // The server stored the agent conversation under this key; we read it live from Yjs.
       setConversationId(newId);
     } catch (err) {
@@ -196,7 +233,7 @@ export function SlideReviewContainer() {
     } finally {
       setBusy(false);
     }
-  }, [slidesText, itemTitle, selectedItemId]);
+  }, [slidesText, itemTitle, selectedItemId, lookupSaved]);
 
   // Apply translations the agent revised during a follow-up: write them live to the
   // slideTranslations map (content-addressed, so they land on the matching slides) and reflect
@@ -207,8 +244,7 @@ export function SlideReviewContainer() {
       for (const update of updates) {
         translationsMap.set(slideTranslationKey(update.language, update.sourceText), {
           text: update.text,
-          status: 'auto',
-          provenance: 'llm-agent',
+          provenance: 'llm',
         });
       }
       setDrafts((prev) => {
@@ -257,15 +293,13 @@ export function SlideReviewContainer() {
       setError(null);
       try {
         const record = await upsertLibraryEntry({ language, sourceText, text });
-        // Push the reviewed entry into the live (per-day) slideTranslations map so the
-        // viewer updates immediately. Keys are content-addressed, so this lands on any
-        // on-screen slide with matching text. Otherwise the only writer is the Proclaim
-        // service, which won't re-push an item whose slide content hasn't changed.
+        // Push the saved entry into the live (per-day) slideTranslations map so the viewer
+        // updates immediately. Keys are content-addressed, so this lands on any on-screen
+        // slide with matching text. Otherwise the only writer is the Proclaim service,
+        // which won't re-push an item whose slide content hasn't changed.
         translationsMap.set(slideTranslationKey(language, sourceText), {
           text: record.text,
-          status: record.status,
           provenance: record.provenance,
-          reviewedAt: record.reviewedAt,
         });
         setSavedTexts((prev) => {
           const next = { ...prev, [language]: [...(prev[language] ?? [])] };
@@ -312,7 +346,51 @@ export function SlideReviewContainer() {
         {!isEditor && (
           <span className="text-xs text-amber-700 dark:text-amber-400">{s.editorOnlyReview}</span>
         )}
+        {slides.length > 0 && (
+          <span
+            className={`text-xs ${
+              noteCount > 0
+                ? 'rounded bg-amber-100 px-2 py-0.5 font-medium text-amber-900 dark:bg-amber-900/50 dark:text-amber-100'
+                : 'text-gray-400 dark:text-gray-500'
+            }`}
+          >
+            {noteCount > 0 ? `📝 ${noteCount} ${s.reviewNotesLabel}` : s.noReviewNotes}
+          </span>
+        )}
       </div>
+
+      {serviceOrder.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-gray-500 dark:text-gray-400">{s.selectItemLabel}</span>
+          <ul className="flex flex-wrap gap-1">
+            {serviceOrder.map((id) => {
+              const title = (presentationsMap.get(id) as { title?: string } | undefined)?.title ?? id;
+              const count = noteCountFor(id);
+              return (
+                <li key={id}>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectItem(id)}
+                    title={count > 0 ? s.reviewNotesHint : undefined}
+                    className={`flex items-center gap-1 rounded border px-2 py-1 text-sm ${
+                      id === selectedItemId
+                        ? 'border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950 dark:text-blue-100'
+                        : 'border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800'
+                    }`}
+                  >
+                    {title}
+                    {count > 0 && (
+                      <span className="rounded-full bg-amber-200 px-1.5 text-xs font-medium text-amber-900 dark:bg-amber-700 dark:text-amber-50">
+                        📝 {count}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       <label className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
         {s.slidesInputLabel}
@@ -329,35 +407,16 @@ export function SlideReviewContainer() {
       </label>
 
       <div className="flex items-center gap-2 flex-wrap">
-        {serviceOrder.length > 0 && (
-          <label className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-            {s.selectItemLabel}
-            <select
-              className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-1 text-sm"
-              value={selectedItemId}
-              onChange={(e) => {
-                if (e.target.value) handleSelectItem(e.target.value);
-              }}
-            >
-              <option value="" />
-              {serviceOrder.map((id) => (
-                <option key={id} value={id}>
-                  {(presentationsMap.get(id) as { title?: string } | undefined)?.title ?? id}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <button type="button" className={secondaryButtonClass} onClick={handleLoadOnAir} disabled={busy}>
           {s.loadOnAirItem}
         </button>
         <button
           type="button"
           className={buttonClass}
-          onClick={() => void handleSuggest()}
+          onClick={() => void handleDraft()}
           disabled={busy || slides.length === 0}
         >
-          {busy ? s.suggesting : s.suggestTranslations}
+          {busy ? s.drafting : conversation ? s.redraftTranslations : s.draftTranslations}
         </button>
         {message && <span className="text-xs text-green-700 dark:text-green-400">{message}</span>}
         {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
@@ -397,6 +456,7 @@ export function SlideReviewContainer() {
         languages={languages}
         drafts={drafts}
         savedTexts={savedTexts}
+        notes={notesBySlide}
         editable={isEditor}
         busy={busy}
         onDraftChange={handleDraftChange}

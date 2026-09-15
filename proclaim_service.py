@@ -71,7 +71,7 @@ SERVICE_ORDER_SYNC_INTERVAL = float(os.getenv('PROCLAIM_SERVICE_ORDER_SYNC_INTER
 TRANSLATION_SCAN_INTERVAL = float(os.getenv('PROCLAIM_TRANSLATION_SCAN_INTERVAL', '1.0'))  # seconds
 # Target languages to pre-translate slides into (must match the frontend's configured
 # languages). The translator asks the server to translate the active item into these and
-# writes the reviewed-or-auto results into the per-day slideTranslations map.
+# fills any missing keys in the per-day slideTranslations map with the results.
 SLIDE_TRANSLATION_LANGUAGES = [
     lang.strip()
     for lang in os.getenv('SLIDE_TRANSLATION_LANGUAGES', 'French,Haitian Creole,Spanish').split(',')
@@ -209,7 +209,7 @@ def make_status_announcer(
 def make_translate_fn(ysweet_url: str, languages: List[str], write_key: Optional[str] = None):
     """Build the translation call the SlideTranslator injects: POST /api/translateItem.
 
-    Returns the ``{language: [{text, status, provenance}, ...]}`` map, or None on failure
+    Returns the ``{language: [{text, provenance}, ...]}`` map, or None on failure
     (translation is best-effort; a failure must not drop the session).
     """
     async def translate(

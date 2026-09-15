@@ -9,19 +9,31 @@
  * underneath us is a clean cache miss on a new key rather than silent staleness.
  */
 
-/** Whether a translation has been human-reviewed or is a machine fallback. */
-export type SlideStatus = 'reviewed' | 'auto';
-
-/** Where a translation came from. Pure metadata — the data model treats them alike. */
-export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm' | 'llm-agent' | 'imported';
+/**
+ * Where a translation came from. Nothing branches on it today.
+ *
+ * `bible` and `creed` are not written yet. They are reserved for the agent *claiming* that a
+ * slide is the published wording rather than its own rendering of it — a claim worth storing
+ * because it is checkable rather than merely asserted: `lookup_bible_passage` already returns
+ * the canonical text to check it against (a creed would need an equivalent source).
+ */
+export type SlideProvenance = 'human' | 'bible' | 'creed' | 'llm';
 
 export interface SlideTranslationEntry {
   /** The translated text. */
   text: string;
-  status: SlideStatus;
   provenance: SlideProvenance;
-  /** Epoch millis when the entry was last reviewed/approved (reviewed entries only). */
-  reviewedAt?: number;
+}
+
+/**
+ * A caveat the translating model attached to one slide — the ambiguity or judgement call
+ * it wants a human to look at before the service. Keyed by content like everything else
+ * here, so it stays attached to the slide across re-runs and re-orderings.
+ */
+export interface SlideReviewNote {
+  language: string;
+  sourceText: string;
+  text: string;
 }
 
 /** A stored entry plus the language and normalized source text it was keyed by. */
@@ -34,9 +46,9 @@ export interface SlideLibraryRecord extends SlideTranslationEntry {
  * Per-language display fallback chains, used only at read time.
  *
  * Proclaim's single alternate-language screen is imported as `French`, and all our
- * Haitian Creole viewers also understand French — so a reviewed French text is
- * preferred over an unreviewed Creole one. Languages absent here fall back to
- * themselves only.
+ * Haitian Creole viewers also understand French — so a French text is better than no
+ * text at all. The requested language always wins where it has one; the chain is only
+ * consulted when it doesn't. Languages absent here fall back to themselves only.
  */
 export const LANGUAGE_FALLBACKS: Record<string, string[]> = {
   'Haitian Creole': ['Haitian Creole', 'French'],
@@ -117,10 +129,8 @@ export interface ResolvedSlideTranslation {
 }
 
 /**
- * Resolve which translation to show for a slide, honoring the fallback chain.
- *
- * 1. Quality first: walk the chain and return the first *reviewed* entry.
- * 2. Fallback: otherwise return an *auto* entry in the requested language.
+ * Resolve which translation to show for a slide: the first entry along the language's
+ * fallback chain, which starts with the requested language itself.
  *
  * Returns undefined when nothing is available (caller should trigger translation).
  */
@@ -129,11 +139,9 @@ export function resolveSlideTranslation(
   slideText: string,
   lookup: SlideTranslationLookup,
 ): ResolvedSlideTranslation | undefined {
-  const chain = fallbackChain(requestedLanguage);
-
-  for (const language of chain) {
+  for (const language of fallbackChain(requestedLanguage)) {
     const entry = lookup(language, slideText);
-    if (entry && entry.status === 'reviewed') {
+    if (entry) {
       return {
         entry,
         displayLanguage: language,
@@ -142,16 +150,5 @@ export function resolveSlideTranslation(
       };
     }
   }
-
-  const auto = lookup(requestedLanguage, slideText);
-  if (auto) {
-    return {
-      entry: auto,
-      displayLanguage: requestedLanguage,
-      requestedLanguage,
-      isFallbackLanguage: false,
-    };
-  }
-
   return undefined;
 }

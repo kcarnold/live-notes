@@ -1,4 +1,4 @@
-"""Tests for SlideTranslator: content-addressed seeding, never-clobber-reviewed, active-first
+"""Tests for SlideTranslator: content-addressed seeding, fill-missing-only, active-first
 scan, attempt-once-per-content, and grounding forwarded from the snapshot."""
 
 from unittest import mock
@@ -39,7 +39,7 @@ def snap(order, items, active=None, slide=0):
 
 
 def auto_result(slides):
-    return {lang: [{"text": f"{lang}:{s}", "status": "auto", "provenance": "llm"} for s in slides]
+    return {lang: [{"text": f"{lang}:{s}", "provenance": "llm"} for s in slides]
             for lang in LANGS}
 
 
@@ -48,35 +48,34 @@ def test_store_translations_writes_content_addressed_keys():
     tr._store_translations(
         ["Hello", "", "World"],
         {"French": [
-            {"text": "Bonjour", "status": "auto", "provenance": "llm"},
-            {"text": "", "status": "auto", "provenance": "llm"},
-            {"text": "Monde", "status": "reviewed", "provenance": "human"},
+            {"text": "Bonjour", "provenance": "llm"},
+            {"text": "", "provenance": "llm"},
+            {"text": "Monde", "provenance": "human"},
         ]},
     )
     hello = tr.translations_map[slide_translation_key("French", "Hello")]
     assert hello["text"] == "Bonjour"
-    assert hello["status"] == "auto"
-    assert tr.translations_map[slide_translation_key("French", "World")]["status"] == "reviewed"
+    assert hello["provenance"] == "llm"
+    assert tr.translations_map[slide_translation_key("French", "World")]["text"] == "Monde"
     assert slide_translation_key("French", "") not in tr.translations_map
 
 
-def test_store_translations_never_clobbers_reviewed():
+def test_store_translations_only_fills_gaps():
+    """Whoever wrote an entry for this exact text already knew what they were doing."""
     tr, _ = make_translator()
     hello_key = slide_translation_key("French", "Hello")
     world_key = slide_translation_key("French", "World")
-    tr.translations_map[hello_key] = {"text": "Bonjour (édité)", "status": "reviewed", "provenance": "human"}
-    tr.translations_map[world_key] = {"text": "Monde (ancien)", "status": "auto", "provenance": "llm"}
+    tr.translations_map[hello_key] = {"text": "Bonjour (édité)", "provenance": "human"}
 
     tr._store_translations(
         ["Hello", "World"],
         {"French": [
-            {"text": "Bonjour (re-traduit)", "status": "auto", "provenance": "llm"},
-            {"text": "Monde (nouveau)", "status": "auto", "provenance": "llm"},
+            {"text": "Bonjour (re-traduit)", "provenance": "llm"},
+            {"text": "Monde (nouveau)", "provenance": "llm"},
         ]},
     )
 
     assert tr.translations_map[hello_key]["text"] == "Bonjour (édité)"
-    assert tr.translations_map[hello_key]["status"] == "reviewed"
     assert tr.translations_map[world_key]["text"] == "Monde (nouveau)"
 
 
@@ -119,7 +118,7 @@ async def test_translate_pending_skips_fully_covered():
     tr, _ = make_translator()  # translate_fn returns None
     for lang in LANGS:
         tr.translations_map[slide_translation_key(lang, "Hello")] = {
-            "text": "x", "status": "auto", "provenance": "llm"
+            "text": "x", "provenance": "llm"
         }
     s = snap(["i1"], {"i1": feed_item("i1", "X", ["Hello"])}, active="i1")
 

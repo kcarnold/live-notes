@@ -1,10 +1,10 @@
 /**
  * Persistent, file-backed slide-translation library (server-side).
  *
- * This is the durable "reviewed" tier from the plan: it outlives the per-day Yjs
- * doc and is reused across services (canonical Bible/creed texts, past human
- * reviews). Auto/machine fallbacks are NOT stored here — those live in the per-day
- * doc. The library therefore only ever holds `reviewed` entries.
+ * This is the durable tier: it outlives the per-day Yjs doc and is reused across
+ * services (canonical Bible/creed texts, past human edits). Machine drafts are NOT
+ * stored here — those live in the per-day doc. An entry is in the library because a
+ * human saved it.
  *
  * Storage is a single JSON file written atomically (temp file + rename). Writes are
  * serialized through a promise chain so concurrent upserts can't interleave.
@@ -59,20 +59,22 @@ export class SlideLibrary {
     const parsed = JSON.parse(raw) as LibraryFile;
     this.records.clear();
     for (const record of parsed.entries ?? []) {
-      this.records.set(slideTranslationKey(record.language, record.sourceText), record);
+      // Rebuild rather than store verbatim, so fields dropped from the shape (the old
+      // status/reviewedAt pair) don't ride along into the next write.
+      this.records.set(slideTranslationKey(record.language, record.sourceText), {
+        language: record.language,
+        sourceText: record.sourceText,
+        text: record.text,
+        provenance: record.provenance,
+      });
     }
   }
 
   private toEntry(record: SlideLibraryRecord): SlideTranslationEntry {
-    return {
-      text: record.text,
-      status: record.status,
-      provenance: record.provenance,
-      reviewedAt: record.reviewedAt,
-    };
+    return { text: record.text, provenance: record.provenance };
   }
 
-  /** Look up the reviewed entry for a concrete language + slide text, if any. */
+  /** Look up the stored entry for a concrete language + slide text, if any. */
   lookup(language: string, slideText: string): SlideTranslationEntry | undefined {
     const record = this.records.get(slideTranslationKey(language, slideText));
     return record ? this.toEntry(record) : undefined;
@@ -83,7 +85,7 @@ export class SlideLibrary {
     return (language, slideText) => this.lookup(language, slideText);
   }
 
-  /** All stored records (reviewed entries), sorted by language then source text. */
+  /** All stored records, sorted by language then source text. */
   list(): SlideLibraryRecord[] {
     return [...this.records.values()].sort(
       (a, b) =>
@@ -92,7 +94,7 @@ export class SlideLibrary {
   }
 
   /**
-   * Create or replace a reviewed translation, then persist. The source text is
+   * Create or replace a stored translation, then persist. The source text is
    * normalized so keys are stable regardless of incidental whitespace.
    */
   async upsert(input: UpsertInput): Promise<SlideLibraryRecord> {
@@ -101,9 +103,7 @@ export class SlideLibrary {
       language: input.language,
       sourceText,
       text: input.text,
-      status: 'reviewed',
       provenance: input.provenance ?? 'human',
-      reviewedAt: Date.now(),
     };
     this.records.set(slideTranslationKey(input.language, sourceText), record);
     await this.persist();

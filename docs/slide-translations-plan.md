@@ -384,3 +384,31 @@ review screen writes `reviewed` edits straight into `slideTranslations` (and sti
 POSTs to the library for persistence), and the Python service's seed now
 **protects existing `reviewed` entries** rather than overwriting them. See "Two tiers"
 and Phase C above.
+
+**The `reviewed`/`auto` tier, removed (post-build).** Everything above that turns on a
+stored `status: 'reviewed' | 'auto'` (and its `reviewedAt` stamp) is history: the field is
+gone. It never earned its keep. Viewers were told "unreviewed" about text nobody was going
+to fix mid-service, which is noise they can't act on; and in practice the thing that decides
+whether a slide gets a human's attention is a **note**, not a tier. What replaced it:
+
+- `SlideTranslationEntry` is `{ text, provenance }`. `provenance` still records where a
+  translation came from; nothing branches on it. `'imported'` went with the tier — it existed
+  only for the `firstDraftBySlide` path the alignment rethink removed (Phase C-import above),
+  so it had no writer left. `'bible'`/`'creed'` are still unwritten but kept: they are the
+  vocabulary for the agent *claiming* a slide is the published wording, which is worth having
+  because a harness can check the claim against the looked-up source.
+- `resolveSlideTranslation` returns the first entry along the fallback chain. A Creole
+  viewer with no Creole text now sees the French one whatever produced it — previously an
+  unreviewed French text was withheld and the slide read "(not translated)".
+- The library is still the durable tier, and still only holds what a human saved. The review
+  screen's per-cell chip says **Saved**, not Reviewed: it is about persistence, not quality.
+- The Python work-ahead translator no longer needs to recognize a protected entry — it
+  writes only keys that are **missing** (`_store_translations`), so it can't clobber anyone.
+
+**Notes, surfaced (same change).** `set_translations` always let the model attach a
+per-segment `note` — "a genuine ambiguity or judgement call worth flagging" — and we dropped
+it on the floor. Notes are now carried on the conversation (`SlideConversation.notes`,
+content-addressed by language + source text, replaced wholesale by each agent run) and are
+what the review screen is organized around: the service-item list badges each item with its
+note count, flagged rows are tinted and marked, and a flagged cell leads with its note above
+the textarea. An item with no notes is an item nobody needs to open.

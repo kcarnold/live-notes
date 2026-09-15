@@ -5,6 +5,7 @@
 import type {
   SlideLibraryRecord,
   SlideProvenance,
+  SlideReviewNote,
   SlideTranslationEntry,
 } from './slideTranslation.ts';
 import type { PerSlideTranslation } from './slideItemTranslation.ts';
@@ -14,6 +15,7 @@ import { getDocId } from './getDocId.ts';
 import { apiFetch } from './writeKey.ts';
 
 export type { BibleToolCall };
+export type { SlideReviewNote };
 export type { Content };
 
 export interface TranslateItemResult {
@@ -48,6 +50,11 @@ export interface SlideConversation {
   slidesHash: string;
   languages: string[];
   messages: Content[];
+  /**
+   * The model's per-slide caveats for this item — what it wants a human to look at.
+   * Replaced wholesale by each agent run; absent on conversations predating the field.
+   */
+  notes?: SlideReviewNote[];
   status: SlideConversationStatus;
   /** Running token total for this conversation; absent on pre-existing conversations. */
   usage?: TokenUsage;
@@ -110,7 +117,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return (await response.json()) as T;
 }
 
-/** Fetch all reviewed library entries. */
+/** Fetch all stored library entries. */
 export async function fetchLibrary(): Promise<SlideLibraryRecord[]> {
   const response = await apiFetch('/api/slideLibrary');
   if (!response.ok) throw new Error(`/api/slideLibrary failed: ${response.status}`);
@@ -118,7 +125,7 @@ export async function fetchLibrary(): Promise<SlideLibraryRecord[]> {
   return data.entries;
 }
 
-/** Look up reviewed entries for a language, aligned with `texts` (null = no entry). */
+/** Look up library entries for a language, aligned with `texts` (null = no entry). */
 export async function lookupLibrary(
   language: string,
   texts: string[],
@@ -130,7 +137,7 @@ export async function lookupLibrary(
   return data.entries;
 }
 
-/** Upsert a reviewed translation into the library. */
+/** Upsert a translation into the library. */
 export async function upsertLibraryEntry(input: {
   language: string;
   sourceText: string;
@@ -142,7 +149,7 @@ export async function upsertLibraryEntry(input: {
 }
 
 /**
- * Translate a whole item: per language, reviewed-or-auto for every slide.
+ * Translate a whole item: per language, a translation for every slide.
  *
  * `reference` is an optional free-text dump (possibly multilingual) the model uses where
  * it covers a target language and ignores otherwise.
