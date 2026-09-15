@@ -54,13 +54,14 @@ otherwise an error. `FeederConfig` no longer knows how to name a doc at all — 
 `resolvedDocID()` is most of the value here, because a formula that still exists is a formula
 something will call.
 
-`SessionResolution` (also in the Core, so the rules are testable) holds the answer and
-decides how long it may be acted on. `AppController` re-asks every 60s while publishing (the
-same cadence and for the same reason as `slide_sync_runtime.py`) and rebuilds the pipeline
-when the answer moves — a `Publisher` can't be retargeted in place any more than it can be
-restarted.
+`AppController` does what `slide_sync_runtime.py` does, in the same shape: the ask is the
+first step of starting a pipeline (`startPipeline(device:)`), and the answer is consumed by
+the task that fetched it, never stored. While publishing, `recheckSessionIfDue` asks again
+every 60s and compares the answer with `Publisher.docID` — the room it is actually in — and
+tears down and rebuilds if they differ, since a `Publisher` can't be retargeted in place any
+more than it can be restarted.
 
-Three judgment calls worth recording:
+Judgment calls worth recording:
 
 1. **A failed re-check behind a live pipeline is ignored**, logged, and retried in a minute.
    A stale doc answer costs a minute; dropping the pipeline costs the broadcast.
@@ -72,27 +73,31 @@ Three judgment calls worth recording:
 3. **`source` decodes as a plain `String`, not an enum.** A strict enum would make an
    unattended feeder refuse to start because the server learned a fourth word for where an
    answer came from. It is a log line, not a decision.
-4. **The answer expires; it is not merely forgotten at the end of a run.** Forgetting is the
-   obvious rule and it was the first one written. It has a hole: the controller only forgets
-   when an `evaluate` lands while off schedule, and `Timer` doesn't fire while a Mac is
-   asleep. A booth Mac that slept through the gap between two Sunday windows would wake up
-   *inside* the next service still holding last week's answer, and open the mic in last
-   week's doc for the second it took the re-check to land. An expiry closes that without
-   anything having to notice the run ended.
+4. **The answer is not cached.** The first version kept the server's answer on the
+   controller and grew a type (`SessionResolution`) to say how long it could be acted on —
+   an expiry, because "forget it when the run ends" has a hole: the controller only notices
+   a run ending if an `evaluate` lands while off schedule, and `Timer` doesn't fire while a
+   Mac is asleep, so a booth Mac that slept through the gap between two Sunday windows could
+   wake up inside the next service and start on last week's answer. Review pointed out that
+   the expiry was solving a problem the cache created. Resolve at start, re-check on a timer
+   against the room the publisher is in, and there is no stored answer to go stale. That
+   removed the type, its tests, and about a hundred lines of controller bookkeeping.
 
 **What the review pass caught.** Three defects, all in the app half — which is the half with
 no test target, and that is not a coincidence:
 
 - **A settings field that reconnected per keystroke.** The doc-id override is a plain
-  SwiftUI `TextField`, which writes its binding on every character, and the new
+  SwiftUI `TextField`, which writes its binding on every character, and the first version's
   rebuild-on-mismatch logic acted on each one. Typing `doc-2026-08-30` walked the feeder
   through rooms named `d`, `do`, `doc`… — a real token request and a real LiveKit connect
   each — in the middle of the service that is the only reason anyone would be typing there.
   Before this change a config edit could not rebuild a live pipeline at all, so the feature
-  created the bug. Fixed with an explicit **Apply** button (server URL, doc id and write key
-  now commit together); `MinuteField` had already solved the same problem the same way, and
-  the lesson generalizes: *a field that only takes effect on the next run can bind live; a
-  field that acts on a live broadcast has to be committed.*
+  created the bug. Fixed twice over: config edits no longer touch a live pipeline directly
+  (the 60s re-check is the only thing that acts on the override), and the three server
+  fields are `CommittedTextField`s that write on Return or focus loss — `MinuteField`'s
+  pattern, generalized. An explicit Apply/Revert button was tried first and was more UI than
+  the problem needed. The lesson: *a field that only takes effect on the next run can bind
+  live; a field that acts on a live broadcast has to be committed.*
 - **A status that could get stuck lying.** `resolveSession` painted "Finding the current
   session…" (or an error) unconditionally, including behind a healthy pipeline — and nothing
   on the success path repaints it, so it stuck. That is issue #97 exactly: the menu bar
@@ -108,16 +113,15 @@ no test target, and that is not a coincidence:
 visible" half covered this app even though its "one owner" half didn't — which is a decent
 argument for building the visibility half first.
 
-**Verification.** `swift test` (86 tests; 10 new in `SessionClientTests` covering the request
+**Verification.** `swift test` (77 tests; 10 new in `SessionClientTests` covering the request
 contract, decoding a proxy's HTML error page and a docId-less answer as ordinary errors, and
-the override short-circuit proved by pointing the client at an unresolvable host; 9 more in
-`SessionResolutionTests` covering the expiry rules, including last week's answer being stale
-a week later). App target built with `xcodebuild -scheme AudioFeederApp`. **Not yet exercised
-against a live server** — the round trip, the mid-run pin, and the pipeline rebuild are
-untested outside unit tests. Smoke-test that before it matters: pin from `/status` while the
-feeder is publishing and confirm the log's `session moved:` line and that audio reappears in
-the pinned room. The Apply button also wants a look on real hardware — it is the only part
-of this that changes a screen an operator uses under time pressure.
+the override short-circuit proved by pointing the client at an unresolvable host). App target
+built with `xcodebuild -scheme AudioFeederApp`. **Not yet exercised against a live server** —
+the round trip, the mid-run pin, and the pipeline rebuild are untested outside unit tests.
+Smoke-test that before it matters: pin from `/status` while the feeder is publishing and
+confirm the log's `session moved:` line and that audio reappears in the pinned room. The
+commit-on-blur fields also want a look on real hardware — they are the only part of this that
+changes a screen an operator uses under time pressure.
 
 ---
 
