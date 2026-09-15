@@ -10,8 +10,10 @@ from unittest import mock
 
 import anyio
 import pytest
+from pycrdt import Doc, Map
 
 import slide_sync_runtime as ssr
+from proclaim_lib import slide_translation_key
 from session_client import SessionAnswer
 from slide_feed import SessionInfo
 from slide_sync_runtime import SlideSyncRuntime
@@ -20,6 +22,7 @@ from yjs_publisher import YjsSlidePublisher
 from helpers import (
     FakeFeed,
     FakeProvider,
+    FakeSyncingWebSocket,
     FakeWebSocket,
     fast_timing,
     off_air_snap,
@@ -381,3 +384,49 @@ async def test_an_explicit_override_never_re_asks_the_server():
 
     assert await rt._doc_still_current(None) is True
     assert resolver.proposed == []
+
+
+async def test_translator_waits_for_the_initial_sync_before_judging_the_cache():
+    """A fresh process joining a doc that already has translations must not re-translate.
+
+    pycrdt's Provider returns from ``__aenter__`` before the server's SYNC_STEP2 has
+    arrived, so for a moment the local ``slideTranslations`` map is empty even though the
+    doc is full. The translator read that empty map, saw a cache miss for the active item,
+    and spent a strong-model call re-translating it — on a pinned rehearsal doc, and on any
+    launchd restart mid-service. This drives the *real* Provider against a fake Y-Sweet that
+    delays STEP2 past several poll cycles.
+    """
+    server_doc = Doc()
+    translations = server_doc.get("slideTranslations", type=Map)
+    for slide in ("A", "B"):
+        translations[slide_translation_key("French", slide)] = {
+            "text": f"{slide}-fr", "status": "auto", "provenance": "llm",
+        }
+    feed = FakeFeed([on_air_snap(slides=("A", "B"))])
+    rt = make_runtime(feed)
+    ws = FakeSyncingWebSocket(server_doc, step2_delay=0.05, fail_ping_after=5)
+
+    with patched_connection(ws, real_provider=True):
+        with contextlib.suppress(ssr.HTTPXWSException):
+            with anyio.fail_after(2):
+                await rt._run_session()
+
+    rt.translator.translate_fn.assert_not_called()
+    assert slide_translation_key("French", "A") in rt.translator.translations_map
+
+
+async def test_a_missing_initial_sync_is_logged_and_the_session_runs_anyway(caplog):
+    """A Y-Sweet that accepts the socket but never sends STEP2 must not hold the slides
+    hostage: warn, publish, and let the ping catch the dead connection as usual."""
+    feed = FakeFeed([on_air_snap(item="item-9", slide=1)])
+    rt = make_runtime(feed)
+    rt.timing.initial_sync_timeout = 0.01
+    ws = FakeSyncingWebSocket(Doc(), step2_delay=60.0, fail_ping_after=1)
+
+    with patched_connection(ws, real_provider=True), caplog.at_level("WARNING"):
+        with contextlib.suppress(ssr.HTTPXWSException):
+            with anyio.fail_after(2):
+                await rt._run_session()
+
+    assert "No initial sync" in caplog.text
+    assert rt.publisher.status_map["itemId"] == "item-9"

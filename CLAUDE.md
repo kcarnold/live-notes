@@ -157,8 +157,8 @@ uv run pytest -m slow
 
 Tests live in [tests/](tests/), split to match the decoupled modules: `test_slide_feed`,
 `test_proclaim_feed`, `test_yjs_publisher`, `test_slide_translator`, `test_slide_sync_runtime`
-(connection lifecycle: lazy connect, off-air disconnect, auto-reconnect with backoff, state
-re-push), `test_slide_seam` (replayed feed drives the real consumers), `test_slide_replay`
+(connection lifecycle: lazy connect, wait for the initial Y-Sweet sync before the consumers
+run, off-air disconnect, auto-reconnect with backoff, state re-push), `test_slide_seam` (replayed feed drives the real consumers), `test_slide_replay`
 (record → JSONL → replay through the real consumers, driven by the committed synthetic fixture
 [tests/fixtures/synthetic_service.jsonl](tests/fixtures/synthetic_service.jsonl); regenerate
 with `uv run tests/fixtures/make_synthetic_service.py`), `test_proclaim_lib`,

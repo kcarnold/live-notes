@@ -28,7 +28,7 @@ from typing import Any, Callable, Optional
 import anyio
 import httpx
 from httpx_ws import HTTPXWSException, aconnect_ws
-from pycrdt import Doc, Provider
+from pycrdt import Doc, Provider, YMessageType, YSyncMessageType
 from pycrdt.websocket.websocket import HttpxWebsocket
 
 from session_client import (
@@ -45,6 +45,37 @@ from yjs_publisher import YjsSlidePublisher
 logger = logging.getLogger(__name__)
 
 
+class SyncedChannel(HttpxWebsocket):
+    """An HttpxWebsocket that also reports when the server's initial state has landed.
+
+    pycrdt's ``Provider`` returns from ``__aenter__`` as soon as it has *sent* SYNC_STEP1;
+    the server's SYNC_STEP2 (everything already in the doc) arrives later, and nothing in
+    pycrdt signals it — y-websocket's ``synced`` flag has no counterpart here. This is that
+    flag, recovered at the one place it can be seen: the first SYNC_STEP2 through the
+    channel. It can't be recovered from the Doc instead, because an empty doc's STEP2 is an
+    empty update that pycrdt applies nothing for, so a fresh Sunday would never signal.
+
+    The event is set before the Provider applies the update, but the Provider's task runs
+    ``handle_sync_message`` synchronously before its next await, and waiters only resume
+    at an await — so by the time ``synced.wait()`` returns, the update is in the Doc.
+    """
+
+    def __init__(self, websocket, path: str):
+        super().__init__(websocket, path)
+        self.synced = anyio.Event()
+
+    async def recv(self) -> bytes:
+        message = await super().recv()
+        if (
+            not self.synced.is_set()
+            and len(message) >= 2
+            and message[0] == YMessageType.SYNC
+            and message[1] == YSyncMessageType.SYNC_STEP2
+        ):
+            self.synced.set()
+        return message
+
+
 @dataclass
 class RuntimeTiming:
     """Connection/lifecycle timing (the source's own cadences live on the feed/translator)."""
@@ -57,6 +88,7 @@ class RuntimeTiming:
     ws_ping_interval: float = 15.0          # keepalive + silent-drop health ping
     ysweet_token_timeout: float = 30.0
     session_recheck_interval: float = 60.0  # re-ask the server which doc, while connected
+    initial_sync_timeout: float = 10.0      # how long to hold the consumers for SYNC_STEP2
 
 
 class SlideSyncRuntime:
@@ -244,20 +276,44 @@ class SlideSyncRuntime:
         ws_url = token_data['url'] + '/' + self.doc_id
         logger.info(f"Connecting to Y-Sweet: {ws_url}")
 
-        async with (
-            aconnect_ws(ws_url, keepalive_ping_interval_seconds=self.timing.ws_ping_interval) as websocket,
-            Provider(self.ydoc, HttpxWebsocket(websocket, self.doc_id)),
-        ):
-            logger.info("Connected to Y-Sweet")
-            # Force a full re-push of current state onto the freshly connected server.
-            self.publisher.bind(self.ydoc)
-            self._on_session_start(self.ydoc, self.doc_id)
+        async with aconnect_ws(
+            ws_url, keepalive_ping_interval_seconds=self.timing.ws_ping_interval
+        ) as websocket:
+            channel = SyncedChannel(websocket, self.doc_id)
+            async with Provider(self.ydoc, channel):
+                logger.info("Connected to Y-Sweet")
+                await self._await_initial_sync(channel)
+                await self._sync_until_session_end(websocket)
 
-            bus = SnapshotBus()
-            async with anyio.create_task_group() as session_tg:
-                session_tg.start_soon(self.translator.run, bus)
-                await self._poll_until_session_end(websocket, bus)
-                session_tg.cancel_scope.cancel()
+    async def _await_initial_sync(self, channel: SyncedChannel) -> None:
+        """Hold the consumers until the doc's existing state has arrived.
+
+        Until SYNC_STEP2 lands, the local Doc is empty whatever the server holds, and the
+        translator would read that emptiness as a cache miss and re-translate the active
+        item — on a pinned rehearsal doc, or after launchd restarts the service mid-service.
+        The same window would let a seeded translation race a reviewed one instead of
+        deferring to it. A timeout only logs: publishing slides is the job, and a stalled
+        socket is caught by the ping soon enough.
+        """
+        with anyio.move_on_after(self.timing.initial_sync_timeout) as scope:
+            await channel.synced.wait()
+        if scope.cancelled_caught:
+            logger.warning(
+                f"No initial sync from Y-Sweet within {self.timing.initial_sync_timeout:.0f}s; "
+                "proceeding with whatever is local (existing translations may be redone)"
+            )
+
+    async def _sync_until_session_end(self, websocket: Any) -> None:
+        """Run the consumers on the (synced) connection until the session ends."""
+        # Force a full re-push of current state onto the freshly connected server.
+        self.publisher.bind(self.ydoc)
+        self._on_session_start(self.ydoc, self.doc_id)
+
+        bus = SnapshotBus()
+        async with anyio.create_task_group() as session_tg:
+            session_tg.start_soon(self.translator.run, bus)
+            await self._poll_until_session_end(websocket, bus)
+            session_tg.cancel_scope.cancel()
 
     async def _poll_until_session_end(self, websocket: Any, bus: SnapshotBus) -> None:
         """Poll the feed and fan snapshots out until the session should end.

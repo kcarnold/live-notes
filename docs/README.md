@@ -34,6 +34,11 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
 
 ## Design docs
 
+- [adr-001-server-owned-slide-sync.md](adr-001-server-owned-slide-sync.md) — **ADR (proposed):**
+  the server owns slide publishing and translation; the Proclaim service becomes a snapshot
+  pusher with no Yjs dependency. Why a CRDT client shouldn't make the "spend a model call?"
+  decision; one server-owned, operator-overridable source-selection policy for both the
+  slide feed and the audio feed; the migration.
 - [slide-translations-plan.md](slide-translations-plan.md) — slide translation agent design.
 - [LANDING_PAGE.md](LANDING_PAGE.md) — landing-page redesign brief (proposal): what a
   first-time attendee hits today, the one-question reframe, the per-deployment config set,
