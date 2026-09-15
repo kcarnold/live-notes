@@ -66,8 +66,8 @@ reads them, which is where they stay correct.
 - *Storage paths* (`SLIDE_LIBRARY_PATH`) — the reviewed-translation library; defaults inside
   the audio-cache dir so it rides the existing Docker volume.
 - *Telemetry* (`VITE_PUBLIC_POSTHOG_KEY`, `VITE_PUBLIC_POSTHOG_HOST`) — genuinely optional.
-  With no key the client is constructed in a drop-everything mode and the server logs
-  `[telemetry] ... disabled`; nothing else changes. `POSTHOG_CLI_TOKEN` / `POSTHOG_CLI_ENV_ID`
+  With no key the client is constructed with the SDK's own `disabled` switch and the server
+  logs `[telemetry] ... disabled`; nothing else changes. `POSTHOG_CLI_TOKEN` / `POSTHOG_CLI_ENV_ID`
   / `POSTHOG_CLI_HOST` are build-time only, for sourcemap upload in the Dockerfile.
 - *Testing escape hatch* (`ALLOW_CHAOS_ENDPOINT`, `PORT`) — the chaos endpoint is refused in
   production unless explicitly allowed.
@@ -428,7 +428,7 @@ The app integrates with **Proclaim** (church presentation software) to display c
 
 The integration uses a **Python service** ([proclaim_service.py](proclaim_service.py)) that:
 
-1. **Polls Proclaim API** for current presentation and slide status (interval set by `PROCLAIM_POLL_INTERVAL`, faster on air than off; see `proclaim_service.py`)
+1. **Polls Proclaim API** for current presentation and slide status (interval set by `PROCLAIM_POLL_INTERVAL` on air and `PROCLAIM_POLL_INTERVAL_OFF_AIR` off it; see `proclaim_service.py`)
 2. **Parses presentation content** from Proclaim's SQLite database
 3. **Extracts translated slides** from rich text XML (supports songs, Bible passages, content slides)
 4. **Updates Yjs** via Y-Sweet WebSocket connection with presentation data and current status

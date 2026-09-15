@@ -106,7 +106,7 @@ http://localhost:8000/translatedText-French,currentSlide
 
 ### 1. Python Service Polls Proclaim
 
-Every second (configurable):
+On each poll (`PROCLAIM_POLL_INTERVAL` while on air, `PROCLAIM_POLL_INTERVAL_OFF_AIR` otherwise):
 - Fetches `/onair/session` to get session ID
 - Fetches `/onair/statusChanged` to get current slide index and item ID
 
@@ -146,7 +146,7 @@ The current slide viewer shows:
 
 ```
 Proclaim API/DB
-    ↓ (poll every 1s)
+    ↓ (poll)
 Python Service
     ↓ (y-py WebSocket)
 Y-Sweet Server
