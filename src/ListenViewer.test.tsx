@@ -6,6 +6,8 @@ import { ListenViewer } from "./ListenViewer";
 interface MockProps {
   children: React.ReactNode;
   className?: string;
+  onError?: (e: Error) => void;
+  onDisconnected?: () => void;
 }
 
 // Who useRemoteParticipants reports; tests set this before rendering.
@@ -16,6 +18,19 @@ const roomState = vi.hoisted(() => ({
 // What the session says the speaker is speaking. `en` is the historical default;
 // a test that wants a non-English talk sets this before rendering.
 const sessionState = vi.hoisted(() => ({ sourceLanguage: "en" }));
+
+// The room's failure callbacks, captured so a test can fire the drop it is modelling,
+// and a switch for making the token fetch fail the way a sleeping phone's does.
+const roomCallbacks = vi.hoisted(() => ({
+  onError: undefined as ((e: Error) => void) | undefined,
+  onDisconnected: undefined as (() => void) | undefined,
+}));
+const netState = vi.hoisted(() => ({ tokenFails: false }));
+
+// What the room reports about itself. The pane's status light is driven by this, so a
+// test can put the room into livekit-client's own reconnecting state and check that the
+// pane says so rather than showing a green dot over it.
+const connState = vi.hoisted(() => ({ state: "connected" }));
 
 vi.mock("./useSourceLanguage", () => ({
   useSourceLanguage: () => sessionState.sourceLanguage,
@@ -32,6 +47,7 @@ vi.mock("./useLocale", () => ({
     retry: "Retry",
     connecting: "Connecting",
     liveAudioError: "Live audio error",
+    reconnecting: "Reconnecting",
     waitingForSpeech: "Waiting for speech",
   }),
 }));
@@ -48,14 +64,19 @@ vi.mock("./getDocId", () => ({
 
 vi.mock("@livekit/components-react", () => {
   return {
-    LiveKitRoom: ({ children, className }: MockProps) => (
-      <div data-testid="livekit-room" className={className}>
-        {children}
-      </div>
-    ),
+    LiveKitRoom: ({ children, className, onError, onDisconnected }: MockProps) => {
+      roomCallbacks.onError = onError;
+      roomCallbacks.onDisconnected = onDisconnected;
+      return (
+        <div data-testid="livekit-room" className={className}>
+          {children}
+        </div>
+      );
+    },
     RoomAudioRenderer: () => null,
     useRoomContext: () => null,
     useRemoteParticipants: () => roomState.participants,
+    useConnectionState: () => connState.state,
   };
 });
 
@@ -75,6 +96,10 @@ describe("ListenViewer", () => {
   beforeEach(() => {
     roomState.participants = [];
     sessionState.sourceLanguage = "en";
+    roomCallbacks.onError = undefined;
+    roomCallbacks.onDisconnected = undefined;
+    netState.tokenFails = false;
+    connState.state = "connected";
     Object.defineProperty(window.navigator, "sendBeacon", {
       configurable: true,
       value: vi.fn(() => true),
@@ -92,6 +117,7 @@ describe("ListenViewer", () => {
         } as unknown as Response);
       }
       if (url.includes("/api/livekit/token")) {
+        if (netState.tokenFails) return Promise.reject(new Error("Failed to fetch"));
         return Promise.resolve({
           json: () => ({ token: "token-123", serverUrl: "wss://example.com" }),
         } as unknown as Response);
@@ -194,5 +220,121 @@ describe("ListenViewer", () => {
     expect(JSON.parse((translateCall?.[1] as RequestInit).body as string)).toMatchObject({
       targetLanguage: "en",
     });
+  });
+
+  it("says the room is reconnecting rather than showing it as live", async () => {
+    // livekit-client runs its own ~44s retry policy on a dropped room. While that is
+    // happening there is nothing for us to do but report it: the participant list is
+    // stale, so the old presence-only dot sat on green over a dead socket.
+    roomState.participants = [participant("organizer-host")];
+    connState.state = "reconnecting";
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByText(/reconnecting/i)).toBeInTheDocument());
+    expect(screen.queryByText(/listening live/i)).not.toBeInTheDocument();
+    // Not an error either — nothing is required of the listener yet.
+    expect(screen.queryByText(/live audio error/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("live-transcript")).toBeInTheDocument();
+  });
+
+  it("does not re-request a bot while the room is reconnecting", async () => {
+    // The backstop reads demand off the participant list, which is not trustworthy
+    // mid-reconnect. Spending a Gemini session on that reading is the failure mode.
+    roomState.participants = [participant("organizer-host")];
+    connState.state = "reconnecting";
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByText(/reconnecting/i)).toBeInTheDocument());
+    const afterConnect = translateRequests();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(translateRequests()).toBe(afterConnect);
+  });
+
+  it("shows an error and waits for a person once the room gives up", async () => {
+    // Disconnected is terminal in livekit-client: it fires only after that policy has
+    // been exhausted. There is no point retrying on a timer behind it.
+    roomState.participants = [participant("organizer-host")];
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+    const atDrop = translateRequests();
+
+    act(() => {
+      roomCallbacks.onDisconnected?.();
+    });
+
+    expect(screen.getByText(/live audio error/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    // The transcript is unaffected: it reads Yjs, not LiveKit.
+    expect(screen.getByTestId("live-transcript")).toBeInTheDocument();
+    // And nothing is retried on our own initiative.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    expect(translateRequests()).toBe(atDrop);
+  });
+
+  it("swallows the Disconnected its own teardown causes", async () => {
+    // Unmounting <LiveKitRoom> calls room.disconnect(), which fires Disconnected. Left
+    // uncounted for, tapping Retry would immediately re-enter the error state.
+    roomState.participants = [participant("organizer-host")];
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+
+    act(() => {
+      roomCallbacks.onError?.(new Error("Abort handler called"));
+      roomCallbacks.onDisconnected?.(); // the teardown's own event
+    });
+    expect(screen.getByText(/live audio error/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+    expect(screen.queryByText(/live audio error/i)).not.toBeInTheDocument();
+  });
+
+  it("makes one fresh attempt when the listener comes back to the tab", async () => {
+    // The phone was locked; the room died and livekit gave up while the timers driving
+    // its retries were throttled. Returning to the tab is a person being present, so it
+    // is worth one attempt with a new token and a re-requested bot.
+    roomState.participants = [participant("organizer-host")];
+    netState.tokenFails = true;
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByText(/live audio error/i)).toBeInTheDocument());
+
+    netState.tokenFails = false;
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+    expect(screen.queryByText(/live audio error/i)).not.toBeInTheDocument();
+  });
+
+  it("leaves a healthy room alone when the tab comes back", async () => {
+    // The common case by far: the listener glances at their phone and everything is
+    // fine. Reconnecting on every glance would drop working audio and re-request a bot.
+    roomState.participants = [participant("organizer-host")];
+    render(<ListenViewer language="French" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /listen live/i }));
+    await waitFor(() => expect(screen.getByTestId("livekit-room")).toBeInTheDocument());
+    const settled = fetchMock.mock.calls.length;
+
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(fetchMock.mock.calls.length).toBe(settled);
   });
 });

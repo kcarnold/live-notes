@@ -10,15 +10,16 @@
 // still reads the talk from its first word, and one who presses it late gets the
 // history. Nothing here touches LiveKit until they do press it. Read for free, opt
 // in to hear.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
   useRoomContext,
   useRemoteParticipants,
+  useConnectionState,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
-import { Track } from "livekit-client";
+import { ConnectionState, Track } from "livekit-client";
 import { LANGUAGE_BCP47, useStrings } from "./useLocale";
 import { useSourceLanguage } from "./useSourceLanguage";
 import { LiveTranscript } from "./LiveTranscript";
@@ -31,6 +32,12 @@ const TRANSLATOR_PREFIX = "translator-";
 // How often to re-request a missing translator bot (and the grace we give a
 // just-requested one to appear before the first re-request).
 const ENSURE_TRANSLATOR_INTERVAL_MS = 10_000;
+
+/** A failed attempt. The pane is down and is waiting for a person. */
+interface ConnectFailure {
+  /** What went wrong, when the failure came with a diagnostic worth showing. */
+  message: string | null;
+}
 
 interface ConnectInfo {
   token: string;
@@ -61,16 +68,31 @@ function ListenAudio({
   translatorIdentity,
   audioOn,
   onToggleAudio,
+  onConnectionState,
 }: {
   docId: string;
   translatorLanguage: string | null;
   translatorIdentity: string | null;
   audioOn: boolean;
   onToggleAudio: () => void;
+  onConnectionState: (state: ConnectionState) => void;
 }) {
   const s = useStrings();
   const room = useRoomContext();
   const remoteParticipants = useRemoteParticipants();
+  // The room's own account of itself. Everything outside <LiveKitRoom> can only infer
+  // the connection from whether our fetches succeeded — which is how a dead socket used
+  // to sit under a green "Listening live" dot. This is the fact, not an inference: while
+  // it is Reconnecting, livekit-client is working through its own retry policy and will
+  // either recover or emit Disconnected, and there is nothing for us to do but say so.
+  const connectionState = useConnectionState();
+  const roomConnected = connectionState === ConnectionState.Connected;
+
+  // The parent needs this to decide whether a wake is worth a fresh attempt, and it is
+  // only observable from in here.
+  useEffect(() => {
+    onConnectionState(connectionState);
+  }, [connectionState, onConnectionState]);
 
   const speakerPresent = remoteParticipants.some((p) =>
     p.identity.startsWith(ORGANIZER_PREFIX)
@@ -91,7 +113,10 @@ function ListenAudio({
   // speaker presence so a pre-broadcast wait doesn't churn against the supervisor's
   // wind-down (docs/live-audio-state-architecture.md, "the waiting-room reap"): the
   // re-request then fires exactly when demand becomes satisfiable, so it sticks.
-  const needsTranslator = speakerPresent && !translatorPresent;
+  // Gated on a connected room as well as on the speaker: mid-reconnect the participant
+  // list is stale or empty, and re-requesting a bot off that would spend a Gemini
+  // session answering a question about a room we are not currently in.
+  const needsTranslator = roomConnected && speakerPresent && !translatorPresent;
   const lastEnsureRef = useRef(0);
   // Stamp mount time (not in render — Date.now is impure there) so the bot the parent
   // just requested gets one full interval to appear before the first re-request.
@@ -148,18 +173,26 @@ function ListenAudio({
   // audio is unaffected there, but a missing transcript writer means half the pane is
   // silently frozen, and green over frozen text is the one reading that leaves a
   // listener staring at a stale paragraph believing it's current.
-  const dotClass = !speakerPresent
-    ? "bg-gray-400"
-    : needsTranslator
-      ? "bg-amber-500 animate-pulse"
-      : "bg-green-500 animate-pulse";
-  const statusText = !speakerPresent
-    ? s.waitingForSpeaker
-    : needsTranslator
-      ? translatorLanguage
-        ? s.restartingTranslation
-        : s.waitingForTranscript
-      : s.liveListening;
+  //
+  // The connection comes first: none of the presence readings below mean anything while
+  // the room is down, and reporting on presence we cannot currently observe is exactly
+  // the stale-but-confident display this is meant to remove.
+  const dotClass = !roomConnected
+    ? "bg-amber-500 animate-pulse"
+    : !speakerPresent
+      ? "bg-gray-400"
+      : needsTranslator
+        ? "bg-amber-500 animate-pulse"
+        : "bg-green-500 animate-pulse";
+  const statusText = !roomConnected
+    ? s.reconnecting
+    : !speakerPresent
+      ? s.waitingForSpeaker
+      : needsTranslator
+        ? translatorLanguage
+          ? s.restartingTranslation
+          : s.waitingForTranscript
+        : s.liveListening;
 
   return (
     <>
@@ -200,7 +233,8 @@ export function ListenViewer({ language }: { language: string }) {
   const translatorLanguage = langCode === sourceLanguage ? null : langCode;
   const docId = getDocId();
   const [conn, setConn] = useState<ConnectInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // The failure the pane is currently showing, or null while things are fine.
+  const [failure, setFailure] = useState<ConnectFailure | null>(null);
   // The listener has opted into live audio (pressed "Listen Live"). Until then we
   // never touch LiveKit — no room join, no bot spin-up. Once true it stays true;
   // `audioOn` handles muting without dropping the connection.
@@ -208,8 +242,40 @@ export function ListenViewer({ language }: { language: string }) {
   // Whether translated audio is actually playing. Toggled by play/stop once
   // connected; the transcript flows regardless.
   const [audioOn, setAudioOn] = useState(false);
-  // Bumped by the retry button to re-run the connect effect.
+  // Bumped by the retry button and the wake handler to re-run the connect effect.
   const [attempt, setAttempt] = useState(0);
+
+  // Whether a room we still believe in is mounted. Tearing that room down is how we
+  // start a fresh attempt, and the teardown itself fires Disconnected — so the flag is
+  // cleared first, and a Disconnected that arrives after it is ours, not a failure.
+  const roomLiveRef = useRef(false);
+
+  // What the room last said about itself, reported up by ListenAudio. Read only by the
+  // wake handler, to tell "already connected, leave it alone" from "worth one attempt".
+  const roomStateRef = useRef<ConnectionState>(ConnectionState.Disconnected);
+  const noteConnectionState = useCallback((state: ConnectionState) => {
+    roomStateRef.current = state;
+  }, []);
+
+  const noteFailure = useCallback((message: string | null) => {
+    roomLiveRef.current = false;
+    // The room is gone with it, so nothing will report a state for it again. Say so
+    // ourselves, or a wake would mistake an attempt that already failed for one still
+    // in flight and decline to try.
+    roomStateRef.current = ConnectionState.Disconnected;
+    setConn(null);
+    setFailure({ message });
+  }, []);
+
+  // A failure reported by the room rather than by our own fetches. Ignored unless it is
+  // about the connection we currently believe in (see roomLiveRef).
+  const noteRoomFailure = useCallback(
+    (message: string | null) => {
+      if (!roomLiveRef.current) return;
+      noteFailure(message);
+    },
+    [noteFailure]
+  );
 
   // Connect only after the listener opts in. Joining the room spins up the bot and
   // keeps the session healthy, so the transcript starts flowing once someone is
@@ -259,41 +325,76 @@ export function ListenViewer({ language }: { language: string }) {
         }
 
         if (cancelled) return;
+        roomLiveRef.current = true;
+        roomStateRef.current = ConnectionState.Connecting;
         setConn({ token: tk.token, serverUrl: tk.serverUrl, translatorIdentity });
+        setFailure(null);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) noteFailure(e instanceof Error ? e.message : String(e));
       }
     };
     void connect();
     return () => {
       cancelled = true;
     };
-  }, [docId, translatorLanguage, attempt, wantLive]);
+  }, [docId, translatorLanguage, attempt, wantLive, noteFailure]);
 
-  // The control bar reflects state: before opt-in, a "Listen Live" button that
-  // joins on demand; then error (with retry), the live audio controls once
-  // connected, or a connecting hint. The transcript is always shown below it,
+  const retryNow = useCallback(() => {
+    roomLiveRef.current = false;
+    roomStateRef.current = ConnectionState.Connecting;
+    setFailure(null);
+    setConn(null);
+    setAttempt((a) => a + 1);
+  }, []);
+
+  // Coming back to the tab, and only then. livekit-client reconnects a dropped room on
+  // its own — a ten-rung policy over ~44s — so a second ladder here would mostly be
+  // waiting out the first one. What it does not do is get a fresh token or re-request
+  // our translator bot, and after a phone has been locked for a while both may be
+  // needed: the bot is reaped once nobody is in the room, and the room's own retries run
+  // on timers Android throttles while the tab is hidden, so it can still be mid-policy
+  // long after the screen comes back.
+  //
+  // One attempt, not a ladder. It is tied to a person having looked at their phone, so
+  // it can never spend a Gemini session on a tab nobody is watching; if it fails, the
+  // pane says so and waits for the button. Note what this does NOT rescue: a phone
+  // asleep in a pocket never becomes visible, and once the audio stops there is nothing
+  // keeping the page unfrozen either. That case needs a wake lock, not more retries.
+  useEffect(() => {
+    if (!wantLive) return;
+    const wake = () => {
+      if (document.visibilityState !== "visible") return;
+      // Connected is fine, and Connecting means an attempt is already in flight —
+      // stacking another on top just abandons a connection that may be about to land.
+      if (roomStateRef.current === ConnectionState.Connected) return;
+      if (roomStateRef.current === ConnectionState.Connecting) return;
+      retryNow();
+    };
+    document.addEventListener("visibilitychange", wake);
+    return () => document.removeEventListener("visibilitychange", wake);
+  }, [wantLive, retryNow]);
+
+  // The control bar reflects state: before opt-in, a "Listen Live" button that joins on
+  // demand; then the live audio controls once connected — where the status light reports
+  // the room's own connection state, including its own reconnecting — a connecting hint,
+  // or an error the listener has to answer. The transcript is always shown below it,
   // since it reads Yjs and needs no LiveKit connection.
   let controls: React.ReactElement;
-  if (error) {
+  if (failure) {
     controls = (
       <div className="flex flex-col gap-1 items-start text-sm">
         <p className="text-red-600 dark:text-red-400">{s.liveAudioError}</p>
-        <p className="text-xs text-gray-500">{error}</p>
+        {failure.message && <p className="text-xs text-gray-500">{failure.message}</p>}
         <button
           type="button"
           className="px-3 py-1 rounded bg-blue-500 text-white text-xs hover:bg-blue-600"
-          onClick={() => {
-            setError(null);
-            setConn(null);
-            setAttempt((a) => a + 1);
-          }}
+          onClick={retryNow}
         >
           {s.retry}
         </button>
       </div>
     );
-  } else if (!wantLive) {
+    } else if (!wantLive) {
     // Pre-connection: transcript is rendered below; this opts into live audio,
     // which is what actually joins the room and spins up the translator bot.
     controls = (
@@ -318,7 +419,12 @@ export function ListenViewer({ language }: { language: string }) {
         token={conn.token}
         serverUrl={conn.serverUrl}
         connectOptions={{ autoSubscribe: false }}
-        onError={(e) => setError(e.message)}
+        onError={(e) => noteRoomFailure(e.message)}
+        // Not just onError: that only fires when `connect()` itself rejects. A room that
+        // connected and *then* died — livekit-client exhausting its own reconnect ladder
+        // while the phone was asleep — arrives here instead, and used to leave the pane
+        // showing a green "live" dot over a dead connection.
+        onDisconnected={() => noteRoomFailure(null)}
         className="w-full shrink-0 h-auto"
       >
         <ListenAudio
@@ -327,6 +433,7 @@ export function ListenViewer({ language }: { language: string }) {
           translatorIdentity={conn.translatorIdentity}
           audioOn={audioOn}
           onToggleAudio={() => setAudioOn((v) => !v)}
+          onConnectionState={noteConnectionState}
         />
       </LiveKitRoom>
     );
