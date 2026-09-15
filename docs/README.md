@@ -22,9 +22,15 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
   (status/liveness) and where to pull it from: PostHog events, in-process state, LiveKit, Yjs.
 - [live-audio-resilience.md](live-audio-resilience.md) — how the translation bridge survives
   LiveKit and Gemini dropping connections under it. Incident history (two "active but deaf"
-  outages), the invariant, and the three defense layers. **Read before changing the bridge's
+  outages and one "fed twice"), the invariant, and the defense layers. **Read before changing the bridge's
   subscription or reconnect paths** — the failure mode is silent, and the sample code this
   subsystem came from does not defend against it. Written to be upstreamable.
+- [live-audio-state-architecture.md](live-audio-state-architecture.md) — the live-translation
+  subsystem one level up from the bridge: every state machine it contains (client + server),
+  the presence supervisor that reconciles them against LiveKit, and the edge-case catalog with
+  what each case does today. **Read before changing the supervisor, bridge lifecycle, or the
+  listener's ensure-loop** — the closed rows name the mechanism that closed them. Ends with the
+  short list of gaps that are still open, all of them in the browser.
 
 ## Design docs
 
@@ -33,9 +39,6 @@ Short, surfaced-not-comprehensive documentation. Coding agents can grep; humans 
   pusher with no Yjs dependency. Why a CRDT client shouldn't make the "spend a model call?"
   decision; one server-owned, operator-overridable source-selection policy for both the
   slide feed and the audio feed; the migration.
-- [live-audio-state-architecture.md](live-audio-state-architecture.md) — state audit of the
-  live-translation subsystem (client + server state machines, edge-case catalog), a proposed
-  supervisor/reconciler architecture, and the hot-fix ladder to apply before it.
 - [slide-translations-plan.md](slide-translations-plan.md) — slide translation agent design.
 - [LANDING_PAGE.md](LANDING_PAGE.md) — landing-page redesign brief (proposal): what a
   first-time attendee hits today, the one-question reframe, the per-deployment config set,
