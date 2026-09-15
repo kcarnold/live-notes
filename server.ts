@@ -55,18 +55,33 @@ function getEnvOrCrash(name: string): string {
   return value;
 }
 
+// Boot guard (#139). A config check that throws at the top level is meant to kill the
+// process — a supervisor restarts it, the log says why. But PostHog's exception autocapture
+// (below) registers its own `uncaughtException` / `unhandledRejection` listeners, and Node
+// only applies its print-and-exit(1) default when there are *none*: with autocapture on, a
+// missing GEMINI_API_KEY was reported and then the process sat there forever, never
+// listening, looking to Docker and launchd exactly like a slow start.
+//
+// So until `listen` succeeds, this handler runs first (listeners fire in registration
+// order) and exits. Once the server is up it is removed, and runtime exceptions go back to
+// autocapture, where surviving one mid-service is the right call. Top-level `await`s reject
+// rather than throw, hence both events.
+const failBoot = (err: unknown) => {
+  console.error('Server failed to boot:', err);
+  process.exit(1);
+};
+process.on('uncaughtException', failBoot);
+process.on('unhandledRejection', failBoot);
+
 // Telemetry is genuinely optional: without a key the app still runs, which is what a
 // contributor's first `npm run dev:server` needs. Unconfigured, the client is still
 // *constructed* — with the SDK's own `disabled` switch, which short-circuits capture,
 // flush and shutdown alike — rather than omitted, so neither the call sites nor
 // `GeminiProvider`'s required `posthog` dependency need null handling.
 //
-// Exception autocapture is armed only when telemetry is real. It registers an
-// `uncaughtException` handler, and Node skips its own print-and-exit(1) when one exists,
-// which is what turns a boot-time config error into a silent hang (#139). Leaving it off
-// in dev means a missing GEMINI_API_KEY fails the way the message says it will. The key
-// is trimmed so a whitespace-only value can't arm autocapture on a client the SDK has
-// already disabled for having no key.
+// Exception autocapture is armed only when telemetry is real (see the boot guard above for
+// what its listeners do to a boot-time throw). The key is trimmed so a whitespace-only
+// value can't arm autocapture on a client the SDK has already disabled for having no key.
 const posthogKey = process.env.VITE_PUBLIC_POSTHOG_KEY?.trim();
 const telemetryEnabled = Boolean(posthogKey);
 if (!telemetryEnabled) {
@@ -995,8 +1010,11 @@ setupExpressErrorHandler(phClient, app);
 
 app.listen(app.get("port"), () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  process.off('uncaughtException', failBoot);
+  process.off('unhandledRejection', failBoot);
 }).on('error', (error) => {
-  console.error('Server error:', error);
+  // EADDRINUSE and friends: never listened, same as any other boot failure.
+  failBoot(error);
 });
 
 // Flush PostHog before the process exits so events queued in the 10s batch window
