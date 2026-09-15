@@ -233,3 +233,72 @@ describe('boot without telemetry configured', () => {
     expect(output).toContain('[telemetry] VITE_PUBLIC_POSTHOG_KEY unset');
   });
 });
+
+/**
+ * Bad config must kill the process, not hang it (#139).
+ *
+ * With PostHog configured, exception autocapture registers `uncaughtException` listeners,
+ * and Node's print-and-exit(1) default only applies when there are none — so a top-level
+ * `getEnvOrCrash` throw used to be reported and then the process stayed alive forever,
+ * never listening. Docker's restart policy never fired; launchd saw a running service.
+ * The two suites above can't see it: `waitForBoot` only knows "listening" and "dead", and
+ * this state is neither. So this spawns the server with a required variable blanked and
+ * PostHog *on* — the combination that hung — and asserts it exits non-zero promptly.
+ */
+describe('boot with bad config', () => {
+  let stateDir: string;
+
+  beforeAll(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'server-boot-badconfig-'));
+  });
+
+  afterAll(async () => {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it('exits 1 on a missing required variable even with PostHog autocapture armed', async () => {
+    const port = await freePort();
+    let output = '';
+    const proc = spawn(process.execPath, ['server.ts'], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PORT: String(port),
+        // The point of this test: blank (not absent, see above re dotenv), with telemetry
+        // configured so autocapture's listeners are in place when the throw happens.
+        GEMINI_API_KEY: '',
+        ELEVENLABS_API_KEY: 'test-key',
+        YSWEET_CONNECTION_STRING: 'ys://127.0.0.1:9',
+        VITE_PUBLIC_POSTHOG_KEY: 'phc_test',
+        VITE_PUBLIC_POSTHOG_HOST: 'http://127.0.0.1:9',
+        LIVEKIT_URL: '',
+        LIVEKIT_API_KEY: '',
+        LIVEKIT_API_SECRET: '',
+        WRITE_KEYS: '',
+        WRITE_AUTH_MODE: 'off',
+        SESSION_REGISTRY_PATH: path.join(stateDir, 'current-session.json'),
+        SLIDE_LIBRARY_PATH: path.join(stateDir, 'slide-library.json'),
+      },
+    });
+    proc.stdout?.on('data', (d) => (output += d));
+    proc.stderr?.on('data', (d) => (output += d));
+
+    // A process that is going to exit does so within a second or two of the throw. Give it
+    // 15s to be safe on a cold `node server.ts`; a hang is what this test exists to catch,
+    // so it must not wait the full suite timeout to say so.
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        proc.kill('SIGKILL');
+        reject(new Error(`server still alive 15s after a boot-time throw (#139):\n${output}`));
+      }, 15_000);
+      proc.on('exit', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+
+    expect(output).toContain('Environment variable GEMINI_API_KEY is not set');
+    expect(exitCode).toBe(1);
+  }, 30_000);
+});
