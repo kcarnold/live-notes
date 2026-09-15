@@ -125,7 +125,8 @@ The session status page ([src/StatusView.tsx](../src/StatusView.tsx), reachable 
 layout component) is where these signals surface for an operator. Current state:
 
 - **Live transcripts (built).** [src/TranscriptHealth.tsx](../src/TranscriptHealth.tsx) renders one
-  tile per `liveTranscriptSegments-<code>` language present in the doc — source (`en`) first —
+  tile per `liveTranscriptSegments-<code>` language present in the doc — the session's spoken
+  language first, whatever it is (`useSourceLanguage`, not a hard-coded `en`) —
   showing char count, a tail preview, and a staleness dot. This is source #4 (transcript growth),
   the end-to-end "translation is actually flowing" heartbeat, read straight from Yjs with no
   backend change.
@@ -141,8 +142,11 @@ layout component) is where these signals surface for an operator. Current state:
     `endedAt` — the exact time of the last delta — so seeding the tile from the last segment
     would make it a true cross-page-load clock. Small, self-contained follow-up; left out of the
     pause-indicator change to keep that scoped.
-- **Component health tiles (skeleton).** The Server / Proclaim / bridges / broadcaster tiles are
-  still placeholders — nothing writes the `status` Y.Map yet (that's the #72 heartbeat producers).
+- **Component health tiles (one real, the rest skeleton).** The Proclaim tile is live: the
+  service writes `status.proclaimService` (its SHA, branch, channel and doc id) and `StatusView`
+  renders it, including the "update pending — restart the service" flag. It is the first
+  `status`-map producer and the pattern the others should copy. The Server / bridges /
+  broadcaster tiles are still placeholders awaiting the rest of #72's heartbeat producers.
 - **Preflight canary (skeleton).** Placeholder; no end-to-end check runs yet.
 
 ## Next steps (roughly in order of effort)
@@ -154,10 +158,10 @@ layout component) is where these signals surface for an operator. Current state:
    since bridge `status: active` can read healthy while deaf (see Questions above). No backend work.
 2. **Absolute transcript freshness** — if the client-relative clock isn't enough, have
    [transcript-log.ts](../live-audio/transcript-log.ts) stamp `lastWrittenAt` per code into the
-   `status` Y.Map. Survives reloads and gives the tiles a real wall-clock age; this is the first
-   `status`-map producer and sets the pattern for the rest.
-3. **Component heartbeats (#72)** — server, Proclaim service, and broadcaster each write a periodic
-   heartbeat into the `status` Y.Map so the skeleton health tiles turn real. Broadcaster presence
+   `status` Y.Map. Survives reloads and gives the tiles a real wall-clock age; follow the shape
+   `status.proclaimService` already established.
+3. **Component heartbeats (#72)** — server and broadcaster each write a periodic heartbeat into
+   the `status` Y.Map so the remaining skeleton tiles turn real (the Proclaim service already does). Broadcaster presence
    specifically needs LiveKit `listParticipants` (source #3); the current status endpoint lists only
    translators, so this wants a small new endpoint or field.
 4. **Preflight canary** — a ~30 s end-to-end check run before a service; the `simulateScenario` hook

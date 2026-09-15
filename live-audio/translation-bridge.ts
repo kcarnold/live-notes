@@ -103,7 +103,7 @@ const STALL_CHECK_INTERVAL_MS = 5_000;
 const STALL_ESCALATE_AFTER = 3;
 
 // Exponential-backoff bounds for failed Gemini reconnect attempts (mirrors the
-// Proclaim service's convention; see PROCLAIM_INTEGRATION.md).
+// Proclaim service's convention; see docs/PROCLAIM_INTEGRATION.md).
 const RECONNECT_BACKOFF = { initialMs: 1_000, maxMs: 30_000 };
 
 // Silence gating uses two thresholds, because "have we been silent long enough to

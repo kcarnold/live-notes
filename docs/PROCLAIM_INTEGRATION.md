@@ -91,7 +91,7 @@ reconnects:
   refused and the service is told to use today's doc, which is the failure in
   [#111](https://github.com/kcarnold/live-notes/issues/111). An operator pin set from
   `/status` outranks anything the service can see, and the service logs whenever the
-  answer differs from what it proposed. See [docs/CURRENT_SESSION.md](docs/CURRENT_SESSION.md).
+  answer differs from what it proposed. See [CURRENT_SESSION.md](CURRENT_SESSION.md).
 
 ### 3. View Current Slide in Browser
 
@@ -106,7 +106,7 @@ http://localhost:8000/translatedText-French,currentSlide
 
 ### 1. Python Service Polls Proclaim
 
-Every second (configurable):
+On each poll (`PROCLAIM_POLL_INTERVAL` while on air, `PROCLAIM_POLL_INTERVAL_OFF_AIR` otherwise):
 - Fetches `/onair/session` to get session ID
 - Fetches `/onair/statusChanged` to get current slide index and item ID
 
@@ -146,7 +146,7 @@ The current slide viewer shows:
 
 ```
 Proclaim API/DB
-    ↓ (poll every 1s)
+    ↓ (poll)
 Python Service
     ↓ (y-py WebSocket)
 Y-Sweet Server

@@ -49,10 +49,11 @@ docker compose up -d
 
 ```bash
 # On the server
-./deploy.sh
+./deploy-docker-compose.sh
 ```
 
-`deploy.sh` runs `git pull`, builds, and starts with `compose.prod.yaml` (sets the public y-sweet URL).
+It runs `git pull`, builds, and starts with `compose.prod.yaml` (which sets the public
+y-sweet URL). `deploy-flyio.sh` is the Fly.io equivalent.
 
 ### Other commands
 

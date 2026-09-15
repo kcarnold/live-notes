@@ -43,7 +43,7 @@ Options:
 ### Write key
 
 The server gates writes — full Y-Sweet tokens and `/api/translateItem` — on a shared
-per-device key ([docs/WRITE_KEYS.md](docs/WRITE_KEYS.md)). Give this machine its key at
+per-device key ([WRITE_KEYS.md](WRITE_KEYS.md)). Give this machine its key at
 install time:
 
 ```bash

@@ -169,3 +169,67 @@ describe('static asset compression', () => {
     expect(await res.text()).toBe(FIXTURE_BODY);
   });
 });
+
+/**
+ * Telemetry is optional, and this is the test that keeps it that way.
+ *
+ * The PostHog credentials used to be read with `getEnvOrCrash`, so a contributor who
+ * copied `template-.env` — where they are commented out, marked optional — got a stack
+ * trace at import on their first `npm run dev:server`. The suite above could not see it:
+ * it sets them. This boots a second server with both unset and asserts it still answers.
+ */
+describe('boot without telemetry configured', () => {
+  let bareChild: ChildProcess | undefined;
+  let bareBase: string;
+  let bareStateDir: string;
+  let output = '';
+
+  beforeAll(async () => {
+    bareStateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'server-boot-notelemetry-'));
+    const port = await freePort();
+    bareBase = `http://127.0.0.1:${port}`;
+
+    bareChild = spawn(process.execPath, ['server.ts'], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PORT: String(port),
+        GEMINI_API_KEY: 'test-key',
+        ELEVENLABS_API_KEY: 'test-key',
+        YSWEET_CONNECTION_STRING: 'ys://127.0.0.1:9',
+        // The point of this test. Empty rather than absent, because `dotenv/config` in
+        // the child would otherwise fill them in from a developer's real .env.
+        VITE_PUBLIC_POSTHOG_KEY: '',
+        VITE_PUBLIC_POSTHOG_HOST: '',
+        LIVEKIT_URL: '',
+        LIVEKIT_API_KEY: '',
+        LIVEKIT_API_SECRET: '',
+        WRITE_KEYS: '',
+        WRITE_AUTH_MODE: 'off',
+        SESSION_REGISTRY_PATH: path.join(bareStateDir, 'current-session.json'),
+        SLIDE_LIBRARY_PATH: path.join(bareStateDir, 'slide-library.json'),
+      },
+    });
+    bareChild.stdout?.on('data', (d) => (output += d));
+    bareChild.stderr?.on('data', (d) => (output += d));
+
+    await waitForBoot(`${bareBase}/api/config`, bareChild, 45_000, () => output);
+  }, 60_000);
+
+  afterAll(async () => {
+    if (bareChild && bareChild.exitCode === null) bareChild.kill('SIGKILL');
+    await fs.rm(bareStateDir, { recursive: true, force: true });
+  });
+
+  it('starts and serves a route with no PostHog credentials', async () => {
+    const res = await fetch(`${bareBase}/api/config`);
+    expect(res.status).toBe(200);
+    // Empty rather than absent, so the install script's fetch of this still parses.
+    expect(await res.json()).toEqual({ posthogKey: '', posthogHost: '' });
+  });
+
+  it('says on stdout that telemetry is off, rather than failing silently', () => {
+    expect(output).toContain('[telemetry] VITE_PUBLIC_POSTHOG_KEY unset');
+  });
+});
