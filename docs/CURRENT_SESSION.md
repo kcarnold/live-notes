@@ -155,12 +155,13 @@ It now resolves through `GET /api/session/current` like everyone else
 ([`SessionClient.swift`](../macos-audio-feeder/Sources/AudioFeederCore/SessionClient.swift)),
 with the same precedence as the browser: the settings window's doc-id field is the `?doc=`
 equivalent and wins without a round trip; otherwise the server's answer; never a local date.
-The answer *expires* after 60s rather than being held for the run: it re-asks while
-publishing, and rebuilds the capture→publish pipeline when the answer moves. Expiry rather
-than "forget when the run ends" because the feeder only notices a run ending if it is awake
-for it — a Mac asleep between two Sunday windows would otherwise wake up inside the next
-service still holding last week's answer. A failed re-check behind a live pipeline is
-ignored: a stale doc answer costs a minute, dropping the pipeline costs the broadcast.
+The shape is the Proclaim service's, not a cache: asking is the first step of starting a
+pipeline and the answer is consumed by the task that fetched it, so nothing can start on a
+stale one — a Mac asleep between two Sunday windows wakes up and *asks*, rather than opening
+the mic in last week's doc. While publishing it re-asks about once a minute and compares the
+answer with the room it is in, rebuilding the capture→publish pipeline if they differ. A
+failed re-check behind a live pipeline is ignored: a stale doc answer costs a minute,
+dropping the pipeline costs the broadcast.
 
 The "no client-side fallback" rule costs the feeder nothing, which is worth stating: the same
 server issues its LiveKit token, so a server it cannot reach is a run that could not have

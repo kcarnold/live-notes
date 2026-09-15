@@ -63,12 +63,13 @@ final class AppController: ObservableObject {
     private var capture: AudioCapture?
     private var publisher: Publisher?
 
-    /// What the server has told us about which doc we are in, and how long that may be acted
-    /// on. Never computed here — see `SessionClient` for why there is no local date formula,
-    /// and `SessionResolution` for the expiry rules. Published because the settings window
-    /// reports the answer rather than predicting one.
-    @Published private(set) var session = SessionResolution()
-    private var sessionResolve: Task<Void, Never>?
+    /// A pipeline start in flight: asking the server which doc we are in, then starting.
+    /// The answer is never stored — it is consumed by the task that fetched it, so there is
+    /// no cached doc id that could go stale. See `SessionClient` for why there is no local
+    /// date formula either.
+    private var startTask: Task<Void, Never>?
+    /// When a live pipeline last asked whether the session had moved (an operator pin).
+    private var lastSessionCheck = Date.distantPast
 
     private var tick: Timer?
     private var retryTimer: Timer?
@@ -168,12 +169,12 @@ final class AppController: ObservableObject {
     }
 
     /// What the settings window says about the room, in place of the room name it used to
-    /// compute. Three honest states: an override, an answer we were given, or not yet asked.
+    /// compute. Three honest states: an override, the room we are actually in, or not running.
     var sessionSummary: String {
         if let override = SessionClient.normalizedOverride(config.docIDOverride) {
             return "Will publish to room: \(override) — this override outranks the server."
         }
-        if let docID = session.docID {
+        if let docID = publisher?.docID {
             return "Publishing to room: \(docID) — the server's current session."
         }
         return "The room is whatever session the server says is current when a run starts."
@@ -193,11 +194,6 @@ final class AppController: ObservableObject {
         // can never stretch it past four hours from the button press. See `RunHold.recomputed`.
         if config.schedule != old.schedule, let hold {
             self.hold = hold.recomputed(for: config.schedule)
-        }
-        // The answer we hold came from a particular server, under a particular override.
-        // Change either and it is no longer an answer to the question we are now asking.
-        if config.serverURL != old.serverURL || config.docIDOverride != old.docIDOverride {
-            forgetSession()
         }
         store.save(config)
         scheduleEvaluate()
@@ -242,10 +238,6 @@ final class AppController: ObservableObject {
             // A stand-down lasts for the run it happened in, no longer: next Sunday starts
             // clean, without anyone having to remember to clear it.
             clearStandDown()
-            // Same for the doc. The answer expires on its own (`SessionResolution`), so
-            // this is belt-and-braces — but it is what makes the *log* honest: every run
-            // that starts prints the session it was given, rather than silently inheriting.
-            forgetSession()
             status = .idle
             return
         }
@@ -268,115 +260,93 @@ final class AppController: ObservableObject {
         // Honor backoff after a failure before retrying.
         if let retryAfter, Date() < retryAfter { return }
 
-        // Which doc? The server owns that answer and this app does not guess at it, so
-        // nothing starts until it has said. Failures are handled in `sessionResolutionFailed`.
-        let fresh = session.isFresh(at: now)
-        if !fresh { resolveSession() }
-        // A live pipeline keeps publishing into the room it is in while a re-ask is in
-        // flight — the doc question can wait a minute, the broadcast cannot. Nothing *starts*
-        // on an answer that has aged out, which is what stops a Mac that slept through the
-        // gap between two Sunday windows from opening the mic in last week's doc.
-        guard let docID = session.docID, fresh || isPipelineRunning else { return }
-
-        // A live pipeline publishing into a room that is no longer the current session is
-        // the failure this whole path exists to prevent: the microphone left behind in the
-        // doc an operator just moved everyone off. Reconciled here rather than torn down at
-        // the point the answer changes, so it is caught however the two came to differ.
-        if isPipelineRunning, publisher?.docID != docID {
-            Log.controller.notice("""
-                publishing into \(self.publisher?.docID ?? "-", privacy: .public) but the session \
-                is \(docID, privacy: .public); rebuilding the pipeline
-                """)
-            teardown()
-        }
-
         // Reconcile the pipeline rather than only starting one. The old guard was
         // `capture == nil`, which meant a *half*-alive pipeline — capture still running, room
         // dead — was indistinguishable from a healthy one and wedged here forever. Checking
         // both halves makes this tick self-healing even if a publisher callback is missed
         // entirely (issue #97).
-        if !isPipelineRunning {
-            teardown()
-            startPipeline(device: device, docID: docID)
+        if isPipelineRunning {
+            recheckSessionIfDue(now)
+            return
         }
+        guard startTask == nil else { return }   // already asking; the answer starts the pipeline
+        teardown()
+        startPipeline(device: device)
     }
 
     // MARK: - The current session (#111)
 
-    /// Ask the server which doc we are in.
+    /// Ask the server which doc we are in, then start the capture→publish pipeline into it.
     ///
-    /// Whether this is blocking is not a property of the call — it is whether anything is on
-    /// air right now, which both ends read off the pipeline. A re-ask behind a live broadcast
-    /// must not touch `status`: painting "Finding the current session…" (or an error) over a
-    /// healthy pipeline is #97's defect again, the menu bar describing a state the feeder is
-    /// not in, and nothing on the success path would repaint it afterwards.
-    private func resolveSession() {
-        guard sessionResolve == nil else { return }
-        if !isPipelineRunning { status = .resolvingSession }
-
+    /// The ask is the first step of starting, not a value kept on the controller: the same
+    /// task that gets the answer acts on it, so nothing can start on an answer that has aged
+    /// — a Mac that slept through the gap between two Sunday windows wakes up and *asks*,
+    /// rather than opening the mic in last week's doc. Same shape as `slide_sync_runtime.py`,
+    /// which resolves immediately before every connect.
+    ///
+    /// No local fallback, deliberately: the same server issues the LiveKit token, so a server
+    /// we can't reach is a run that couldn't have started anyway. Say which failure it is
+    /// instead of publishing into a doc nobody chose, and land in the existing backoff.
+    private func startPipeline(device: AudioInputDevice) {
+        status = .resolvingSession
         let client = SessionClient(serverURL: config.serverURL)
         let override = config.docIDOverride
-        sessionResolve = Task { @MainActor [weak self] in
+        startTask = Task { @MainActor [weak self] in
+            // Cancelled means `teardown` already moved on — and has already cleared this
+            // reference, possibly in favour of a newer task. Only clear it when it is ours.
             do {
                 let resolved = try await client.resolve(override: override)
-                // Cancelled means `forgetSession` already moved on — and has already cleared
-                // this reference, possibly in favour of a newer task.
                 guard !Task.isCancelled, let self else { return }
-                self.sessionResolve = nil
-                self.sessionResolved(resolved)
+                self.startTask = nil
+                self.lastSessionCheck = Date()   // this *was* the check; the next is a minute out
+                Log.controller.notice(
+                    "session: \(resolved.docID, privacy: .public) (\(resolved.origin, privacy: .public))")
+                self.startPipeline(device: device, docID: resolved.docID)
             } catch {
                 guard !Task.isCancelled, let self else { return }
-                self.sessionResolve = nil
-                self.sessionResolutionFailed(error)
+                self.startTask = nil
+                Log.controller.error(
+                    "cannot resolve the current session: \(String(describing: error), privacy: .public)")
+                self.status = .error("Can't reach \(self.config.serverURL): \(error)")
+                self.scheduleRetry()
             }
         }
     }
 
-    private func sessionResolved(_ resolved: ResolvedSession) {
-        let previous = session.docID
-        let moved = session.record(docID: resolved.docID, at: Date())
-        if moved {
-            // The pin reached us mid-run. `evaluate` does the rebuilding — a `Publisher`
-            // cannot be retargeted in place any more than it can be restarted.
+    /// While publishing, ask about once a minute whether the session has moved out from under
+    /// us — an operator pin, most likely — and rebuild into the new room if it has.
+    ///
+    /// A pin moves the notes, the slides, the transcripts and every listener; a microphone
+    /// left behind in the old room splits the service in half, which is worse than a whole
+    /// service filed under the wrong date. Same cadence as `slide_sync_runtime.py`, and the
+    /// same rule for a failed check: ignore it. A stale doc answer costs a minute; dropping
+    /// the pipeline costs the broadcast.
+    ///
+    /// The override is part of the question, so a doc id typed in the settings window takes
+    /// effect here too, within the same minute.
+    private func recheckSessionIfDue(_ now: Date) {
+        guard now.timeIntervalSince(lastSessionCheck) >= Self.sessionRecheckInterval else { return }
+        lastSessionCheck = now
+        let client = SessionClient(serverURL: config.serverURL)
+        let override = config.docIDOverride
+        Task { @MainActor [weak self] in
+            guard let resolved = try? await client.resolve(override: override),
+                  let self, let current = self.publisher?.docID, current != resolved.docID
+            else { return }
             Log.controller.notice("""
-                session moved: \(previous ?? "-", privacy: .public) -> \(resolved.docID, privacy: .public) \
-                (\(resolved.origin, privacy: .public))
+                session moved: \(current, privacy: .public) -> \(resolved.docID, privacy: .public) \
+                (\(resolved.origin, privacy: .public)); rebuilding the pipeline
                 """)
-        } else if previous == nil {
-            Log.controller.notice(
-                "session: \(resolved.docID, privacy: .public) (\(resolved.origin, privacy: .public))")
+            self.teardown()
+            self.evaluate()
         }
-        // Unconditionally, including when the answer came back unchanged: confirming a stale
-        // answer is what makes it usable again, and a run may be waiting on exactly that.
-        scheduleEvaluate()
     }
 
-    private func sessionResolutionFailed(_ error: Error) {
-        let detail = String(describing: error)
-        guard !isPipelineRunning else {
-            // Failing behind a working pipeline is not a reason to drop it: a stale doc
-            // answer costs a minute, dropping the pipeline costs the broadcast. Keep the
-            // answer, and ask again after the usual interval rather than every tick.
-            Log.controller.error("""
-                session re-check failed: \(detail, privacy: .public); \
-                staying on \(self.session.docID ?? "-", privacy: .public)
-                """)
-            session.extendFreshness(from: Date())
-            return
-        }
-        // Nothing to fall back to, and deliberately so: the same server issues the LiveKit
-        // token, so a server we can't reach means a run that couldn't have started anyway.
-        // Say which failure it is instead of publishing into a doc nobody chose.
-        Log.controller.error("cannot resolve the current session: \(detail, privacy: .public)")
-        status = .error("Can't reach \(config.serverURL): \(detail)")
-        scheduleRetry()
-    }
+    /// Matches the Proclaim service's `session_recheck_interval` — a pin has to reach a
+    /// feeder that is already on air, not only the next run to start.
+    private static let sessionRecheckInterval: TimeInterval = 60
 
-    private func forgetSession() {
-        sessionResolve?.cancel()
-        sessionResolve = nil
-        session.forget()
-    }
+    // MARK: - Pipeline
 
     /// True only while *both* halves of the capture→publish pipeline are alive. Anything else
     /// has to be torn down and rebuilt — a `Publisher` cannot be restarted in place.
@@ -473,6 +443,8 @@ final class AppController: ObservableObject {
     }
 
     private func teardown() {
+        startTask?.cancel()
+        startTask = nil
         capture?.stop()
         capture = nil
         publisher?.stop()
